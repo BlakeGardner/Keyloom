@@ -3,6 +3,9 @@ name = "cosmic-keyboard"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+evdev = "0.13"
+
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
 default-features = false

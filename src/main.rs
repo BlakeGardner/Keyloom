@@ -2,6 +2,7 @@
 
 mod app;
 mod keyboard;
+mod monitor;
 
 fn main() -> cosmic::iced::Result {
     let settings = cosmic::app::Settings::default().size(cosmic::iced::Size::new(840.0, 420.0));
