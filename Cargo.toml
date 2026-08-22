@@ -1,0 +1,17 @@
+[package]
+name = "cosmic-keyboard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = [
+    "a11y",
+    "dbus-config",
+    "multi-window",
+    "tokio",
+    "wayland",
+    "wgpu",
+    "winit",
+]

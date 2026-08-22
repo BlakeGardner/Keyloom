@@ -1,0 +1,10 @@
+//! An on-screen keyboard for the COSMIC desktop.
+
+mod app;
+mod keyboard;
+
+fn main() -> cosmic::iced::Result {
+    let settings = cosmic::app::Settings::default().size(cosmic::iced::Size::new(840.0, 420.0));
+
+    cosmic::app::run::<app::App>(settings, ())
+}
