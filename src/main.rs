@@ -3,10 +3,6 @@
 
 mod app;
 mod config;
-// The layout tables in `keyboard` predate the current design; only the
-// detection helpers are used (by the device monitor) until the remapping
-// engine work rewires them.
-#[allow(dead_code)]
 mod keyboard;
 mod monitor;
 mod ui;

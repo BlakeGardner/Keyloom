@@ -1,17 +1,16 @@
 //! UI data model ported from the design export's prototype script:
-//! key geometry, the action catalog, demo profiles, and shortcut groups.
-//!
-//! This backs the GUI only — nothing here touches the system's real
-//! keymap yet.
+//! key geometry, the action catalog, demo profiles, and shortcut groups,
+//! plus the per-form-factor deck assembly.
+
+use std::sync::LazyLock;
 
 use evdev::KeyCode;
 use serde::{Deserialize, Serialize};
 
+use crate::keyboard;
+
 /// One key unit in the deck, in logical pixels (`U` in the export).
 pub const UNIT: f32 = 49.0;
-/// Full deck size for the 100% layout.
-pub const DECK_WIDTH: f32 = 1099.0;
-pub const DECK_HEIGHT: f32 = 313.0;
 
 /// The modifier chips offered by the combo editors.
 pub const MODS: [&str; 4] = ["Ctrl", "Shift", "Alt", "Super"];
@@ -171,14 +170,208 @@ pub const ALL_KEYS: &[KeyCap] = caps![
     "NumpadDecimal", ".", KeyCode::KEY_KPDOT, 2.0, 5.5, 1.0, 1.0, NUMPAD_GX;
 ];
 
+/// Physical keys that appear only on some decks: the ISO 102nd key and
+/// the compact boards' Fn key. Geometry here is their canonical spot;
+/// deck assembly repositions copies as needed.
+pub const EXTRA_KEYS: &[KeyCap] = caps![
+    "IntlBackslash", "\\", KeyCode::KEY_102ND, 1.25, 4.5, 1.0, 1.0, 0.0;
+    "Fn", "Fn", KeyCode::KEY_FN, 11.0, 5.5, 1.0, 1.0, 0.0;
+];
+
+/// Every physical key the app knows, across all decks and variants.
+pub fn registry() -> impl Iterator<Item = &'static KeyCap> {
+    ALL_KEYS.iter().chain(EXTRA_KEYS)
+}
+
 /// Find a key cap by its code identifier.
 pub fn key(code: &str) -> Option<&'static KeyCap> {
-    ALL_KEYS.iter().find(|cap| cap.code == code)
+    registry().find(|cap| cap.code == code)
 }
 
 /// Find a key cap by the evdev scancode reported by the monitor.
 pub fn key_by_evdev(scancode: u16) -> Option<&'static KeyCap> {
-    ALL_KEYS.iter().find(|cap| cap.evdev == scancode)
+    registry().find(|cap| cap.evdev == scancode)
+}
+
+/// The decks for every form factor and variant, assembled once.
+/// Index: `form * 2 + iso`.
+static DECKS: LazyLock<Vec<Vec<KeyCap>>> = LazyLock::new(|| {
+    (0..keyboard::FORM_FACTORS.len())
+        .flat_map(|form| [build_deck(form, false), build_deck(form, true)])
+        .collect()
+});
+
+/// The key caps of one deck: a form factor in the ANSI or ISO variant.
+pub fn deck(form: usize, iso: bool) -> &'static [KeyCap] {
+    let index = form.min(keyboard::FORM_FACTORS.len() - 1) * 2 + usize::from(iso);
+    &DECKS[index]
+}
+
+/// Rendered size of a deck in logical pixels, matching the export's
+/// canvas insets (keys are drawn slightly smaller than their unit box).
+pub fn deck_size(keys: &[KeyCap]) -> (f32, f32) {
+    let width = keys
+        .iter()
+        .map(|cap| cap.gx + (cap.x + cap.w) * UNIT)
+        .fold(0.0, f32::max);
+    let height = keys
+        .iter()
+        .map(|cap| (cap.y + cap.h) * UNIT)
+        .fold(0.0, f32::max);
+    (width - 5.0, height - 5.5)
+}
+
+/// A registry cap repositioned for a specific deck.
+fn place(code: &str, x: f32, y: f32, w: f32) -> KeyCap {
+    let cap = key(code).expect("deck key must exist in the registry");
+    KeyCap {
+        x,
+        y,
+        w,
+        h: 1.0,
+        gx: 0.0,
+        ..*cap
+    }
+}
+
+/// Assemble one deck. The 100% and TKL decks reuse the design export's
+/// exact geometry; the compact boards follow the classic assemblies
+/// (right-hand column, ↑ carved out of right Shift, squeezed bottom row).
+fn build_deck(form: usize, iso: bool) -> Vec<KeyCap> {
+    let mut keys = match form {
+        keyboard::FORM_TKL => ALL_KEYS
+            .iter()
+            .filter(|cap| cap.gx < NUMPAD_GX)
+            .copied()
+            .collect(),
+        keyboard::FORM_SEVENTY_FIVE => {
+            // Tight function row: Esc, F1–F12, PrtSc, Ins, Del.
+            let mut keys = vec![place("Escape", 0.0, 0.0, 1.0)];
+            for (i, f) in [
+                "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+            ]
+            .iter()
+            .enumerate()
+            {
+                #[allow(clippy::cast_precision_loss)]
+                keys.push(place(f, 1.0 + i as f32, 0.0, 1.0));
+            }
+            keys.push(place("PrintScreen", 13.0, 0.0, 1.0));
+            keys.push(place("Insert", 14.0, 0.0, 1.0));
+            keys.push(place("Delete", 15.0, 0.0, 1.0));
+            keys.extend(compact_core(1.5, &["PageUp", "PageDown", "Home", "End"]));
+            keys
+        }
+        keyboard::FORM_SIXTY_FIVE => {
+            compact_core(0.0, &["Delete", "PageUp", "PageDown", "End"]).collect()
+        }
+        keyboard::FORM_SIXTY => ALL_KEYS
+            .iter()
+            .filter(|cap| cap.gx == 0.0 && cap.y >= 1.5)
+            .map(|cap| KeyCap {
+                y: cap.y - 1.5,
+                ..*cap
+            })
+            .collect(),
+        // 100% and anything out of range.
+        _ => ALL_KEYS.to_vec(),
+    };
+    if iso {
+        to_iso(&mut keys);
+    }
+    keys
+}
+
+/// The compact (65%/75%) assembly below the function row: the four core
+/// rows plus a right-hand `column` key each, ↑ carved out of a shortened
+/// right Shift, and the squeezed bottom row. `dy` shifts everything down
+/// to leave room for a function row.
+fn compact_core(dy: f32, column: &[&str; 4]) -> impl Iterator<Item = KeyCap> {
+    // The core rows of the design deck (number row through bottom letter
+    // row), shifted from their 100%-deck positions.
+    let mut keys: Vec<KeyCap> = ALL_KEYS
+        .iter()
+        .filter(|cap| cap.gx == 0.0 && cap.y >= 1.5 && cap.y < 5.5)
+        .map(|cap| KeyCap {
+            y: cap.y - 1.5 + dy,
+            ..*cap
+        })
+        .collect();
+
+    // Shrink the right Shift to make room for the ↑ key.
+    if let Some(shift) = keys.iter_mut().find(|cap| cap.code == "ShiftRight") {
+        shift.w = 1.75;
+    }
+    keys.push(place("ArrowUp", 14.0, 3.0 + dy, 1.0));
+
+    // The right-hand column.
+    for (i, code) in column.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        keys.push(place(code, 15.0, i as f32 + dy, 1.0));
+    }
+
+    // Squeezed bottom row with the arrow cluster.
+    let bottom = 4.0 + dy;
+    keys.push(place("ControlLeft", 0.0, bottom, 1.25));
+    keys.push(place("MetaLeft", 1.25, bottom, 1.25));
+    keys.push(place("AltLeft", 2.5, bottom, 1.25));
+    keys.push(place("Space", 3.75, bottom, 6.25));
+    keys.push(place("AltRight", 10.0, bottom, 1.0));
+    keys.push(place("Fn", 11.0, bottom, 1.0));
+    keys.push(place("ControlRight", 12.0, bottom, 1.0));
+    keys.push(place("ArrowLeft", 13.0, bottom, 1.0));
+    keys.push(place("ArrowDown", 14.0, bottom, 1.0));
+    keys.push(place("ArrowRight", 15.0, bottom, 1.0));
+
+    keys.into_iter()
+}
+
+/// Convert an ANSI deck to the ISO assembly: two-segment tall Enter, the
+/// `#` key beside it, a narrow left Shift plus the 102nd key, and AltGr.
+/// The Enter segments share a scancode and highlight together.
+fn to_iso(keys: &mut Vec<KeyCap>) {
+    let Some(enter) = keys.iter().position(|cap| cap.code == "Enter") else {
+        return;
+    };
+    let home_y = keys[enter].y;
+
+    // Two-segment Enter replacing the ANSI bar Enter and the top-row \.
+    keys[enter] = KeyCap {
+        x: 13.5,
+        y: home_y - 1.0,
+        w: 1.5,
+        h: 1.0,
+        gx: 0.0,
+        ..keys[enter]
+    };
+    let bottom_segment = KeyCap {
+        label: "⏎",
+        x: 13.75,
+        y: home_y,
+        w: 1.25,
+        h: 1.0,
+        gx: 0.0,
+        ..keys[enter]
+    };
+    keys.push(bottom_segment);
+
+    // The top-row \ moves next to Enter on the home row.
+    if let Some(backslash) = keys.iter_mut().find(|cap| cap.code == "Backslash") {
+        backslash.x = 12.75;
+        backslash.y = home_y;
+        backslash.w = 1.0;
+    }
+
+    // Narrow left Shift with the 102nd key beside it.
+    if let Some(shift) = keys.iter_mut().find(|cap| cap.code == "ShiftLeft") {
+        shift.w = 1.25;
+    }
+    keys.push(place("IntlBackslash", 1.25, home_y + 1.0, 1.0));
+
+    // The right Alt becomes AltGr.
+    if let Some(alt) = keys.iter_mut().find(|cap| cap.code == "AltRight") {
+        alt.label = "AltGr";
+    }
 }
 
 /// Friendly display name for a key code (`keyName` in the export).
@@ -224,6 +417,7 @@ pub fn key_name(code: &str) -> String {
         ("PageUp", "Page Up"),
         ("PageDown", "Page Down"),
         ("NumLock", "Num Lock"),
+        ("IntlBackslash", "ISO Backslash"),
     ];
     if let Some((_, name)) = NAMES.iter().find(|(c, _)| *c == code) {
         return (*name).to_owned();
@@ -301,6 +495,7 @@ pub fn short(action: &str) -> &str {
         ("Slash", "/"),
         ("Backtick", "`"),
         ("Space", "Space"),
+        ("ISO Backslash", "ISO \\"),
         ("Num Lock", "NumLk"),
         ("Numpad Add", "Num +"),
         ("Numpad Subtract", "Num −"),
@@ -431,6 +626,7 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
             "Period",
             "Slash",
             "Backtick",
+            "ISO Backslash",
         ],
     ),
     (
@@ -442,6 +638,7 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
             "Pause",
             "Menu",
             "Insert",
+            "Fn",
             "Disabled",
         ],
     ),
@@ -455,6 +652,8 @@ pub fn auto_group(code: &str) -> &'static str {
         "Numpad"
     } else if code.starts_with("Digit") {
         "Numbers"
+    } else if code == "Fn" {
+        "Other"
     } else if code.len() >= 2
         && code.starts_with('F')
         && code[1..].chars().all(|c| c.is_ascii_digit())
@@ -466,6 +665,7 @@ pub fn auto_group(code: &str) -> &'static str {
         "BracketLeft",
         "BracketRight",
         "Backslash",
+        "IntlBackslash",
         "Semicolon",
         "Quote",
         "Comma",
@@ -754,3 +954,109 @@ pub const ONBOARDING: &[(&str, &str, &str, &str, &str)] = &[
         "Step 3 of 3",
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keyboard::{
+        FORM_FACTORS, FORM_FULL, FORM_SEVENTY_FIVE, FORM_SIXTY, FORM_SIXTY_FIVE, FORM_TKL,
+    };
+
+    fn codes(form: usize, iso: bool) -> Vec<&'static str> {
+        deck(form, iso).iter().map(|cap| cap.code).collect()
+    }
+
+    /// The 100% ANSI deck is the design export's geometry, untouched.
+    #[test]
+    fn full_ansi_deck_matches_the_design() {
+        let full = deck(FORM_FULL, false);
+        assert_eq!(full.len(), ALL_KEYS.len());
+        assert_eq!(deck_size(full), (1099.0, 313.0));
+    }
+
+    /// Every deck key resolves through the registry, so mappings made on
+    /// any deck work everywhere (physical identity is preserved).
+    #[test]
+    fn deck_keys_share_physical_identity() {
+        for form in 0..FORM_FACTORS.len() {
+            for iso in [false, true] {
+                for cap in deck(form, iso) {
+                    let registered = key(cap.code).expect("deck key registered");
+                    assert_eq!(registered.evdev, cap.evdev, "{} diverged", cap.code);
+                }
+            }
+        }
+    }
+
+    /// No two caps overlap on any deck (hand-positioned tables regress
+    /// easily).
+    #[test]
+    fn deck_keys_do_not_overlap() {
+        for form in 0..FORM_FACTORS.len() {
+            for iso in [false, true] {
+                let keys = deck(form, iso);
+                for (i, a) in keys.iter().enumerate() {
+                    for b in &keys[i + 1..] {
+                        let ax = a.gx + a.x * UNIT;
+                        let bx = b.gx + b.x * UNIT;
+                        let overlap = ax < bx + b.w * UNIT - 0.5
+                            && bx < ax + a.w * UNIT - 0.5
+                            && a.y < b.y + b.h - 0.01
+                            && b.y < a.y + a.h - 0.01;
+                        assert!(
+                            !overlap,
+                            "form {form} iso {iso}: {} and {} overlap",
+                            a.code, b.code
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Each size drops or gains the expected clusters.
+    #[test]
+    fn forms_have_their_clusters() {
+        assert!(codes(FORM_FULL, false).contains(&"Numpad7"));
+        assert!(!codes(FORM_TKL, false).contains(&"Numpad7"));
+        assert!(codes(FORM_TKL, false).contains(&"Home"));
+        assert!(codes(FORM_SEVENTY_FIVE, false).contains(&"F1"));
+        assert!(codes(FORM_SEVENTY_FIVE, false).contains(&"ArrowUp"));
+        assert!(!codes(FORM_SIXTY_FIVE, false).contains(&"F1"));
+        assert!(codes(FORM_SIXTY_FIVE, false).contains(&"ArrowUp"));
+        assert!(codes(FORM_SIXTY_FIVE, false).contains(&"Fn"));
+        assert!(!codes(FORM_SIXTY, false).contains(&"ArrowUp"));
+        assert!(!codes(FORM_SIXTY, false).contains(&"Escape"));
+        assert!(codes(FORM_SIXTY, false).contains(&"KeyA"));
+    }
+
+    /// The ISO transform adds the 102nd key, splits Enter into two
+    /// segments sharing a scancode, and relabels AltGr on every size.
+    #[test]
+    fn iso_decks_use_the_iso_assembly() {
+        for form in 0..FORM_FACTORS.len() {
+            let iso = deck(form, true);
+            assert!(
+                iso.iter().any(|cap| cap.code == "IntlBackslash"),
+                "form {form} has the 102nd key"
+            );
+            let enters = iso.iter().filter(|cap| cap.code == "Enter").count();
+            assert_eq!(enters, 2, "form {form} splits Enter into two segments");
+            let alt = iso.iter().find(|cap| cap.code == "AltRight").unwrap();
+            assert_eq!(alt.label, "AltGr");
+
+            let ansi = deck(form, false);
+            assert!(!ansi.iter().any(|cap| cap.code == "IntlBackslash"));
+            assert_eq!(ansi.iter().filter(|cap| cap.code == "Enter").count(), 1);
+        }
+    }
+
+    /// Physical identities are unique in the registry.
+    #[test]
+    fn registry_identities_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for cap in registry() {
+            assert!(seen.insert(cap.code), "{} registered twice", cap.code);
+        }
+    }
+}

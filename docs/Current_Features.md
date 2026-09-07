@@ -30,8 +30,15 @@ service itself yet.
 
 ## Keyboard view
 
-- Full 100% ANSI deck rendered key-by-key with design-accurate geometry
-  (function row, nav cluster, numpad).
+- Renders every form factor (100%, 80% TKL, 75%, 65%, 60%) in ANSI and ISO
+  assemblies. The 100% and TKL decks use the design export's exact
+  geometry; compact sizes follow the classic assemblies (right-hand
+  column, ↑ carved from right Shift, squeezed bottom row), and ISO adds
+  the 102nd key, two-segment tall Enter, and AltGr.
+- The deck defaults to the detected form factor and ANSI/ISO variant (see
+  [Form_Factor_Detection.md](Form_Factor_Detection.md)); the toolbar's
+  Size picker overrides both for the session, and mappings survive deck
+  switches untouched.
 - Keys light up live as they are pressed on any monitored physical keyboard.
 - Clicking a key opens the key editor; mapped keys show their new action on
   the cap (tap and hold legends), and swap/disabled states are styled.
@@ -81,8 +88,9 @@ service itself yet.
   other input devices, and marks keyboards that disconnect.
 - Per-mapping device scope: "All keyboards" or one specific keyboard.
   Detected keyboards replace the demo device list as soon as they appear.
-- Best-effort form-factor guess per device from its name and reported keys
-  (not yet used by the UI).
+- Best-effort form-factor guess per device from its name and reported keys,
+  used to pick the default deck (see
+  [Form_Factor_Detection.md](Form_Factor_Detection.md)).
 
 ## Tester view
 
@@ -125,13 +133,12 @@ service itself yet.
 - Shortcut groups are not yet part of the generated output or the stored
   model.
 
-## Layout engine (currently dormant)
+## Layout engine (retired)
 
-`src/keyboard.rs` contains a full layout system from before the redesign:
-form factors (100%, TKL, 75%, 65%, 60%), ANSI/ISO variants, and per-key
-slot assembly. The new UI renders only the 100% ANSI deck and does not expose
-it yet — reconnecting it is tracked in
-[Functionality_TODO.md](Functionality_TODO.md).
+The pre-redesign layout system was retired: form factors and ANSI/ISO
+assemblies are now first-class in the new UI (`src/ui/model.rs` builds the
+decks), and `src/keyboard.rs` retains only size/variant detection. The old
+language charmaps and typed-text preview were removed with it.
 
 ## Test coverage
 
@@ -145,4 +152,6 @@ it yet — reconnecting it is tracked in
   parsed by a real xremap binary when one is on PATH — CI installs the
   pinned release (0.15.12) so this always runs there.
 - Store round-trip tests in `src/config.rs`.
-- Layout assembly tests in `src/keyboard.rs`.
+- Deck assembly tests in `src/ui/model.rs` (per-form clusters, ISO
+  transform, overlap and identity checks) and detection tests in
+  `src/keyboard.rs`.

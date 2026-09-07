@@ -5,6 +5,7 @@ use cosmic::widget::{self, container, mouse_area};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message, Toast, View};
+use crate::keyboard;
 use crate::ui::model::key_name;
 use crate::ui::theme::{
     accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, quiet, scrim,
@@ -119,6 +120,45 @@ pub fn devices_popup(app: &App) -> Element<'_, Message> {
             Message::SelectDevice(id),
         ));
     }
+    popover_panel(column).width(Length::Fixed(290.0)).into()
+}
+
+/// The `Size` picker popover: form factors (annotated with the detected
+/// size) plus the ANSI/ISO assembly toggle.
+pub fn size_popup(app: &App) -> Element<'_, Message> {
+    let detected = app.detected_form();
+    let mut column = widget::column::with_capacity(keyboard::FORM_FACTORS.len() + 3).spacing(2);
+
+    for (index, form) in keyboard::FORM_FACTORS.iter().enumerate() {
+        let sub = (detected == Some(index)).then(|| {
+            txt(
+                "Detected from your keyboard",
+                10.5,
+                oklch(0.75, 0.09, 152.0),
+            )
+            .into()
+        });
+        column = column.push(popup_row(
+            form.name.to_owned(),
+            sub,
+            app.form == index,
+            Message::SetForm(index),
+        ));
+    }
+
+    column = column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
+    for (iso, name, sub) in [
+        (false, "ANSI", "US-style: bar Enter, wide left Shift"),
+        (true, "ISO", "European: tall Enter, 102nd key, AltGr"),
+    ] {
+        column = column.push(popup_row(
+            name.to_owned(),
+            Some(txt(sub, 10.5, muted()).into()),
+            app.iso == iso,
+            Message::SetVariant(iso),
+        ));
+    }
+
     popover_panel(column).width(Length::Fixed(290.0)).into()
 }
 

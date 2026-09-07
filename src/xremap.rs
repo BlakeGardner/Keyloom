@@ -31,12 +31,9 @@ pub fn key_symbol(code: &str) -> Option<String> {
 /// Returns `None` for actions with no evdev key, such as `Hyper` and
 /// `Disabled` (the generator handles `Disabled` itself).
 pub fn action_symbol(action: &str) -> Option<String> {
-    // Actions named after a physical key on the deck ("Caps Lock",
-    // "Right Control", "Numpad 7", …) resolve through its scancode.
-    if let Some(cap) = model::ALL_KEYS
-        .iter()
-        .find(|cap| model::key_name(cap.code) == action)
-    {
+    // Actions named after a physical key ("Caps Lock", "Right Control",
+    // "Numpad 7", "ISO Backslash", …) resolve through its scancode.
+    if let Some(cap) = model::registry().find(|cap| model::key_name(cap.code) == action) {
         return evdev_name(cap.evdev);
     }
     // Catalog names that differ from the deck's key names, plus keys
@@ -364,7 +361,7 @@ mod tests {
 
     #[test]
     fn every_deck_key_action_name_translates() {
-        for cap in model::ALL_KEYS {
+        for cap in model::registry() {
             let action = model::key_name(cap.code);
             assert!(
                 action_symbol(&action).is_some(),
@@ -378,7 +375,7 @@ mod tests {
     /// and the self-mapping check all agree).
     #[test]
     fn catalog_offers_every_deck_key() {
-        for cap in model::ALL_KEYS {
+        for cap in model::registry() {
             let name = model::key_name(cap.code);
             let offered = model::ACTION_GROUPS
                 .iter()
@@ -586,30 +583,29 @@ mod tests {
     fn generated_documents_parse_with_real_xremap() {
         use std::process::Command;
 
-        // Every deck key as a remap source.
-        let all_sources: Maps = model::ALL_KEYS
+        // Every known physical key as a remap source.
+        let sources: Vec<&str> = model::registry().map(|cap| cap.code).collect();
+        let all_sources: Maps = sources
             .iter()
-            .map(|cap| map(cap.code, Some("Escape"), None, "all", false))
+            .map(|code| map(code, Some("Escape"), None, "all", false))
             .collect();
         // Every translatable catalog action as an output (plus
         // Disabled; Hyper has no key and is dropped by the generator).
-        // The catalog holds more actions than the deck has keys, so
-        // cycle sources; one source keeps only its last action, which
-        // is fine because every action still appears in some document
-        // chunk below.
+        // The catalog holds more actions than there are keys, so cycle
+        // sources; one source keeps only its last action, which is fine
+        // because every action still appears in some document chunk
+        // below.
         let actions: Vec<&&str> = model::ACTION_GROUPS
             .iter()
             .flat_map(|(_, actions)| actions.iter())
             .collect();
         let all_action_chunks: Vec<Maps> = actions
-            .chunks(model::ALL_KEYS.len())
+            .chunks(sources.len())
             .map(|chunk| {
                 chunk
                     .iter()
                     .enumerate()
-                    .map(|(i, action)| {
-                        map(model::ALL_KEYS[i].code, Some(action), None, "all", false)
-                    })
+                    .map(|(i, action)| map(sources[i], Some(action), None, "all", false))
                     .collect()
             })
             .collect();

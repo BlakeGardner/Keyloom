@@ -7,7 +7,8 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Layer, Message, Popover, View};
-use crate::ui::model::{self, ALL_KEYS, key_name, nav_layer, short};
+use crate::keyboard;
+use crate::ui::model::{self, key_name, nav_layer, short};
 use crate::ui::theme::{ButtonStyle, accent, chip, muted, oklch, vgradient, white};
 use crate::ui::{tester, txt, txt_semibold};
 
@@ -47,6 +48,47 @@ pub fn device_toolbar(app: &App) -> Element<'_, Message> {
             .into()
     } else {
         device.into()
+    };
+
+    // The size & layout picker, defaulted by detection.
+    let size = widget::button::custom(
+        widget::row::with_capacity(3)
+            .spacing(9)
+            .align_y(Alignment::Center)
+            .push(txt("Size", 11.0, muted()))
+            .push(txt_semibold(
+                format!(
+                    "{} · {}",
+                    keyboard::FORM_FACTORS[app.form].name,
+                    if app.iso { "ISO" } else { "ANSI" }
+                ),
+                12.0,
+                oklch(0.93, 0.01, 152.0),
+            ))
+            .push(txt("▾", 9.0, white(0.4))),
+    )
+    .class(
+        ButtonStyle {
+            bg: Some(Background::Color(white(0.035))),
+            hover_bg: Some(Background::Color(white(0.075))),
+            border: white(0.09),
+            border_width: 1.0,
+            radius: 9.0,
+            ..ButtonStyle::default()
+        }
+        .class(),
+    )
+    .padding([8, 12])
+    .on_press(Message::TogglePopover(Popover::Size));
+
+    let size: Element<'_, Message> = if app.popover == Some(Popover::Size) {
+        widget::popover(size)
+            .popup(crate::ui::overlays::size_popup(app))
+            .position(widget::popover::Position::Bottom)
+            .on_close(Message::CloseOverlays)
+            .into()
+    } else {
+        size.into()
     };
 
     let mut layers = widget::column::with_capacity(3)
@@ -106,7 +148,8 @@ pub fn device_toolbar(app: &App) -> Element<'_, Message> {
 
     widget::column::with_capacity(2)
         .push(
-            widget::row::with_capacity(3)
+            widget::row::with_capacity(4)
+                .spacing(10)
                 .padding(Padding {
                     top: 12.0,
                     right: 30.0,
@@ -115,6 +158,7 @@ pub fn device_toolbar(app: &App) -> Element<'_, Message> {
                 })
                 .align_y(Alignment::Start)
                 .push(device)
+                .push(size)
                 .push(crate::ui::hspace())
                 .push(layers),
         )
@@ -148,9 +192,10 @@ pub fn area(app: &App) -> Element<'_, Message> {
         column = column.push(tester::panels(app));
     }
 
+    let (deck_width, deck_height) = model::deck_size(app.deck());
     let deck = container(canvas(app))
-        .width(Length::Fixed(model::DECK_WIDTH))
-        .height(Length::Fixed(model::DECK_HEIGHT));
+        .width(Length::Fixed(deck_width))
+        .height(Length::Fixed(deck_height));
     column = column.push(
         widget::scrollable::horizontal(
             container(deck)
@@ -224,17 +269,19 @@ fn chip_text(active: bool) -> Color {
     }
 }
 
-/// The full deck of key caps, absolutely positioned like the export.
+/// The displayed deck of key caps, absolutely positioned like the export.
 fn canvas(app: &App) -> Element<'_, Message> {
-    let mut layers: Vec<Element<'_, Message>> = Vec::with_capacity(ALL_KEYS.len() + 1);
+    let keys = app.deck();
+    let (deck_width, deck_height) = model::deck_size(keys);
+    let mut layers: Vec<Element<'_, Message>> = Vec::with_capacity(keys.len() + 1);
     layers.push(
         widget::Space::new()
-            .width(Length::Fixed(model::DECK_WIDTH))
-            .height(Length::Fixed(model::DECK_HEIGHT))
+            .width(Length::Fixed(deck_width))
+            .height(Length::Fixed(deck_height))
             .into(),
     );
 
-    for cap in ALL_KEYS {
+    for cap in keys {
         layers.push(
             container(key_button(app, cap))
                 .padding(Padding {
@@ -243,15 +290,15 @@ fn canvas(app: &App) -> Element<'_, Message> {
                     right: 0.0,
                     bottom: 0.0,
                 })
-                .width(Length::Fixed(model::DECK_WIDTH))
-                .height(Length::Fixed(model::DECK_HEIGHT))
+                .width(Length::Fixed(deck_width))
+                .height(Length::Fixed(deck_height))
                 .into(),
         );
     }
 
     stack(layers)
-        .width(Length::Fixed(model::DECK_WIDTH))
-        .height(Length::Fixed(model::DECK_HEIGHT))
+        .width(Length::Fixed(deck_width))
+        .height(Length::Fixed(deck_height))
         .into()
 }
 

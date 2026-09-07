@@ -60,19 +60,19 @@ pick up on its own.
 
 ## 3. Layouts and form factors
 
-The pre-redesign layout system in `keyboard.rs` (100% / TKL / 75% / 65% / 60%,
-ANSI/ISO) is no longer reachable from the new UI, which renders only the 100%
-ANSI deck.
-
-- [ ] **Re-expose form-factor selection** in the new UI.
-- [ ] **Re-expose layout variants** (ISO and other assemblies from
-  `keyboard.rs`).
-- [ ] **Preserve mappings across layout/form-factor changes.** Mappings key off
+- [x] **Re-expose form-factor selection** in the new UI. (The keyboard
+  toolbar's Size picker offers 100% / TKL / 75% / 65% / 60%.)
+- [x] **Re-expose layout variants.** (ANSI and ISO assemblies for every
+  size; the ISO variant is auto-detected from the configured XKB layout.
+  The pre-redesign language charmaps and typed-text preview were dropped
+  with the old layout engine.)
+- [x] **Preserve mappings across layout/form-factor changes.** Mappings key off
   physical identity, so switching the displayed deck must not change or delete
-  rules; verify and add a regression test.
-- [ ] **Default the deck to the detected form factor.** The monitor already
-  guesses a form factor per device (`detected_form`); use it to pick the
-  initial deck instead of always showing 100%.
+  rules; verified with a regression test (including unchanged generated YAML).
+- [x] **Default the deck to the detected form factor.** The monitor's
+  per-device guess (`detected_form`) picks the initial deck; a manual size
+  choice always wins. See
+  [Form_Factor_Detection.md](Form_Factor_Detection.md).
 
 ## 4. Real data instead of demo data
 

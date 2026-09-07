@@ -16,6 +16,7 @@ use cosmic::iced::futures::{Stream, StreamExt};
 use cosmic::prelude::*;
 
 use crate::config::{self, KeyloomConfig};
+use crate::keyboard;
 use crate::monitor;
 use crate::ui;
 use crate::ui::model::{self, Chord, Group, Mapping, Maps, Profile, Rule, key_by_evdev, key_name};
@@ -52,6 +53,7 @@ pub enum Mode {
 pub enum Popover {
     Profiles,
     Devices,
+    Size,
     Menu,
 }
 
@@ -103,6 +105,10 @@ pub enum Message {
         duplicate: bool,
     },
     SelectDevice(String),
+    /// Show a specific form factor (size picker; marks it user-chosen).
+    SetForm(usize),
+    /// Switch between the ANSI and ISO assemblies.
+    SetVariant(bool),
     OpenRemaps,
     CloseRemaps,
     SetLayer(Layer),
@@ -167,6 +173,12 @@ pub struct App {
     pub undo: Option<Undo>,
     // Keyboard view state.
     pub device: String,
+    /// Displayed form factor (index into [`keyboard::FORM_FACTORS`]).
+    pub form: usize,
+    /// Whether the deck uses the ISO assembly instead of ANSI.
+    pub iso: bool,
+    /// Once the user picks a size, detection stops changing it.
+    form_overridden: bool,
     pub layer: Layer,
     pub layers_open: bool,
     pub selected: Option<&'static str>,
@@ -279,6 +291,16 @@ impl App {
     /// Whether a key cap is currently held on any monitored keyboard.
     pub fn is_pressed(&self, evdev: u16) -> bool {
         self.pressed.iter().any(|(_, code)| *code == evdev)
+    }
+
+    /// The key caps of the currently displayed deck.
+    pub fn deck(&self) -> &'static [model::KeyCap] {
+        model::deck(self.form, self.iso)
+    }
+
+    /// The form factor detection would pick for the connected keyboards.
+    pub fn detected_form(&self) -> Option<usize> {
+        monitor::detected_form(self.devices.iter())
     }
 
     /// Held modifiers as `[Ctrl, Shift, Alt, Super]`.
@@ -786,6 +808,10 @@ impl cosmic::Application for App {
             custom_profiles,
             undo: None,
             device: "all".to_owned(),
+            form: keyboard::FORM_FULL,
+            // Tests must not depend on the machine's xkb configuration.
+            iso: !cfg!(test) && keyboard::detect_iso().unwrap_or(false),
+            form_overridden: false,
             layer: Layer::Base,
             layers_open: false,
             selected: None,
@@ -883,6 +909,15 @@ impl cosmic::Application for App {
             Message::NewProfile { duplicate } => self.create_profile(duplicate),
             Message::SelectDevice(id) => {
                 self.device = id;
+                self.popover = None;
+            }
+            Message::SetForm(form) => {
+                self.form = form.min(keyboard::FORM_FACTORS.len() - 1);
+                self.form_overridden = true;
+                self.popover = None;
+            }
+            Message::SetVariant(iso) => {
+                self.iso = iso;
                 self.popover = None;
             }
             Message::OpenRemaps => {
@@ -1162,6 +1197,13 @@ impl cosmic::Application for App {
                     self.devices = devices;
                     self.monitor_started = true;
                     self.pressed.clear();
+                    // Default the deck to the detected size until the
+                    // user picks one; the picker always wins.
+                    if !self.form_overridden
+                        && let Some(form) = monitor::detected_form(self.devices.iter())
+                    {
+                        self.form = form;
+                    }
                 }
                 monitor::Event::Key { device, event } => match event {
                     monitor::KeyEvent::Pressed(code) => self.phys_press(&device, code),
@@ -1406,6 +1448,67 @@ mod tests {
 
         let _ = app.update(Message::Undo);
         assert!(app.mapping("CapsLock").is_some(), "removal is undoable");
+    }
+
+    #[test]
+    fn switching_decks_preserves_mappings_and_yaml() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("Numpad7"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let yaml = crate::xremap::generate(app.maps(), |id| id.to_owned());
+
+        // Numpad7 is absent from the 60% deck; the rule must survive
+        // switching there and back, and the generated YAML must not
+        // change.
+        let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
+        let _ = app.update(Message::SetVariant(true));
+        assert_eq!(
+            app.mapping("Numpad7").and_then(|m| m.tap.as_deref()),
+            Some("Escape")
+        );
+        assert_eq!(
+            crate::xremap::generate(app.maps(), |id| id.to_owned()),
+            yaml
+        );
+
+        let _ = app.update(Message::SetForm(keyboard::FORM_FULL));
+        assert_eq!(
+            app.mapping("Numpad7").and_then(|m| m.tap.as_deref()),
+            Some("Escape")
+        );
+    }
+
+    fn started(form: usize, form_hinted: bool) -> Message {
+        Message::Monitor(monitor::Event::Started(vec![monitor::KeyboardDevice {
+            path: PathBuf::from("/dev/input/event0"),
+            name: "Test Keyboard".to_owned(),
+            connected: true,
+            form,
+            form_hinted,
+        }]))
+    }
+
+    #[test]
+    fn detected_form_defaults_the_deck() {
+        let mut app = app();
+        assert_eq!(app.form, keyboard::FORM_FULL);
+
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        assert_eq!(app.form, keyboard::FORM_TKL, "detection picks the deck");
+    }
+
+    #[test]
+    fn manual_size_choice_beats_detection() {
+        let mut app = app();
+        let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY_FIVE));
+        assert_eq!(app.form, keyboard::FORM_SIXTY_FIVE);
+
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        assert_eq!(
+            app.form,
+            keyboard::FORM_SIXTY_FIVE,
+            "the size picker always wins over detection"
+        );
     }
 
     #[test]
