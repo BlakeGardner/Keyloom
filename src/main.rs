@@ -2,6 +2,7 @@
 //! with libcosmic.
 
 mod app;
+mod config;
 // The layout tables in `keyboard` predate the current design; only the
 // detection helpers are used (by the device monitor) until the remapping
 // engine work rewires them.
@@ -9,6 +10,7 @@ mod app;
 mod keyboard;
 mod monitor;
 mod ui;
+mod xremap;
 
 fn main() -> cosmic::iced::Result {
     let settings = cosmic::app::Settings::default()

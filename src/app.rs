@@ -1,22 +1,27 @@
 //! Application state and update logic for the Keyloom GUI.
 //!
-//! The interface follows the design export in `design/`; remapping is
-//! previewed in memory only — no system keymap is changed yet.
+//! The interface follows the design export in `design/`. Profiles and
+//! their mappings persist via cosmic-config, and every change
+//! regenerates the xremap configuration written to the user's config
+//! directory; shortcut groups are still previewed in memory only.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use cosmic::app::{Core, Task};
+use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::Subscription;
 use cosmic::iced::futures::{Stream, StreamExt};
 use cosmic::prelude::*;
 
+use crate::config::{self, KeyloomConfig};
 use crate::monitor;
 use crate::ui;
 use crate::ui::model::{
     self, Chord, Group, Maps, Mapping, Profile, Rule, key_by_evdev, key_name,
 };
+use crate::xremap;
 
 /// How long the bottom sheet takes to rise (the design's `kbRise`).
 const SHEET_RISE: Duration = Duration::from_millis(220);
@@ -174,6 +179,8 @@ pub struct App {
     pub monitor_started: bool,
     pub pressed: HashSet<(PathBuf, u16)>,
     pub last: Option<LastKey>,
+    /// Persistent settings store (None when unavailable or in tests).
+    settings: Option<cosmic_config::Config>,
 }
 
 impl App {
@@ -324,6 +331,50 @@ impl App {
         self.toast_seq
     }
 
+    /// Save the configuration model and regenerate the xremap file.
+    /// Called after every change to profiles or their mappings.
+    fn persist(&mut self) {
+        // Tests exercise the update loop; never touch the real
+        // ~/.config from them.
+        if cfg!(test) {
+            return;
+        }
+        if let Some(settings) = &self.settings {
+            let snapshot = KeyloomConfig::snapshot(
+                &self.profiles,
+                &self.profile_maps,
+                &self.profile,
+                u32::try_from(self.custom_profiles).unwrap_or(u32::MAX),
+            );
+            if let Err(err) = snapshot.write_entry(settings) {
+                eprintln!("keyloom: failed to save settings: {err}");
+            }
+        }
+        self.write_xremap(true);
+    }
+
+    /// Regenerate the xremap YAML from the active profile's mappings
+    /// and write it to the user's config directory.
+    ///
+    /// A pre-existing config Keyloom did not generate is backed up and
+    /// replaced only when `overwrite_foreign` is set (a user edit);
+    /// startup leaves foreign files alone.
+    fn write_xremap(&mut self, overwrite_foreign: bool) {
+        let yaml = xremap::generate(self.maps(), |id| self.device_label(id));
+        match xremap::write(&yaml, overwrite_foreign) {
+            Ok(xremap::WriteOutcome::SkippedForeign(path)) => {
+                eprintln!(
+                    "keyloom: leaving existing xremap config untouched: {}",
+                    path.display()
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                self.flash("Could not write xremap config", err.to_string());
+            }
+        }
+    }
+
     /// Assign an action to the selected key's tap or hold slot.
     fn set_mapping(&mut self, code: &str, action: &str) {
         if self.view == View::Tester {
@@ -348,8 +399,9 @@ impl App {
         let device = self.device_label(&self.device.clone()).to_lowercase();
         self.flash(
             format!("{}{held} → {action}", key_name(code)),
-            format!("Updated in preview · {device}"),
+            format!("Saved to xremap config · {device}"),
         );
+        self.persist();
     }
 
     /// Snapshot, then mutate the active profile's shortcut groups.
@@ -442,7 +494,11 @@ impl App {
         if let Some(maps) = self.profile_maps.get_mut(&self.profile) {
             maps.retain(|(key, _)| key != code);
         }
-        self.flash(format!("{} back to default", key_name(code)), "Updated in preview");
+        self.flash(
+            format!("{} back to default", key_name(code)),
+            "Saved to xremap config",
+        );
+        self.persist();
     }
 
     /// Record a chord into the rule opened by the shortcut editor.
@@ -526,6 +582,7 @@ impl App {
             "Click a key to add your first mapping."
         };
         self.flash(format!("{name} created"), sub);
+        self.persist();
     }
 
     /// Handle a physical key press reported by the evdev monitor.
@@ -638,7 +695,7 @@ impl cosmic::Application for App {
     type Flags = ();
     type Message = Message;
 
-    const APP_ID: &'static str = "io.github.blakegardner.Keyloom";
+    const APP_ID: &'static str = config::APP_ID;
 
     fn core(&self) -> &Core {
         &self.core
@@ -649,12 +706,35 @@ impl cosmic::Application for App {
     }
 
     fn init(core: Core, (): Self::Flags) -> (Self, Task<Message>) {
-        let mut profiles = Vec::new();
-        let mut profile_maps = HashMap::new();
-        for (profile, maps) in model::demo_profiles() {
-            profile_maps.insert(profile.id.clone(), maps);
-            profiles.push(profile);
-        }
+        // Tests drive the update loop against the demo state; never
+        // read or write the real ~/.config from them.
+        let settings = if cfg!(test) {
+            None
+        } else {
+            KeyloomConfig::handle()
+        };
+        let stored = settings
+            .as_ref()
+            .map(KeyloomConfig::load)
+            .filter(|stored| !stored.profiles.is_empty());
+
+        let (profiles, profile_maps, profile, custom_profiles) = match stored {
+            Some(stored) => {
+                let (profiles, maps, active, custom) = stored.into_state();
+                (profiles, maps, active, custom as usize)
+            }
+            None => {
+                // Fresh install: seed the demo profiles until the user
+                // makes a change worth saving.
+                let mut profiles = Vec::new();
+                let mut profile_maps = HashMap::new();
+                for (profile, maps) in model::demo_profiles() {
+                    profile_maps.insert(profile.id.clone(), maps);
+                    profiles.push(profile);
+                }
+                (profiles, profile_maps, "default".to_owned(), 0)
+            }
+        };
         let profile_groups: HashMap<String, Vec<Group>> =
             model::demo_groups().into_iter().collect();
 
@@ -668,10 +748,10 @@ impl cosmic::Application for App {
             onboarding: false,
             onb_step: 0,
             profiles,
-            profile: "default".to_owned(),
+            profile,
             profile_maps,
             profile_groups,
-            custom_profiles: 0,
+            custom_profiles,
             undo: None,
             device: "all".to_owned(),
             layer: Layer::Base,
@@ -691,9 +771,15 @@ impl cosmic::Application for App {
             monitor_started: false,
             pressed: HashSet::new(),
             last: None,
+            settings,
         };
 
         app.set_header_title(String::new());
+        // Bring the generated file in line with the loaded state, but
+        // never displace a hand-written config just for launching.
+        if !cfg!(test) {
+            app.write_xremap(false);
+        }
 
         (app, Task::none())
     }
@@ -755,6 +841,7 @@ impl cosmic::Application for App {
                     format!("{} profile active", self.profile_name()),
                     "switched in place",
                 );
+                self.persist();
                 // The profile-switch confirmation dismisses itself.
                 return cosmic::task::future(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
@@ -867,6 +954,7 @@ impl cosmic::Application for App {
                     },
                     format!("{} ⇄ {tap}", key_name(selected)),
                 );
+                self.persist();
             }
             Message::ClearKey => self.clear_mapping(),
             Message::ClosePanel => {
@@ -958,6 +1046,7 @@ impl cosmic::Application for App {
                     Some(Undo::Maps(maps)) => {
                         self.profile_maps = maps;
                         self.toast = None;
+                        self.persist();
                     }
                     Some(Undo::Groups(groups)) => {
                         self.profile_groups = groups;
@@ -987,13 +1076,14 @@ impl cosmic::Application for App {
                 self.popover = None;
                 self.selected = None;
                 self.flash("Profile cleared", "nothing is remapped");
+                self.persist();
             }
             Message::MenuAbout => {
                 self.popover = None;
                 self.undo = None;
                 self.flash(
-                    "Keyloom interactive preview",
-                    "Changes stay in this session; your system keyboard is unchanged.",
+                    "Keyloom",
+                    "Mappings are saved and written to your xremap config automatically.",
                 );
             }
             Message::SkipOnboarding => {
@@ -1025,6 +1115,7 @@ impl cosmic::Application for App {
                         ));
                     }
                     self.onb_step = 2;
+                    self.persist();
                 } else {
                     self.onb_step += 1;
                 }

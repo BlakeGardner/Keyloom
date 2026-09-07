@@ -136,7 +136,7 @@ pub fn menu_popup(app: &App) -> Element<'_, Message> {
         items.push(("Show first-run setup", Message::MenuShowSetup));
         items.push(("Reset all mappings", Message::MenuReset));
     }
-    items.push(("About this preview", Message::MenuAbout));
+    items.push(("About Keyloom", Message::MenuAbout));
 
     let mut column = widget::column::with_capacity(items.len()).spacing(2);
     for (name, message) in items {

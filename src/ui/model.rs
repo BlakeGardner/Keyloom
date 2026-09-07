@@ -5,6 +5,7 @@
 //! keymap yet.
 
 use evdev::KeyCode;
+use serde::{Deserialize, Serialize};
 
 /// One key unit in the deck, in logical pixels (`U` in the export).
 pub const UNIT: f32 = 49.0;
@@ -431,7 +432,7 @@ pub fn nav_layer(code: &str) -> Option<&'static str> {
 }
 
 /// What a remapped key does in one profile.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mapping {
     pub tap: Option<String>,
     pub hold: Option<String>,
@@ -489,7 +490,7 @@ impl Group {
 }
 
 /// A named remapping profile.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
     pub id: String,
     pub name: String,
@@ -667,7 +668,7 @@ pub const ONBOARDING: &[(&str, &str, &str, &str, &str)] = &[
     (
         "A",
         "Your keyboard, your rules",
-        "Press a key to see it light up. This preview demonstrates remapping without changing your computer's keyboard.",
+        "Press a key to see it light up. Mappings you add are saved and written to your xremap configuration automatically.",
         "Continue with an example",
         "Waiting for input…",
     ),

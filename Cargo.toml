@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 evdev = "0.13"
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["time"] }
 
 [dependencies.libcosmic]
