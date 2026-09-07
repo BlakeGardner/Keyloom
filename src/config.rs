@@ -88,7 +88,10 @@ impl KeyloomConfig {
             });
             profile_maps.insert(stored.id, stored.mappings);
         }
-        let active = if profiles.iter().any(|profile| profile.id == self.active_profile) {
+        let active = if profiles
+            .iter()
+            .any(|profile| profile.id == self.active_profile)
+        {
             self.active_profile
         } else {
             profiles

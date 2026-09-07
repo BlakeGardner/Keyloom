@@ -1226,8 +1226,17 @@ fn etc_default_xkb() -> Option<(String, String)> {
 fn parse_etc_default(text: &str) -> Option<(String, String)> {
     let field = |name: &str| {
         text.lines().find_map(|line| {
-            let value = line.trim().strip_prefix(name)?.trim_start().strip_prefix('=')?;
-            Some(value.trim().trim_matches(|c| c == '"' || c == '\'').to_owned())
+            let value = line
+                .trim()
+                .strip_prefix(name)?
+                .trim_start()
+                .strip_prefix('=')?;
+            Some(
+                value
+                    .trim()
+                    .trim_matches(|c| c == '"' || c == '\'')
+                    .to_owned(),
+            )
         })
     };
 
@@ -1357,7 +1366,10 @@ mod tests {
         // Unsupported variants fall back to the base layout.
         assert_eq!(match_layout("us", "intl"), index_of("English (US)"));
         assert_eq!(match_layout("gb", ""), index_of("English (UK)"));
-        assert_eq!(match_layout("de", "nodeadkeys"), index_of("German (QWERTZ)"));
+        assert_eq!(
+            match_layout("de", "nodeadkeys"),
+            index_of("German (QWERTZ)")
+        );
         // Multiple configured layouts: the first wins.
         assert_eq!(match_layout("fr,us", ""), index_of("French (AZERTY)"));
         assert_eq!(match_layout("es", ""), index_of("Spanish"));
@@ -1388,7 +1400,10 @@ mod tests {
     #[test]
     fn parses_etc_default_keyboard() {
         let text = "# KEYBOARD CONFIGURATION FILE\nXKBMODEL=\"pc105\"\nXKBLAYOUT=\"gb\"\nXKBVARIANT=\"\"\nBACKSPACE=\"guess\"\n";
-        assert_eq!(parse_etc_default(text), Some(("gb".to_owned(), String::new())));
+        assert_eq!(
+            parse_etc_default(text),
+            Some(("gb".to_owned(), String::new()))
+        );
 
         assert_eq!(
             parse_etc_default("XKBLAYOUT=us\nXKBVARIANT=dvorak\n"),

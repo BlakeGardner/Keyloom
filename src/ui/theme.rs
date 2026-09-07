@@ -83,7 +83,12 @@ pub fn white(alpha: f32) -> Color {
 /// Recessed-area wash (the export's black rgba() insets). Stays dark in
 /// both modes, softened on light so insets read as gentle gray.
 pub fn black(alpha: f32) -> Color {
-    Color::from_rgba(0.0, 0.0, 0.0, if dark_mode() { alpha } else { alpha * 0.35 })
+    Color::from_rgba(
+        0.0,
+        0.0,
+        0.0,
+        if dark_mode() { alpha } else { alpha * 0.35 },
+    )
 }
 
 /// Drop-shadow color: always dark, regardless of theme mode.

@@ -18,9 +18,7 @@ use cosmic::prelude::*;
 use crate::config::{self, KeyloomConfig};
 use crate::monitor;
 use crate::ui;
-use crate::ui::model::{
-    self, Chord, Group, Maps, Mapping, Profile, Rule, key_by_evdev, key_name,
-};
+use crate::ui::model::{self, Chord, Group, Mapping, Maps, Profile, Rule, key_by_evdev, key_name};
 use crate::xremap;
 
 /// How long the bottom sheet takes to rise (the design's `kbRise`).
@@ -101,7 +99,9 @@ pub enum Message {
     TogglePopover(Popover),
     CloseOverlays,
     SelectProfile(String),
-    NewProfile { duplicate: bool },
+    NewProfile {
+        duplicate: bool,
+    },
     SelectDevice(String),
     OpenRemaps,
     CloseRemaps,
@@ -115,14 +115,20 @@ pub enum Message {
     SetMode(Mode),
     ToggleFromMod(usize),
     ToggleToMod(usize),
-    RemoveCombo { group: usize, rule: usize },
+    RemoveCombo {
+        group: usize,
+        rule: usize,
+    },
     ToggleSwap,
     ClearKey,
     ClosePanel,
     SetCapture(bool),
     AddGroup,
     ToggleGroup(usize),
-    EditRule { group: usize, rule: Option<usize> },
+    EditRule {
+        group: usize,
+        rule: Option<usize>,
+    },
     SetRecording(Option<Side>),
     ToggleAnyMod,
     DeleteRule,
@@ -462,10 +468,9 @@ impl App {
                 0
             });
             let rules = &mut groups[index].rules;
-            if let Some(same) = rules
-                .iter()
-                .position(|other| other.from.key == rule.from.key && other.from.mods == rule.from.mods)
-            {
+            if let Some(same) = rules.iter().position(|other| {
+                other.from.key == rule.from.key && other.from.mods == rule.from.mods
+            }) {
                 rules[same] = rule;
             } else {
                 rules.push(rule);
@@ -1150,8 +1155,7 @@ impl cosmic::Application for App {
         let mut subscriptions = vec![Subscription::run(monitor_stream)];
         // Drive redraws only while the sheet is actively rising.
         if self.sheet_open() && self.sheet_progress() < 1.0 {
-            subscriptions
-                .push(cosmic::iced::window::frames().map(|_| Message::SheetAnimate));
+            subscriptions.push(cosmic::iced::window::frames().map(|_| Message::SheetAnimate));
         }
         Subscription::batch(subscriptions)
     }
@@ -1262,10 +1266,7 @@ mod tests {
         assert!(app.edit_rule.is_some(), "editing opens the sheet");
 
         let _ = app.update(Message::SetView(View::Keyboard));
-        assert!(
-            app.edit_rule.is_none(),
-            "switching views closes the sheet"
-        );
+        assert!(app.edit_rule.is_none(), "switching views closes the sheet");
     }
 
     #[test]

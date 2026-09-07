@@ -49,7 +49,9 @@ pub fn device_toolbar(app: &App) -> Element<'_, Message> {
         device.into()
     };
 
-    let mut layers = widget::column::with_capacity(3).spacing(8).align_x(Alignment::End);
+    let mut layers = widget::column::with_capacity(3)
+        .spacing(8)
+        .align_x(Alignment::End);
     layers = layers.push(
         widget::button::custom(txt(
             if app.layers_open {
@@ -257,7 +259,11 @@ fn canvas(app: &App) -> Element<'_, Message> {
 #[allow(clippy::too_many_lines)]
 fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Message> {
     let nav_active = app.layer == Layer::Nav;
-    let layer_label = if nav_active { nav_layer(cap.code) } else { None };
+    let layer_label = if nav_active {
+        nav_layer(cap.code)
+    } else {
+        None
+    };
     let is_trigger = nav_active && cap.code == "CapsLock";
     let mapping = app.mapping(cap.code);
     let selected = app.selected == Some(cap.code);
@@ -341,12 +347,10 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
     if show_orig {
         labels = labels.push(txt(cap.label.to_owned(), 8.0, muted()));
     }
-    labels = labels.push(
-        txt(main, main_size, main_color).font(Font {
-            weight: main_weight,
-            ..Font::DEFAULT
-        }),
-    );
+    labels = labels.push(txt(main, main_size, main_color).font(Font {
+        weight: main_weight,
+        ..Font::DEFAULT
+    }));
     if let Some(hold) = hold_line {
         labels = labels.push(txt_semibold(hold, 7.5, oklch(0.72, 0.13, 16.0)));
     }

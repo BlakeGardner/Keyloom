@@ -19,15 +19,17 @@ fn popup_row<'a>(
     active: bool,
     message: Message,
 ) -> Element<'a, Message> {
-    let mut labels = widget::column::with_capacity(2).spacing(2).push(txt_semibold(
-        name,
-        12.5,
-        if active {
-            oklch(0.97, 0.01, 152.0)
-        } else {
-            oklch(0.88, 0.01, 152.0)
-        },
-    ));
+    let mut labels = widget::column::with_capacity(2)
+        .spacing(2)
+        .push(txt_semibold(
+            name,
+            12.5,
+            if active {
+                oklch(0.97, 0.01, 152.0)
+            } else {
+                oklch(0.88, 0.01, 152.0)
+            },
+        ));
     if let Some(sub) = sub {
         labels = labels.push(sub);
     }
@@ -71,21 +73,16 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
     }
 
     if app.view != View::Tester {
-        column = column.push(
-            container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]),
-        );
+        column =
+            column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
         column = column.push(
             widget::row::with_capacity(2)
                 .spacing(6)
                 .push(
                     widget::button::custom(
-                        txt(
-                            "Duplicate",
-                            11.5,
-                            oklch(0.9, 0.01, 152.0),
-                        )
-                        .align_x(Alignment::Center)
-                        .width(Length::Fill),
+                        txt("Duplicate", 11.5, oklch(0.9, 0.01, 152.0))
+                            .align_x(Alignment::Center)
+                            .width(Length::Fill),
                     )
                     .class(ghost_button())
                     .padding([6, 10])
@@ -94,13 +91,9 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
                 )
                 .push(
                     widget::button::custom(
-                        txt_semibold(
-                            "New",
-                            11.5,
-                            oklch(0.93, 0.02, 152.0),
-                        )
-                        .align_x(Alignment::Center)
-                        .width(Length::Fill),
+                        txt_semibold("New", 11.5, oklch(0.93, 0.02, 152.0))
+                            .align_x(Alignment::Center)
+                            .width(Length::Fill),
                     )
                     .class(accent_button())
                     .padding([6, 10])
@@ -215,10 +208,7 @@ pub fn toast<'a>(app: &'a App, toast: &'a Toast) -> Element<'a, Message> {
 }
 
 /// A dimmed backdrop with a centered dialog card.
-fn modal<'a>(
-    card: Element<'a, Message>,
-    on_backdrop: Message,
-) -> Element<'a, Message> {
+fn modal<'a>(card: Element<'a, Message>, on_backdrop: Message) -> Element<'a, Message> {
     let backdrop = mouse_area(
         container(widget::Space::new())
             .width(Length::Fill)
@@ -292,10 +282,7 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
         let Some(cap) = crate::ui::model::key(code) else {
             continue;
         };
-        let mut full_to = mapping
-            .tap
-            .clone()
-            .unwrap_or_else(|| key_name(code));
+        let mut full_to = mapping.tap.clone().unwrap_or_else(|| key_name(code));
         if let Some(hold) = &mapping.hold {
             full_to.push_str(&format!(" · When held: {hold}"));
         }
@@ -362,13 +349,9 @@ pub fn capture_dialog(app: &App) -> Element<'_, Message> {
     );
 
     let listening = container(
-        mono(
-            "Listening for your next key…",
-            14.0,
-            fg(),
-        )
-        .align_x(Alignment::Center)
-        .width(Length::Fill),
+        mono("Listening for your next key…", 14.0, fg())
+            .align_x(Alignment::Center)
+            .width(Length::Fill),
     )
     .width(Length::Fill)
     .padding([22, 16])
@@ -429,10 +412,7 @@ pub fn onboarding(app: &App) -> Element<'_, Message> {
     .width(Length::Fixed(96.0))
     .height(Length::Fixed(96.0))
     .class(ctheme::Container::custom(|_| container::Style {
-        background: Some(vgradient(
-            oklch(0.4, 0.08, 152.0),
-            oklch(0.33, 0.07, 152.0),
-        )),
+        background: Some(vgradient(oklch(0.4, 0.08, 152.0), oklch(0.33, 0.07, 152.0))),
         border: Border {
             color: accent(),
             width: 1.0,

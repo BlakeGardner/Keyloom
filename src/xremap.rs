@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use evdev::KeyCode;
 
-use crate::ui::model::{self, Maps, Mapping};
+use crate::ui::model::{self, Mapping, Maps};
 
 /// First line of every file Keyloom generates. Files that don't start
 /// with this marker are treated as foreign and never silently replaced.
@@ -182,7 +182,10 @@ pub fn generate(maps: &Maps, device_name: impl Fn(&str) -> String) -> String {
         match scope {
             None => block.push_str("  - name: Keyloom mappings\n"),
             Some((name, _)) => {
-                block.push_str(&format!("  - name: {}\n", quote(&format!("Keyloom mappings ({name})"))));
+                block.push_str(&format!(
+                    "  - name: {}\n",
+                    quote(&format!("Keyloom mappings ({name})"))
+                ));
                 block.push_str("    device:\n");
                 block.push_str(&format!("      only: [{}]\n", quote(name)));
             }
@@ -193,9 +196,8 @@ pub fn generate(maps: &Maps, device_name: impl Fn(&str) -> String) -> String {
                 Output::Key(key) => block.push_str(&format!("      {source}: {key}\n")),
                 Output::Disabled => block.push_str(&format!("      {source}: []\n")),
                 Output::TapHold { alone, held } => {
-                    let slot = |slot: &Option<String>| {
-                        slot.clone().unwrap_or_else(|| "[]".to_owned())
-                    };
+                    let slot =
+                        |slot: &Option<String>| slot.clone().unwrap_or_else(|| "[]".to_owned());
                     block.push_str(&format!("      {source}:\n"));
                     block.push_str(&format!("        held: {}\n", slot(held)));
                     block.push_str(&format!("        alone: {}\n", slot(alone)));
@@ -268,9 +270,9 @@ pub fn write_to(path: &Path, yaml: &str, overwrite_foreign: bool) -> io::Result<
             backup(path)?;
         }
     }
-    let dir = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "config path has no parent")
-    })?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "config path has no parent"))?;
     fs::create_dir_all(dir)?;
     // Write-then-rename so a watching xremap never sees a partial file.
     let tmp = path.with_extension("yml.tmp");
@@ -305,7 +307,13 @@ fn backup(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    fn map(code: &str, tap: Option<&str>, hold: Option<&str>, device: &str, swap: bool) -> (String, Mapping) {
+    fn map(
+        code: &str,
+        tap: Option<&str>,
+        hold: Option<&str>,
+        device: &str,
+        swap: bool,
+    ) -> (String, Mapping) {
         (
             code.to_owned(),
             Mapping {
@@ -376,9 +384,19 @@ mod tests {
 
     #[test]
     fn tap_hold_emits_held_and_alone() {
-        let maps = vec![map("CapsLock", Some("Escape"), Some("Control"), "all", false)];
+        let maps = vec![map(
+            "CapsLock",
+            Some("Escape"),
+            Some("Control"),
+            "all",
+            false,
+        )];
         let yaml = generate(&maps, no_devices);
-        assert!(yaml.contains("      KEY_CAPSLOCK:\n        held: KEY_LEFTCTRL\n        alone: KEY_ESC\n"));
+        assert!(
+            yaml.contains(
+                "      KEY_CAPSLOCK:\n        held: KEY_LEFTCTRL\n        alone: KEY_ESC\n"
+            )
+        );
     }
 
     #[test]
@@ -429,9 +447,15 @@ mod tests {
             map("MetaLeft", Some("Alt"), None, "kb1", false),
         ];
         let yaml = generate(&maps, |id| {
-            if id == "kb1" { "Keychron K2 Pro".to_owned() } else { id.to_owned() }
+            if id == "kb1" {
+                "Keychron K2 Pro".to_owned()
+            } else {
+                id.to_owned()
+            }
         });
-        let scoped = yaml.find("Keyloom mappings (Keychron K2 Pro)").expect("scoped block");
+        let scoped = yaml
+            .find("Keyloom mappings (Keychron K2 Pro)")
+            .expect("scoped block");
         let unscoped = yaml.find("name: Keyloom mappings\n").expect("all block");
         assert!(unscoped < scoped, "unscoped block comes first");
         assert!(yaml.contains("    device:\n      only: ['Keychron K2 Pro']\n"));
@@ -455,7 +479,11 @@ mod tests {
             map("F12", Some("Play/Pause"), None, "kb1", false),
         ];
         let yaml = generate(&maps, |id| {
-            if id == "kb1" { "Keychron K2 Pro".to_owned() } else { id.to_owned() }
+            if id == "kb1" {
+                "Keychron K2 Pro".to_owned()
+            } else {
+                id.to_owned()
+            }
         });
         let expected = format!(
             "{MARKER}\n\
@@ -485,8 +513,14 @@ mod tests {
         let ours = generate(&Vec::new(), no_devices);
 
         // Fresh write, then an identical write is a no-op.
-        assert_eq!(write_to(&path, &ours, false).unwrap(), WriteOutcome::Written(path.clone()));
-        assert_eq!(write_to(&path, &ours, false).unwrap(), WriteOutcome::Unchanged(path.clone()));
+        assert_eq!(
+            write_to(&path, &ours, false).unwrap(),
+            WriteOutcome::Written(path.clone())
+        );
+        assert_eq!(
+            write_to(&path, &ours, false).unwrap(),
+            WriteOutcome::Unchanged(path.clone())
+        );
 
         // A hand-written file is preserved unless overwriting is allowed.
         fs::write(&path, "modmap: [] # hand written\n").unwrap();
@@ -495,7 +529,10 @@ mod tests {
             write_to(&path, &updated, false).unwrap(),
             WriteOutcome::SkippedForeign(path.clone())
         );
-        assert_eq!(write_to(&path, &updated, true).unwrap(), WriteOutcome::Written(path.clone()));
+        assert_eq!(
+            write_to(&path, &updated, true).unwrap(),
+            WriteOutcome::Written(path.clone())
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), updated);
         assert_eq!(
             fs::read_to_string(dir.join("config.yml.bak")).unwrap(),
@@ -503,7 +540,10 @@ mod tests {
         );
 
         // Our own older output is replaced without a backup.
-        assert_eq!(write_to(&path, &ours, false).unwrap(), WriteOutcome::Written(path.clone()));
+        assert_eq!(
+            write_to(&path, &ours, false).unwrap(),
+            WriteOutcome::Written(path.clone())
+        );
         assert!(!dir.join("config.yml.bak.1").exists());
 
         fs::remove_dir_all(&dir).unwrap();

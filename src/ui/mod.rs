@@ -210,32 +210,32 @@ pub fn view(app: &App) -> Element<'_, Message> {
 /// The editor sheet sliding over the bottom of the window — the app's
 /// context drawer, repositioned to the bottom edge.
 fn bottom_sheet(app: &App) -> Option<Element<'_, Message>> {
-    let (title, close, content, footer): (String, _, Element<'_, Message>, _) =
-        if app.view == View::Keyboard
-            && let Some(selected) = app.selected
-        {
-            (
-                format!("Make {} act as…", model::key_name(selected)),
-                Message::ClosePanel,
-                editor::key_editor(app),
-                editor::key_editor_footer(app),
-            )
-        } else if app.view == View::Shortcuts
-            && let Some(edit) = app.edit_rule
-        {
-            (
-                if edit.rule.is_some() {
-                    "Edit shortcut".to_owned()
-                } else {
-                    "New shortcut".to_owned()
-                },
-                Message::CloseEdit,
-                shortcuts::rule_editor(app),
-                shortcuts::rule_editor_footer(app),
-            )
-        } else {
-            return None;
-        };
+    let (title, close, content, footer): (String, _, Element<'_, Message>, _) = if app.view
+        == View::Keyboard
+        && let Some(selected) = app.selected
+    {
+        (
+            format!("Make {} act as…", model::key_name(selected)),
+            Message::ClosePanel,
+            editor::key_editor(app),
+            editor::key_editor_footer(app),
+        )
+    } else if app.view == View::Shortcuts
+        && let Some(edit) = app.edit_rule
+    {
+        (
+            if edit.rule.is_some() {
+                "Edit shortcut".to_owned()
+            } else {
+                "New shortcut".to_owned()
+            },
+            Message::CloseEdit,
+            shortcuts::rule_editor(app),
+            shortcuts::rule_editor_footer(app),
+        )
+    } else {
+        return None;
+    };
 
     let header = widget::row::with_capacity(3)
         .align_y(Alignment::Center)

@@ -41,7 +41,11 @@ pub fn start(app: &App) -> Vec<Element<'_, Message>> {
             .spacing(7)
             .align_y(Alignment::Center)
             .push(profile_dot)
-            .push(txt(app.profile_name().to_owned(), 12.0, oklch(0.9, 0.01, 152.0)))
+            .push(txt(
+                app.profile_name().to_owned(),
+                12.0,
+                oklch(0.9, 0.01, 152.0),
+            ))
             .push(txt("▾", 9.0, oklch(0.9, 0.01, 152.0))),
     )
     .class(header_chip())

@@ -83,11 +83,12 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
             } else {
                 txt(*name, 13.0, fg())
             };
-            let underline = container(widget::Space::new().width(Length::Fill).height(2.0))
-                .class(ctheme::Container::custom(move |_| container::Style {
+            let underline = container(widget::Space::new().width(Length::Fill).height(2.0)).class(
+                ctheme::Container::custom(move |_| container::Style {
                     background: active.then(|| fg().into()),
                     ..container::Style::default()
-                }));
+                }),
+            );
             widget::button::custom(
                 widget::column::with_capacity(2)
                     .spacing(7)
@@ -109,10 +110,7 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
     // Action grid.
     let mut actions: Vec<(&'static str, &'static str)> = Vec::new();
     if query.is_empty() {
-        if let Some((name, items)) = ACTION_GROUPS
-            .iter()
-            .find(|(name, _)| *name == active_group)
-        {
+        if let Some((name, items)) = ACTION_GROUPS.iter().find(|(name, _)| *name == active_group) {
             actions.extend(items.iter().map(|action| (*action, *name)));
         }
     } else {
@@ -145,7 +143,12 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
                 let active = match app.mode {
                     Mode::Combo => combos.iter().any(|(_, _, rule)| {
                         rule.to.key == action
-                            && rule.from.mods.iter().map(String::as_str).collect::<Vec<_>>()
+                            && rule
+                                .from
+                                .mods
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
                                 == from_mods
                     }),
                     Mode::Hold => mapping.and_then(|m| m.hold.as_deref()) == Some(action),
@@ -160,9 +163,8 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
             })
             .collect();
 
-        section = section.push(
-            container(widget::flex_row(items).row_spacing(10).column_spacing(10)).padding(5),
-        );
+        section = section
+            .push(container(widget::flex_row(items).row_spacing(10).column_spacing(10)).padding(5));
     }
 
     // Context line.
@@ -281,11 +283,19 @@ fn keycap_cell(label: String, active: bool, message: Message) -> Element<'static
         }));
 
     let cap = widget::button::custom(
-        mono(label, 13.0, if active { oklch(0.98, 0.01, 152.0) } else { fg() })
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .width(Length::Fill)
-            .height(Length::Fill),
+        mono(
+            label,
+            13.0,
+            if active {
+                oklch(0.98, 0.01, 152.0)
+            } else {
+                fg()
+            },
+        )
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
     .class(keycap(active))
     .padding([4, 12])
@@ -336,7 +346,11 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
             widget::button::custom(txt_semibold(
                 label,
                 11.0,
-                if on { oklch(0.97, 0.02, 152.0) } else { muted() },
+                if on {
+                    oklch(0.97, 0.02, 152.0)
+                } else {
+                    muted()
+                },
             ))
             .class(
                 ButtonStyle {
