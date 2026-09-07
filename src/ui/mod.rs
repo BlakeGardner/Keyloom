@@ -258,31 +258,48 @@ fn bottom_sheet(app: &App) -> Option<Element<'_, Message>> {
         )
         .push(footer);
 
+    let sheet: Element<'_, Message> = container(
+        container(panel)
+            .width(Length::Fill)
+            .padding([18, 24])
+            .class(ctheme::Container::custom(|_| container::Style {
+                background: Some(oklch(0.185, 0.007, 152.0).into()),
+                border: Border {
+                    color: white(0.12),
+                    width: 1.0,
+                    radius: [14.0, 14.0, 0.0, 0.0].into(),
+                },
+                shadow: Shadow {
+                    color: shadow(0.6),
+                    offset: Vector::new(0.0, -18.0),
+                    blur_radius: 48.0,
+                },
+                ..container::Style::default()
+            })),
+    )
+    .width(Length::Fill)
+    .padding([0, 10])
+    .into();
+
+    // Rise animation (the design's `kbRise`): reveal the sheet from the
+    // bottom edge by growing a clip window, easing out. The sheet stays
+    // top-aligned inside it, so its header climbs like a translate.
+    let progress = app.sheet_progress();
+    if progress >= 1.0 {
+        return Some(sheet);
+    }
+    let eased = 1.0 - (1.0 - progress).powi(3);
     Some(
-        container(
-            container(panel)
-                .width(Length::Fill)
-                .padding([18, 24])
-                .class(ctheme::Container::custom(|_| container::Style {
-                    background: Some(oklch(0.185, 0.007, 152.0).into()),
-                    border: Border {
-                        color: white(0.12),
-                        width: 1.0,
-                        radius: [14.0, 14.0, 0.0, 0.0].into(),
-                    },
-                    shadow: Shadow {
-                        color: shadow(0.6),
-                        offset: Vector::new(0.0, -18.0),
-                        blur_radius: 48.0,
-                    },
-                    ..container::Style::default()
-                })),
-        )
-        .width(Length::Fill)
-        .padding([0, 10])
-        .into(),
+        container(sheet)
+            .width(Length::Fill)
+            .max_height(eased * SHEET_RISE_EXTENT)
+            .clip(true)
+            .into(),
     )
 }
 
 /// Tallest the sheet's scrolling content region may grow.
 const SHEET_CONTENT_MAX_HEIGHT: f32 = 300.0;
+
+/// Height swept by the rise animation — at least the tallest sheet.
+const SHEET_RISE_EXTENT: f32 = 460.0;

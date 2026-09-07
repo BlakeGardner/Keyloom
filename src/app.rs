@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use cosmic::app::{Core, Task};
 use cosmic::iced::Subscription;
@@ -16,6 +17,9 @@ use crate::ui;
 use crate::ui::model::{
     self, Chord, Group, Maps, Mapping, Profile, Rule, key_by_evdev, key_name,
 };
+
+/// How long the bottom sheet takes to rise (the design's `kbRise`).
+const SHEET_RISE: Duration = Duration::from_millis(220);
 
 /// Main navigation tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +124,8 @@ pub enum Message {
     CloseEdit,
     Undo,
     ToastExpired(u64),
+    /// Redraw tick while the bottom sheet rises.
+    SheetAnimate,
     MenuShowSetup,
     MenuReset,
     MenuAbout,
@@ -161,6 +167,8 @@ pub struct App {
     // Shortcuts view state.
     pub edit_rule: Option<EditRule>,
     pub recording: Option<Side>,
+    /// When the bottom sheet last started opening, for its rise animation.
+    sheet_opened: Option<Instant>,
     // Hardware monitoring.
     pub devices: Vec<monitor::KeyboardDevice>,
     pub monitor_started: bool,
@@ -289,6 +297,19 @@ impl App {
                     .map(move |(ri, rule)| (gi, ri, rule))
             })
             .collect()
+    }
+
+    /// Whether the bottom editor sheet is showing.
+    pub fn sheet_open(&self) -> bool {
+        (self.view == View::Keyboard && self.selected.is_some())
+            || (self.view == View::Shortcuts && self.edit_rule.is_some())
+    }
+
+    /// Linear progress of the sheet's rise animation (1.0 once settled).
+    pub fn sheet_progress(&self) -> f32 {
+        self.sheet_opened.map_or(1.0, |opened| {
+            (opened.elapsed().as_secs_f32() / SHEET_RISE.as_secs_f32()).min(1.0)
+        })
     }
 
     /// Show a confirmation toast (kept until dismissed or replaced),
@@ -665,6 +686,7 @@ impl cosmic::Application for App {
             to_mods: [false; 4],
             edit_rule: None,
             recording: None,
+            sheet_opened: None,
             devices: Vec::new(),
             monitor_started: false,
             pressed: HashSet::new(),
@@ -766,6 +788,10 @@ impl cosmic::Application for App {
                 } else {
                     if self.selected != Some(code) {
                         self.toast = None;
+                    }
+                    if self.selected.is_none() {
+                        // Opening (not switching keys) starts the rise.
+                        self.sheet_opened = Some(Instant::now());
                     }
                     self.selected = Some(code);
                     self.advanced = false;
@@ -883,6 +909,9 @@ impl cosmic::Application for App {
                 }
             }
             Message::EditRule { group, rule } => {
+                if self.edit_rule.is_none() {
+                    self.sheet_opened = Some(Instant::now());
+                }
                 self.edit_rule = Some(EditRule { group, rule });
                 self.selected = None;
                 self.recording = if rule.is_none() {
@@ -944,6 +973,8 @@ impl cosmic::Application for App {
                     self.toast = None;
                 }
             }
+            // The redraw itself re-reads the animation clock.
+            Message::SheetAnimate => {}
             Message::MenuShowSetup => {
                 self.popover = None;
                 self.onboarding = true;
@@ -1025,7 +1056,13 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(monitor_stream)
+        let mut subscriptions = vec![Subscription::run(monitor_stream)];
+        // Drive redraws only while the sheet is actively rising.
+        if self.sheet_open() && self.sheet_progress() < 1.0 {
+            subscriptions
+                .push(cosmic::iced::window::frames().map(|_| Message::SheetAnimate));
+        }
+        Subscription::batch(subscriptions)
     }
 
     /// Modal dialogs render natively above the window content.
@@ -1138,6 +1175,28 @@ mod tests {
             app.edit_rule.is_none(),
             "switching views closes the sheet"
         );
+    }
+
+    #[test]
+    fn opening_the_sheet_starts_the_rise_animation() {
+        let mut app = app();
+        assert!(
+            (app.sheet_progress() - 1.0).abs() < f32::EPSILON,
+            "closed sheet reports settled progress"
+        );
+
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let started = app.sheet_opened.expect("opening starts the rise");
+        assert!(app.sheet_progress() < 1.0);
+
+        // Switching keys while open must not replay the animation.
+        let _ = app.update(Message::SelectKey("KeyA"));
+        assert_eq!(app.sheet_opened, Some(started));
+
+        // Reopening after closing rises again.
+        let _ = app.update(Message::ClosePanel);
+        let _ = app.update(Message::SelectKey("KeyB"));
+        assert!(app.sheet_opened.expect("reopened") >= started);
     }
 
     #[test]
