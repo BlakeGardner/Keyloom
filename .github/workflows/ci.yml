@@ -56,10 +56,26 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      # The recorded xremap release that generated configs are
+      # validated against (see generated_documents_parse_with_real_xremap
+      # in src/xremap.rs). Bump deliberately when targeting a new xremap.
+      XREMAP_VERSION: 0.15.12
+      # Turn a missing binary into a test failure so the validation can
+      # never silently skip in CI.
+      KEYLOOM_REQUIRE_XREMAP: 1
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+      - name: Install pinned xremap for config validation
+        run: |
+          curl -sSL -o /tmp/xremap.zip "https://github.com/xremap/xremap/releases/download/v${XREMAP_VERSION}/xremap-linux-x86_64-cosmic.zip"
+          mkdir -p "$HOME/.local/bin"
+          unzip -o /tmp/xremap.zip -d "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/xremap"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/xremap" --version
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run tests

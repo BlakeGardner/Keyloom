@@ -34,8 +34,9 @@ pick up on its own.
   cosmic-config.
 - [x] **Validate against a recorded xremap version.** Check representative
   generated configs (simple remap, modifier remap, two-rule swap) against a
-  pinned xremap release during development. (Golden document in
-  `src/xremap.rs` validated against xremap 0.15.12.)
+  pinned xremap release during development. (Automated: the test suite
+  parses generated documents with a real xremap binary, and CI installs the
+  pinned release so it runs on every push.)
 
 ## 2. Mapping rule correctness (v0.1)
 

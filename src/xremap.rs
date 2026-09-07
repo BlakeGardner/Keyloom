@@ -329,6 +329,17 @@ mod tests {
         id.to_owned()
     }
 
+    /// Tap/hold, swap, disabled, and device-scoped mappings in one
+    /// document — every construct the generator can emit.
+    fn representative_maps() -> Maps {
+        vec![
+            map("CapsLock", Some("Escape"), Some("Control"), "all", false),
+            map("ControlLeft", Some("Left Alt"), None, "all", true),
+            map("MetaLeft", Some("Disabled"), None, "all", false),
+            map("F12", Some("Play/Pause"), None, "kb1", false),
+        ]
+    }
+
     #[test]
     fn key_symbols_derive_from_evdev() {
         assert_eq!(key_symbol("CapsLock").as_deref(), Some("KEY_CAPSLOCK"));
@@ -468,17 +479,11 @@ mod tests {
     }
 
     /// Golden document covering every generated construct at once; the
-    /// same content is validated against a real xremap release during
-    /// development.
+    /// same content is validated against a real xremap release by
+    /// `generated_documents_parse_with_real_xremap`.
     #[test]
     fn representative_document_matches_golden_output() {
-        let maps = vec![
-            map("CapsLock", Some("Escape"), Some("Control"), "all", false),
-            map("ControlLeft", Some("Left Alt"), None, "all", true),
-            map("MetaLeft", Some("Disabled"), None, "all", false),
-            map("F12", Some("Play/Pause"), None, "kb1", false),
-        ];
-        let yaml = generate(&maps, |id| {
+        let yaml = generate(&representative_maps(), |id| {
             if id == "kb1" {
                 "Keychron K2 Pro".to_owned()
             } else {
@@ -546,6 +551,86 @@ mod tests {
         );
         assert!(!dir.join("config.yml.bak.1").exists());
 
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// End-to-end oracle against a real xremap binary: the pinned CLI
+    /// loads its configuration *before* selecting devices, so pointing
+    /// it at a device name that cannot exist distinguishes "config
+    /// parsed" (fails preparing input devices) from "config rejected"
+    /// (fails loading the config).
+    ///
+    /// Runs whenever an `xremap` binary is on PATH and is otherwise
+    /// skipped; CI installs the pinned release and sets
+    /// `KEYLOOM_REQUIRE_XREMAP=1` so the check can never silently
+    /// disappear there.
+    #[test]
+    fn generated_documents_parse_with_real_xremap() {
+        use std::process::Command;
+
+        // Every deck key as a remap source.
+        let all_sources: Maps = model::ALL_KEYS
+            .iter()
+            .map(|cap| map(cap.code, Some("Escape"), None, "all", false))
+            .collect();
+        // Every translatable catalog action as an output (plus
+        // Disabled; Hyper has no key and is dropped by the generator).
+        let all_actions: Maps = model::ACTION_GROUPS
+            .iter()
+            .flat_map(|(_, actions)| actions.iter())
+            .enumerate()
+            .map(|(i, action)| map(model::ALL_KEYS[i].code, Some(action), None, "all", false))
+            .collect();
+
+        let documents = [
+            ("empty", generate(&Vec::new(), no_devices)),
+            (
+                "representative",
+                generate(&representative_maps(), |id| {
+                    if id == "kb1" {
+                        "Keychron K2 Pro".to_owned()
+                    } else {
+                        id.to_owned()
+                    }
+                }),
+            ),
+            ("all-sources", generate(&all_sources, no_devices)),
+            ("all-actions", generate(&all_actions, no_devices)),
+        ];
+
+        let dir = std::env::temp_dir().join(format!("keyloom-xremap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for (name, yaml) in &documents {
+            let path = dir.join(format!("{name}.yml"));
+            fs::write(&path, yaml).unwrap();
+            let output = match Command::new("xremap")
+                .arg("--device")
+                .arg("keyloom-validation-no-such-device")
+                .arg(&path)
+                .output()
+            {
+                Ok(output) => output,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    fs::remove_dir_all(&dir).unwrap();
+                    assert!(
+                        std::env::var_os("KEYLOOM_REQUIRE_XREMAP").is_none(),
+                        "KEYLOOM_REQUIRE_XREMAP is set but no xremap binary is on PATH"
+                    );
+                    eprintln!("skipping: no xremap binary on PATH");
+                    return;
+                }
+                Err(err) => panic!("failed to run xremap: {err}"),
+            };
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !stderr.contains("Failed to load config"),
+                "{name}: xremap rejected the generated config:\n{stderr}\n---\n{yaml}"
+            );
+            assert!(
+                stderr.contains("Failed to prepare input devices"),
+                "{name}: xremap did not reach device selection:\n{stderr}"
+            );
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 }

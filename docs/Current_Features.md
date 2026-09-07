@@ -135,7 +135,9 @@ it yet — reconnecting it is tracked in
   transitions, hold mappings, combo rules, and onboarding.
 - Generator tests in `src/xremap.rs`: key-name translation coverage,
   deterministic golden output, tap/hold, swaps, disabled keys, device
-  scoping, and foreign-file backup behavior — validated against xremap
-  0.15.12 during development.
+  scoping, and foreign-file backup behavior. Generated documents
+  (including every source key and every catalog action) are additionally
+  parsed by a real xremap binary when one is on PATH — CI installs the
+  pinned release (0.15.12) so this always runs there.
 - Store round-trip tests in `src/config.rs`.
 - Layout assembly tests in `src/keyboard.rs`.
