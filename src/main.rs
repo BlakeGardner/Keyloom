@@ -11,22 +11,9 @@ mod monitor;
 mod ui;
 
 fn main() -> cosmic::iced::Result {
-    // Derive the cosmic widget theme (header bar, inputs, scrollbars…)
-    // from the design's background and accent tokens so native chrome
-    // matches the design language.
-    let bg = ui::theme::bg();
-    let accent = ui::theme::accent();
-    let theme = cosmic::cosmic_theme::ThemeBuilder::dark()
-        .bg_color(cosmic::cosmic_theme::palette::Srgba::new(
-            bg.r, bg.g, bg.b, 1.0,
-        ))
-        .accent(cosmic::cosmic_theme::palette::Srgb::new(
-            accent.r, accent.g, accent.b,
-        ))
-        .build();
-
     let settings = cosmic::app::Settings::default()
-        .theme(cosmic::theme::Theme::custom(std::sync::Arc::new(theme)))
+        // Follow the system theme so COSMIC light/dark switching applies
+        // live; the design tokens in `ui::theme` adapt to the mode.
         // Fit the 100% keyboard deck like a purpose-built tool.
         .size(cosmic::iced::Size::new(1210.0, 620.0))
         .size_limits(

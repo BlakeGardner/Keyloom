@@ -7,7 +7,7 @@ use cosmic::{Element, theme as ctheme};
 use crate::app::{App, Message, Toast, View};
 use crate::ui::model::key_name;
 use crate::ui::theme::{
-    accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, oklcha, quiet,
+    accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, quiet, scrim,
     vgradient, white,
 };
 use crate::ui::{eyebrow, mono, popover_panel, txt, txt_semibold};
@@ -224,7 +224,7 @@ fn modal<'a>(
             .width(Length::Fill)
             .height(Length::Fill)
             .class(ctheme::Container::custom(|_| container::Style {
-                background: Some(oklcha(0.10, 0.006, 152.0, 0.8).into()),
+                background: Some(scrim().into()),
                 ..container::Style::default()
             })),
     )

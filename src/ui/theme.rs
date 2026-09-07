@@ -1,22 +1,44 @@
 //! Design tokens and shared styling ported from the design export
 //! (`design/Keyboard Customization-controls-v2.dc.html`).
 //!
-//! The export specifies every color in OKLCH; [`oklch`] converts those
-//! values to sRGB at runtime so the tokens below can mirror the design
-//! stylesheet verbatim.
+//! The export specifies every color in OKLCH for a dark interface;
+//! [`oklch`] converts those values to sRGB at runtime and, when the
+//! system is in light mode, mirrors the lightness axis so the whole
+//! token set adapts to COSMIC's appearance setting.
 
 use cosmic::iced::gradient::Linear;
 use cosmic::iced::{Background, Color, Gradient, Radians};
 use cosmic::theme;
 use cosmic::widget::button;
 
-/// Convert an OKLCH color (lightness, chroma, hue in degrees) to sRGB.
+/// Whether the active COSMIC theme is dark (updates live on switches).
+pub fn dark_mode() -> bool {
+    cosmic::theme::is_dark()
+}
+
+/// Mirror a dark-design lightness onto the light end of the scale.
+fn adapt(l: f32) -> f32 {
+    if dark_mode() {
+        l
+    } else {
+        (1.15 - l).clamp(0.03, 0.99)
+    }
+}
+
+/// Convert an OKLCH color (lightness, chroma, hue in degrees) to sRGB,
+/// adapting the dark-design lightness to the active theme mode.
 pub fn oklch(l: f32, c: f32, h: f32) -> Color {
     oklcha(l, c, h, 1.0)
 }
 
 /// [`oklch`] with an explicit alpha channel.
 pub fn oklcha(l: f32, c: f32, h: f32, alpha: f32) -> Color {
+    raw_oklcha(adapt(l), c, h, alpha)
+}
+
+/// [`oklcha`] without theme-mode adaptation, for colors that must not
+/// flip (shadows, scrims).
+fn raw_oklcha(l: f32, c: f32, h: f32, alpha: f32) -> Color {
     let h = h.to_radians();
     let (a, b) = (c * h.cos(), c * h.sin());
 
@@ -48,14 +70,30 @@ fn gamma(u: f32) -> f32 {
     }
 }
 
-/// White with the given alpha, as used by the export's rgba() overlays.
+/// Contrast overlay against the surface (the export's white rgba()
+/// borders and hover washes): white on dark, black on light.
 pub fn white(alpha: f32) -> Color {
-    Color::from_rgba(1.0, 1.0, 1.0, alpha)
+    if dark_mode() {
+        Color::from_rgba(1.0, 1.0, 1.0, alpha)
+    } else {
+        Color::from_rgba(0.0, 0.0, 0.0, alpha)
+    }
 }
 
-/// Black with the given alpha, as used by the export's rgba() overlays.
+/// Recessed-area wash (the export's black rgba() insets). Stays dark in
+/// both modes, softened on light so insets read as gentle gray.
 pub fn black(alpha: f32) -> Color {
+    Color::from_rgba(0.0, 0.0, 0.0, if dark_mode() { alpha } else { alpha * 0.35 })
+}
+
+/// Drop-shadow color: always dark, regardless of theme mode.
+pub fn shadow(alpha: f32) -> Color {
     Color::from_rgba(0.0, 0.0, 0.0, alpha)
+}
+
+/// Dimming scrim behind modal dialogs.
+pub fn scrim() -> Color {
+    raw_oklcha(0.10, 0.006, 152.0, if dark_mode() { 0.8 } else { 0.45 })
 }
 
 // Core tokens (`:root` in the export).
@@ -75,7 +113,13 @@ pub fn border() -> Color {
     oklch(0.39, 0.008, 152.0)
 }
 pub fn accent() -> Color {
-    oklch(0.78, 0.14, 152.0)
+    // The mirrored accent would be too dark to read as a brand color;
+    // use a hand-tuned light-mode green instead.
+    if dark_mode() {
+        raw_oklcha(0.78, 0.14, 152.0, 1.0)
+    } else {
+        raw_oklcha(0.50, 0.135, 152.0, 1.0)
+    }
 }
 
 /// A top-to-bottom linear gradient, like `linear-gradient(top, bottom)`.
@@ -122,7 +166,9 @@ impl ButtonStyle {
     fn appearance(&self, hovered: bool) -> button::Style {
         let mut style = button::Style::new();
         style.background = if hovered {
-            self.hover_bg.or(self.bg).map(|bg| brighten(bg, 1.08))
+            // The export brightens on hover; light mode darkens instead.
+            let factor = if dark_mode() { 1.08 } else { 0.94 };
+            self.hover_bg.or(self.bg).map(|bg| brighten(bg, factor))
         } else {
             self.bg
         };

@@ -17,7 +17,7 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message, View};
-use theme::{black, oklch, surface, white};
+use theme::{oklch, shadow, surface, white};
 
 /// Text widget carrying cosmic's theme and renderer generics.
 pub type Txt<'a> = widget::Text<'a, cosmic::Theme, cosmic::Renderer>;
@@ -84,7 +84,7 @@ pub fn popover_panel<'a>(content: impl Into<Element<'a, Message>>) -> Panel<'a> 
                 radius: 12.0.into(),
             },
             shadow: Shadow {
-                color: black(0.7),
+                color: shadow(0.7),
                 offset: Vector::new(0.0, 24.0),
                 blur_radius: 50.0,
             },
@@ -271,7 +271,7 @@ fn bottom_sheet(app: &App) -> Option<Element<'_, Message>> {
                         radius: [14.0, 14.0, 0.0, 0.0].into(),
                     },
                     shadow: Shadow {
-                        color: black(0.6),
+                        color: shadow(0.6),
                         offset: Vector::new(0.0, -18.0),
                         blur_radius: 48.0,
                     },
