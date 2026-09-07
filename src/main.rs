@@ -1,4 +1,4 @@
-//! An on-screen keyboard for the COSMIC desktop.
+//! Keyloom: an on-screen keyboard for the COSMIC desktop.
 
 mod app;
 mod keyboard;

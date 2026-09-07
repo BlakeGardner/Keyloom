@@ -301,7 +301,7 @@ impl cosmic::Application for App {
     type Flags = ();
     type Message = Message;
 
-    const APP_ID: &'static str = "com.example.CosmicKeyboard";
+    const APP_ID: &'static str = "io.github.blakegardner.Keyloom";
 
     fn core(&self) -> &Core {
         &self.core
@@ -349,7 +349,7 @@ impl cosmic::Application for App {
             monitor_started: false,
         };
 
-        app.set_header_title("Virtual Keyboard".to_owned());
+        app.set_header_title("Keyloom".to_owned());
 
         (app, Task::none())
     }
