@@ -1,6 +1,7 @@
 //! The COSMIC application: state, update logic, and the keyboard view.
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use cosmic::app::{Core, Task};
 use cosmic::iced::futures::{Stream, StreamExt};
@@ -20,6 +21,7 @@ pub enum Message {
     KeyPressed(Key),
     LayoutSelected(usize),
     FormSelected(usize),
+    DeviceSelected(usize),
     Clear,
     Monitor(monitor::Event),
 }
@@ -58,13 +60,73 @@ pub struct App {
     ctrl: bool,
     alt: bool,
     super_key: bool,
-    /// Scancodes of physical keys currently held down.
-    held: HashSet<u16>,
-    /// Number of keyboards being monitored, once the watcher reports in.
-    monitored: Option<usize>,
+    /// Physical keys held down, including their source to distinguish overlaps.
+    held: HashSet<(PathBuf, u16)>,
+    /// Readable keyboards discovered by the monitor at startup.
+    devices: Vec<monitor::KeyboardDevice>,
+    device_names: Vec<String>,
+    /// Dropdown index: zero mirrors all keyboards, subsequent entries one device.
+    selected_device: usize,
+    monitor_started: bool,
 }
 
 impl App {
+    fn selected_keyboard(&self) -> Option<&monitor::KeyboardDevice> {
+        self.selected_device
+            .checked_sub(1)
+            .and_then(|index| self.devices.get(index))
+    }
+
+    fn accepts_device(&self, path: &Path) -> bool {
+        self.devices
+            .iter()
+            .any(|device| device.connected && device.path == path)
+            && self
+                .selected_keyboard()
+                .is_none_or(|device| device.path == path)
+    }
+
+    fn refresh_device_names(&mut self) {
+        self.device_names = std::iter::once("All keyboards".to_owned())
+            .chain(self.devices.iter().map(|device| {
+                let mut name = device.name.clone();
+                if self
+                    .devices
+                    .iter()
+                    .filter(|other| other.name == device.name)
+                    .count()
+                    > 1
+                {
+                    // Identical hardware names still need distinct list entries.
+                    name.push_str(&format!(" ({})", device.path.display()));
+                }
+                if !device.connected {
+                    name.push_str(" (disconnected)");
+                }
+                name
+            }))
+            .collect();
+    }
+
+    fn detect_form(&mut self) {
+        if self.form_chosen {
+            return;
+        }
+
+        let form = monitor::detected_form(self.devices.iter().enumerate().filter_map(
+            |(index, device)| {
+                (self.selected_device == 0 || self.selected_device == index + 1).then_some(device)
+            },
+        ));
+        self.form_detected = form.is_some();
+        if let Some(index) = form
+            && index != self.form
+        {
+            self.form = index;
+            self.rebuild_rows();
+        }
+    }
+
     /// Effective shift state: one-shot click shift or a physically held Shift.
     fn shift_active(&self) -> bool {
         self.shift || self.key_held(Key::Shift)
@@ -95,7 +157,7 @@ impl App {
     fn key_held(&self, key: Key) -> bool {
         self.held
             .iter()
-            .any(|code| self.key_for_code(*code) == Some(key))
+            .any(|(_, code)| self.key_for_code(*code) == Some(key))
     }
 
     /// Append a character, honoring AltGr, shift, and caps lock.
@@ -187,7 +249,9 @@ impl App {
             } => {
                 let shifted = self.shift_active() != (self.caps && lower.is_alphabetic());
                 let altgr = altgr.filter(|_| self.altgr_active());
-                altgr.unwrap_or(if shifted { upper } else { lower }).to_string()
+                altgr
+                    .unwrap_or(if shifted { upper } else { lower })
+                    .to_string()
             }
             Key::Backspace => "⌫".into(),
             Key::Tab => "Tab ⇥".into(),
@@ -207,15 +271,14 @@ impl App {
     fn key_button(&self, def: &KeyDef) -> Element<'_, Message> {
         // Highlight when logically active (modifiers) or physically held
         // (this exact key, so left/right modifiers depress separately).
-        let class = if self.is_active(def.key) || self.held.contains(&def.code) {
-            theme::Button::Suggested
-        } else {
-            theme::Button::Standard
-        };
+        let class =
+            if self.is_active(def.key) || self.held.iter().any(|(_, code)| *code == def.code) {
+                theme::Button::Suggested
+            } else {
+                theme::Button::Standard
+            };
 
-        let label = def
-            .label
-            .map_or_else(|| self.label(def.key), str::to_owned);
+        let label = def.label.map_or_else(|| self.label(def.key), str::to_owned);
 
         widget::button::custom(
             widget::text(label)
@@ -280,7 +343,10 @@ impl cosmic::Application for App {
             alt: false,
             super_key: false,
             held: HashSet::new(),
-            monitored: None,
+            devices: Vec::new(),
+            device_names: vec!["All keyboards".to_owned()],
+            selected_device: 0,
+            monitor_started: false,
         };
 
         app.set_header_title("Virtual Keyboard".to_owned());
@@ -321,40 +387,56 @@ impl cosmic::Application for App {
             Message::FormSelected(index) => {
                 if index < FORM_FACTORS.len() {
                     self.form_chosen = true;
+                    self.form_detected = false;
 
                     if index != self.form {
                         self.form = index;
-                        self.form_detected = false;
                         self.rebuild_rows();
                     }
                 }
             }
+            Message::DeviceSelected(index) => {
+                if index <= self.devices.len() && index != self.selected_device {
+                    self.selected_device = index;
+                    // Releases from the previous source will now be filtered out.
+                    self.held.clear();
+                    self.detect_form();
+                }
+            }
             Message::Clear => self.typed.clear(),
             Message::Monitor(event) => match event {
-                monitor::Event::Started { devices, form } => {
-                    self.monitored = Some(devices);
-
-                    // Adopt the detected size unless the user already chose.
-                    if let Some(index) = form
-                        && !self.form_chosen
-                    {
-                        self.form_detected = true;
-
-                        if index != self.form {
-                            self.form = index;
-                            self.rebuild_rows();
+                monitor::Event::Started(devices) => {
+                    self.devices = devices;
+                    self.selected_device = 0;
+                    self.held.clear();
+                    self.monitor_started = true;
+                    self.refresh_device_names();
+                    self.detect_form();
+                }
+                monitor::Event::Key { device, event } => {
+                    if self.accepts_device(&device) {
+                        match event {
+                            monitor::KeyEvent::Pressed(code) => {
+                                self.held.insert((device, code));
+                                self.phys_press(code, false);
+                            }
+                            monitor::KeyEvent::Repeated(code) => {
+                                self.phys_press(code, true);
+                            }
+                            monitor::KeyEvent::Released(code) => {
+                                self.held.remove(&(device, code));
+                            }
                         }
                     }
                 }
-                monitor::Event::Key(monitor::KeyEvent::Pressed(code)) => {
-                    self.held.insert(code);
-                    self.phys_press(code, false);
-                }
-                monitor::Event::Key(monitor::KeyEvent::Repeated(code)) => {
-                    self.phys_press(code, true);
-                }
-                monitor::Event::Key(monitor::KeyEvent::Released(code)) => {
-                    self.held.remove(&code);
+                monitor::Event::Disconnected(path) => {
+                    if let Some(device) = self.devices.iter_mut().find(|device| device.path == path)
+                    {
+                        device.connected = false;
+                    }
+                    self.held.retain(|(device, _)| *device != path);
+                    self.refresh_device_names();
+                    self.detect_form();
                 }
             },
         }
@@ -369,6 +451,19 @@ impl cosmic::Application for App {
     fn view(&self) -> Element<'_, Message> {
         let spacing = theme::spacing();
 
+        let input_row = widget::row::with_capacity(2)
+            .spacing(spacing.space_s)
+            .align_y(Alignment::Center)
+            .push(widget::text("Input device"))
+            .push(
+                widget::dropdown(
+                    self.device_names.as_slice(),
+                    Some(self.selected_device),
+                    Message::DeviceSelected,
+                )
+                .width(Length::Fill),
+            );
+
         // Preview area showing what has been "typed" so far.
         let preview = widget::container(
             widget::text(format!("{}▏", self.typed))
@@ -380,17 +475,32 @@ impl cosmic::Application for App {
         .width(Length::Fill)
         .height(Length::Fixed(PREVIEW_HEIGHT));
 
-        let status = match self.monitored {
-            None => widget::text::caption("Starting keyboard monitor…".to_owned()),
-            Some(0) => widget::text::caption(
-                "No readable keyboards in /dev/input — add your user to the “input” group \
+        let status = widget::text::caption(if !self.monitor_started {
+            "Starting keyboard monitor…".to_owned()
+        } else if let Some(device) = self.selected_keyboard() {
+            if device.connected {
+                format!("Mirroring {}", device.name)
+            } else {
+                "Selected keyboard disconnected — choose another input device or restart to rescan."
+                    .to_owned()
+            }
+        } else {
+            match self
+                .devices
+                .iter()
+                .filter(|device| device.connected)
+                .count()
+            {
+                0 if !self.devices.is_empty() => {
+                    "No connected keyboards — restart to rescan input devices.".to_owned()
+                }
+                0 => "No readable keyboards in /dev/input — add your user to the “input” group \
                  to mirror physical typing."
                     .to_owned(),
-            ),
-            Some(n) => {
-                widget::text::caption(format!("Mirroring {n} physical keyboards via evdev"))
+                1 => "Mirroring 1 keyboard".to_owned(),
+                n => format!("Mirroring all {n} keyboards"),
             }
-        };
+        });
 
         let auto = |detected: bool| if detected { " (auto)" } else { "" };
 
@@ -406,10 +516,11 @@ impl cosmic::Application for App {
             .push(status.width(Length::Fill))
             .push(layout_note);
 
-        let mut content = widget::column::with_capacity(self.rows.len() + 2)
+        let mut content = widget::column::with_capacity(self.rows.len() + 3)
             .spacing(spacing.space_xxs)
             .padding(spacing.space_xs);
 
+        content = content.push(input_row);
         content = content.push(preview);
         content = content.push(status_row);
 
@@ -436,4 +547,164 @@ impl cosmic::Application for App {
 /// Adapts the evdev watcher into this app's message stream.
 fn monitor_stream() -> impl Stream<Item = Message> + Send {
     monitor::watch().map(Message::Monitor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmic::Application;
+    use evdev::KeyCode;
+    use monitor::{Event, KeyEvent, KeyboardDevice};
+
+    fn device(path: &str, form: usize, form_hinted: bool) -> KeyboardDevice {
+        KeyboardDevice {
+            path: path.into(),
+            name: "Test keyboard".to_owned(),
+            connected: true,
+            form,
+            form_hinted,
+        }
+    }
+
+    fn app_with_devices(devices: Vec<KeyboardDevice>) -> App {
+        let (mut app, _) = App::init(Core::default(), ());
+        app.layout = 0; // Use US labels regardless of the machine's configuration.
+        app.rebuild_rows();
+        let _ = app.update(Message::Monitor(Event::Started(devices)));
+        app
+    }
+
+    fn two_keyboards() -> App {
+        app_with_devices(vec![
+            device("/dev/input/event1", keyboard::FORM_FULL, false),
+            device("/dev/input/event2", keyboard::FORM_SIXTY, true),
+        ])
+    }
+
+    fn key(app: &mut App, path: &str, event: KeyEvent) {
+        let _ = app.update(Message::Monitor(Event::Key {
+            device: path.into(),
+            event,
+        }));
+    }
+
+    #[test]
+    fn selected_device_filters_presses_repeats_and_releases() {
+        let mut app = two_keyboards();
+        let _ = app.update(Message::DeviceSelected(1));
+        let a = KeyCode::KEY_A.0;
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+
+        key(&mut app, "/dev/input/event2", KeyEvent::Pressed(shift));
+        key(&mut app, "/dev/input/event2", KeyEvent::Pressed(a));
+        key(&mut app, "/dev/input/event2", KeyEvent::Repeated(a));
+        assert!(app.typed.is_empty());
+        assert!(app.held.is_empty());
+
+        key(&mut app, "/dev/input/event1", KeyEvent::Pressed(a));
+        key(&mut app, "/dev/input/event1", KeyEvent::Repeated(a));
+        key(&mut app, "/dev/input/event2", KeyEvent::Released(a));
+        assert_eq!(app.typed, "aa");
+        assert_eq!(app.held.len(), 1);
+        key(&mut app, "/dev/input/event1", KeyEvent::Released(a));
+        assert!(app.held.is_empty());
+    }
+
+    #[test]
+    fn switching_sources_clears_held_modifiers_and_preserves_preview() {
+        let mut app = two_keyboards();
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+        let a = KeyCode::KEY_A.0;
+        key(&mut app, "/dev/input/event1", KeyEvent::Pressed(shift));
+        key(&mut app, "/dev/input/event1", KeyEvent::Pressed(a));
+        assert_eq!(app.typed, "A");
+
+        let _ = app.update(Message::DeviceSelected(2));
+        assert!(!app.shift_active());
+        assert!(app.held.is_empty());
+        key(&mut app, "/dev/input/event2", KeyEvent::Pressed(a));
+        key(&mut app, "/dev/input/event1", KeyEvent::Pressed(a));
+        assert_eq!(app.typed, "Aa");
+
+        let _ = app.update(Message::DeviceSelected(0));
+        key(&mut app, "/dev/input/event1", KeyEvent::Pressed(a));
+        key(&mut app, "/dev/input/event2", KeyEvent::Pressed(a));
+        assert_eq!(app.typed, "Aaaa");
+    }
+
+    #[test]
+    fn all_keyboards_keep_overlapping_keys_held_until_each_releases() {
+        let mut app = two_keyboards();
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+        key(&mut app, "/dev/input/event1", KeyEvent::Pressed(shift));
+        key(&mut app, "/dev/input/event2", KeyEvent::Pressed(shift));
+        key(&mut app, "/dev/input/event1", KeyEvent::Released(shift));
+        assert!(app.shift_active());
+        key(&mut app, "/dev/input/event2", KeyEvent::Released(shift));
+        assert!(!app.shift_active());
+    }
+
+    #[test]
+    fn form_follows_selected_keyboard_until_manually_chosen() {
+        let mut app = two_keyboards();
+        // In aggregate mode, the named size hint wins over generic capabilities.
+        assert_eq!(app.form, keyboard::FORM_SIXTY);
+        assert!(app.form_detected);
+        let _ = app.update(Message::DeviceSelected(1));
+        assert_eq!(app.form, keyboard::FORM_FULL);
+        let _ = app.update(Message::DeviceSelected(2));
+        assert_eq!(app.form, keyboard::FORM_SIXTY);
+
+        // Explicitly choosing even the current size disables later detection.
+        let _ = app.update(Message::FormSelected(keyboard::FORM_SIXTY));
+        let _ = app.update(Message::DeviceSelected(1));
+        assert_eq!(app.form, keyboard::FORM_SIXTY);
+        assert!(!app.form_detected);
+    }
+
+    #[test]
+    fn duplicate_names_remain_distinct_and_disconnection_keeps_selection() {
+        let mut app = two_keyboards();
+        assert_ne!(app.device_names[1], app.device_names[2]);
+        assert!(app.device_names[1].contains("/dev/input/event1"));
+        let _ = app.update(Message::DeviceSelected(1));
+        key(
+            &mut app,
+            "/dev/input/event1",
+            KeyEvent::Pressed(KeyCode::KEY_LEFTSHIFT.0),
+        );
+        let _ = app.update(Message::Monitor(Event::Disconnected(
+            "/dev/input/event1".into(),
+        )));
+        assert_eq!(app.selected_device, 1);
+        assert!(app.device_names[1].contains("disconnected"));
+        assert!(!app.shift_active());
+        assert!(!app.form_detected);
+        key(
+            &mut app,
+            "/dev/input/event2",
+            KeyEvent::Pressed(KeyCode::KEY_A.0),
+        );
+        assert!(app.typed.is_empty());
+
+        let _ = app.update(Message::DeviceSelected(0));
+        assert_eq!(app.form, keyboard::FORM_SIXTY);
+        key(
+            &mut app,
+            "/dev/input/event2",
+            KeyEvent::Pressed(KeyCode::KEY_A.0),
+        );
+        assert_eq!(app.typed, "a");
+    }
+
+    #[test]
+    fn no_readable_devices_still_allows_virtual_typing() {
+        let mut app = app_with_devices(Vec::new());
+        assert_eq!(app.device_names, ["All keyboards"]);
+        let _ = app.update(Message::DeviceSelected(1));
+        assert_eq!(app.selected_device, 0);
+        let key = app.key_for_code(KeyCode::KEY_A.0).unwrap();
+        let _ = app.update(Message::KeyPressed(key));
+        assert_eq!(app.typed, "a");
+    }
 }

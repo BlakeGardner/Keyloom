@@ -8,6 +8,7 @@
 use cosmic::iced::futures::channel::mpsc;
 use cosmic::iced::futures::{Stream, StreamExt, stream};
 use evdev::{Device, EventSummary, KeyCode};
+use std::path::PathBuf;
 
 use crate::keyboard;
 
@@ -19,32 +20,57 @@ pub enum KeyEvent {
     Released(u16),
 }
 
+/// A readable keyboard, identified by its evdev path rather than its name.
+#[derive(Clone, Debug)]
+pub struct KeyboardDevice {
+    pub path: PathBuf,
+    pub name: String,
+    pub connected: bool,
+    /// Best-effort form factor index and whether the name contributed.
+    pub form: usize,
+    pub form_hinted: bool,
+}
+
+/// Prefer size hints in device names over potentially inflated capabilities.
+pub fn detected_form<'a>(devices: impl Iterator<Item = &'a KeyboardDevice>) -> Option<usize> {
+    let mut hinted = None;
+    let mut fallback = None;
+    for device in devices.filter(|device| device.connected) {
+        fallback = Some(fallback.map_or(device.form, |form: usize| form.min(device.form)));
+        if device.form_hinted {
+            hinted = Some(hinted.map_or(device.form, |form: usize| form.min(device.form)));
+        }
+    }
+    hinted.or(fallback)
+}
+
 /// What the monitor reports to the application.
 #[derive(Clone, Debug)]
 pub enum Event {
-    /// Monitoring started on this many keyboard devices.
-    Started {
-        devices: usize,
-        /// Best-effort form factor guess (an index into
-        /// [`keyboard::FORM_FACTORS`]) from the keys the devices report.
-        form: Option<usize>,
-    },
-    /// A key event was observed on some keyboard.
-    Key(KeyEvent),
+    /// Readable keyboards discovered at startup, in display order.
+    Started(Vec<KeyboardDevice>),
+    /// A key event and the keyboard that produced it.
+    Key { device: PathBuf, event: KeyEvent },
+    /// A keyboard could no longer be read.
+    Disconnected(PathBuf),
 }
 
 /// Whether a device looks like a real keyboard (reports letter keys).
 fn is_keyboard(device: &Device) -> bool {
-    device.supported_keys().is_some_and(|keys| {
-        keys.contains(KeyCode::KEY_A) && keys.contains(KeyCode::KEY_SPACE)
-    })
+    device
+        .supported_keys()
+        .is_some_and(|keys| keys.contains(KeyCode::KEY_A) && keys.contains(KeyCode::KEY_SPACE))
 }
 
 /// Guess a device's form factor from its name and reported keys (see
 /// [`keyboard::form_for_keys`] and [`keyboard::form_for_name`] for the
 /// caveats). Returns whether the name contributed, and the guess.
 fn form_guess(device: &Device) -> (bool, usize) {
-    let has = |key: KeyCode| device.supported_keys().is_some_and(|keys| keys.contains(key));
+    let has = |key: KeyCode| {
+        device
+            .supported_keys()
+            .is_some_and(|keys| keys.contains(key))
+    };
 
     let caps = keyboard::form_for_keys(
         has(KeyCode::KEY_KP0),
@@ -69,36 +95,31 @@ fn form_guess(device: &Device) -> (bool, usize) {
 pub fn watch() -> impl Stream<Item = Event> + Send {
     let (tx, rx) = mpsc::unbounded::<Event>();
 
-    let keyboards: Vec<(std::path::PathBuf, Device)> = evdev::enumerate()
+    let mut keyboards: Vec<(PathBuf, Device)> = evdev::enumerate()
         .filter(|(_, device)| is_keyboard(device))
         .collect();
+    keyboards.sort_by(|(path_a, a), (path_b, b)| {
+        a.name().cmp(&b.name()).then_with(|| path_a.cmp(path_b))
+    });
 
-    // Devices whose names reveal their size are the most trustworthy
-    // (KVMs and remappers emulate full-size boards); within the preferred
-    // group, the largest (lowest-index) guess wins so every physical key
-    // is still represented.
-    let guesses: Vec<(bool, usize)> = keyboards
+    let devices = keyboards
         .iter()
-        .map(|(_, device)| form_guess(device))
+        .map(|(path, device)| {
+            let (form_hinted, form) = form_guess(device);
+            KeyboardDevice {
+                path: path.clone(),
+                name: device
+                    .name()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("Unnamed keyboard")
+                    .to_owned(),
+                connected: true,
+                form,
+                form_hinted,
+            }
+        })
         .collect();
-
-    let form = guesses
-        .iter()
-        .filter_map(|&(hinted, guess)| hinted.then_some(guess))
-        .min()
-        .or_else(|| guesses.iter().map(|&(_, guess)| guess).min());
-
-    if let Some(index) = form {
-        eprintln!(
-            "physical keyboards suggest a {} board",
-            keyboard::FORM_FACTORS[index].name
-        );
-    }
-
-    let started = Event::Started {
-        devices: keyboards.len(),
-        form,
-    };
+    let started = Event::Started(devices);
 
     for (path, mut device) in keyboards {
         let tx = tx.clone();
@@ -115,6 +136,7 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
                     Ok(events) => events,
                     Err(err) => {
                         eprintln!("stopped monitoring {}: {err}", path.display());
+                        let _ = tx.unbounded_send(Event::Disconnected(path.clone()));
                         return;
                     }
                 };
@@ -132,7 +154,13 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
                     };
 
                     // Receiver dropped: subscription ended, stop the thread.
-                    if tx.unbounded_send(Event::Key(key_event)).is_err() {
+                    if tx
+                        .unbounded_send(Event::Key {
+                            device: path.clone(),
+                            event: key_event,
+                        })
+                        .is_err()
+                    {
                         return;
                     }
                 }
