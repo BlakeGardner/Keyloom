@@ -1,4 +1,4 @@
-//! Keyloom: an on-screen keyboard for the COSMIC desktop.
+//! Keyloom: an on-screen keyboard for Linux, built with libcosmic.
 
 mod app;
 mod keyboard;

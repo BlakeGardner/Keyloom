@@ -199,7 +199,7 @@ This gives the project control over:
 
 - xremap version
 - enabled features
-- COSMIC compatibility
+- desktop-environment compatibility
 - configuration syntax
 - regressions
 - testing
@@ -215,7 +215,7 @@ application/
     └── xremap-MIT.txt
 ```
 
-The bundled build can initially target COSMIC support.
+The bundled build should work across common Linux desktop environments, not just one.
 
 Later, advanced users and distribution maintainers could optionally select:
 

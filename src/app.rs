@@ -1,4 +1,4 @@
-//! The COSMIC application: state, update logic, and the keyboard view.
+//! The application: state, update logic, and the keyboard view.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
