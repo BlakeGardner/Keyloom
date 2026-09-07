@@ -16,7 +16,7 @@ use crate::keyboard;
 #[derive(Clone, Copy, Debug)]
 pub enum KeyEvent {
     Pressed(u16),
-    Repeated(u16),
+    Repeated(#[allow(dead_code)] u16),
     Released(u16),
 }
 
@@ -27,11 +27,15 @@ pub struct KeyboardDevice {
     pub name: String,
     pub connected: bool,
     /// Best-effort form factor index and whether the name contributed.
+    /// Currently unused by the UI; kept for the remapping engine work.
+    #[allow(dead_code)]
     pub form: usize,
+    #[allow(dead_code)]
     pub form_hinted: bool,
 }
 
 /// Prefer size hints in device names over potentially inflated capabilities.
+#[allow(dead_code)]
 pub fn detected_form<'a>(devices: impl Iterator<Item = &'a KeyboardDevice>) -> Option<usize> {
     let mut hinted = None;
     let mut fallback = None;
