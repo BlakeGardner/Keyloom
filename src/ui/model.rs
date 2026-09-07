@@ -248,6 +248,14 @@ pub fn short(action: &str) -> &str {
         ("Super", "Super"),
         ("Alt", "Alt"),
         ("Shift", "Shift"),
+        ("Left Control", "LCtrl"),
+        ("Left Alt", "LAlt"),
+        ("Left Super", "LSuper"),
+        ("Left Shift", "LShift"),
+        ("Right Control", "RCtrl"),
+        ("Right Alt", "RAlt"),
+        ("Right Super", "RSuper"),
+        ("Right Shift", "RShift"),
         ("Caps Lock", "Caps"),
         ("Hyper", "Hyper"),
         ("Home", "Home"),
@@ -258,6 +266,10 @@ pub fn short(action: &str) -> &str {
         ("Right", "→"),
         ("Up", "↑"),
         ("Down", "↓"),
+        ("Arrow Left", "←"),
+        ("Arrow Right", "→"),
+        ("Arrow Up", "↑"),
+        ("Arrow Down", "↓"),
         ("Backspace", "⌫"),
         ("Delete", "Del"),
         ("Tab", "Tab"),
@@ -272,12 +284,15 @@ pub fn short(action: &str) -> &str {
         ("Brightness Down", "Bri −"),
         ("Disabled", "Off"),
         ("Print Screen", "PrtSc"),
+        ("Scroll Lock", "ScrLk"),
         ("Menu", "Menu"),
         ("Insert", "Ins"),
         ("Minus", "-"),
         ("Equal", "="),
         ("Bracket Left", "["),
         ("Bracket Right", "]"),
+        ("Left Bracket", "["),
+        ("Right Bracket", "]"),
         ("Backslash", "\\"),
         ("Semicolon", ";"),
         ("Quote", "'"),
@@ -286,29 +301,49 @@ pub fn short(action: &str) -> &str {
         ("Slash", "/"),
         ("Backtick", "`"),
         ("Space", "Space"),
-        ("Right Control", "RCtrl"),
-        ("Right Alt", "RAlt"),
-        ("Right Super", "RSuper"),
+        ("Num Lock", "NumLk"),
+        ("Numpad Add", "Num +"),
+        ("Numpad Subtract", "Num −"),
+        ("Numpad Multiply", "Num *"),
+        ("Numpad Divide", "Num /"),
+        ("Numpad Enter", "Num ⏎"),
+        ("Numpad Decimal", "Num ."),
     ];
-    SHORT
-        .iter()
-        .find(|(name, _)| *name == action)
-        .map_or(action, |(_, s)| s)
+    if let Some((_, s)) = SHORT.iter().find(|(name, _)| *name == action) {
+        return s;
+    }
+    if let Some(rest) = action.strip_prefix("Numpad ") {
+        // "Numpad 7" → "Num 7"; symbolic numpad keys are listed above.
+        if rest.chars().all(|c| c.is_ascii_digit()) {
+            const NUM: [&str; 10] = [
+                "Num 0", "Num 1", "Num 2", "Num 3", "Num 4", "Num 5", "Num 6", "Num 7", "Num 8",
+                "Num 9",
+            ];
+            if let Some(digit) = rest.parse::<usize>().ok().filter(|d| *d < 10) {
+                return NUM[digit];
+            }
+        }
+    }
+    action
 }
 
-/// The searchable action catalog offered by the key editor.
+/// The searchable action catalog offered by the key editor. Names for
+/// physical keys match [`key_name`] so the generator and the
+/// self-mapping check treat them identically; older generic names
+/// ("Control", "Left", …) remain accepted from stored mappings.
 pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
     (
         "Modifiers",
         &[
             "Escape",
-            "Control",
+            "Left Control",
             "Right Control",
-            "Super",
+            "Left Super",
             "Right Super",
-            "Alt",
+            "Left Alt",
             "Right Alt",
-            "Shift",
+            "Left Shift",
+            "Right Shift",
             "Caps Lock",
             "Hyper",
         ],
@@ -320,10 +355,10 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
             "End",
             "Page Up",
             "Page Down",
-            "Left",
-            "Down",
-            "Up",
-            "Right",
+            "Arrow Left",
+            "Arrow Down",
+            "Arrow Up",
+            "Arrow Right",
             "Tab",
             "Enter",
             "Backspace",
@@ -355,6 +390,28 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
         &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
     ),
     (
+        "Numpad",
+        &[
+            "Num Lock",
+            "Numpad 0",
+            "Numpad 1",
+            "Numpad 2",
+            "Numpad 3",
+            "Numpad 4",
+            "Numpad 5",
+            "Numpad 6",
+            "Numpad 7",
+            "Numpad 8",
+            "Numpad 9",
+            "Numpad Add",
+            "Numpad Subtract",
+            "Numpad Multiply",
+            "Numpad Divide",
+            "Numpad Enter",
+            "Numpad Decimal",
+        ],
+    ),
+    (
         "Function keys",
         &[
             "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
@@ -365,8 +422,8 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
         &[
             "Minus",
             "Equal",
-            "Bracket Left",
-            "Bracket Right",
+            "Left Bracket",
+            "Right Bracket",
             "Backslash",
             "Semicolon",
             "Quote",
@@ -378,7 +435,15 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Other",
-        &["Space", "Print Screen", "Menu", "Insert", "Disabled"],
+        &[
+            "Space",
+            "Print Screen",
+            "Scroll Lock",
+            "Pause",
+            "Menu",
+            "Insert",
+            "Disabled",
+        ],
     ),
 ];
 
@@ -386,7 +451,9 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
 pub fn auto_group(code: &str) -> &'static str {
     if code.starts_with("Key") {
         "Letters"
-    } else if code.starts_with("Digit") || code.starts_with("Numpad") {
+    } else if code.starts_with("Numpad") || code == "NumLock" {
+        "Numpad"
+    } else if code.starts_with("Digit") {
         "Numbers"
     } else if code.len() >= 2
         && code.starts_with('F')
@@ -523,18 +590,18 @@ pub fn demo_profiles() -> Vec<(Profile, Maps)> {
             vec![
                 entry(
                     "CapsLock",
-                    mapping("Escape", Some("Control"), "builtin", false),
+                    mapping("Escape", Some("Left Control"), "builtin", false),
                 ),
-                entry("ContextMenu", mapping("Super", None, "all", false)),
+                entry("ContextMenu", mapping("Left Super", None, "all", false)),
                 entry("F12", mapping("Play/Pause", None, "all", false)),
             ],
         ),
         (
             profile("mac", "Mac-style"),
             vec![
-                entry("MetaLeft", mapping("Alt", None, "apple", false)),
-                entry("AltLeft", mapping("Super", None, "apple", false)),
-                entry("CapsLock", mapping("Control", None, "apple", false)),
+                entry("MetaLeft", mapping("Left Alt", None, "apple", false)),
+                entry("AltLeft", mapping("Left Super", None, "apple", false)),
+                entry("CapsLock", mapping("Left Control", None, "apple", false)),
             ],
         ),
         (
@@ -547,14 +614,14 @@ pub fn demo_profiles() -> Vec<(Profile, Maps)> {
         (
             profile("cosmic", "Mac + Cosmic"),
             vec![
-                entry("MetaLeft", mapping("Alt", None, "keychron", false)),
+                entry("MetaLeft", mapping("Left Alt", None, "keychron", false)),
                 entry("AltLeft", mapping("Right Control", None, "keychron", false)),
                 entry(
                     "AltRight",
                     mapping("Right Control", None, "keychron", false),
                 ),
                 entry("MetaRight", mapping("Right Alt", None, "keychron", false)),
-                entry("CapsLock", mapping("Super", None, "keychron", false)),
+                entry("CapsLock", mapping("Left Super", None, "keychron", false)),
                 entry("F1", mapping("Brightness Down", None, "keychron", true)),
                 entry("F2", mapping("Brightness Up", None, "keychron", true)),
                 entry("F7", mapping("Previous", None, "keychron", true)),

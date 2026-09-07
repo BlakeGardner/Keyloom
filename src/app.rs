@@ -121,6 +121,8 @@ pub enum Message {
     },
     ToggleSwap,
     ClearKey,
+    /// Remove one key's mapping from the remaps list.
+    RemoveMapping(String),
     ClosePanel,
     SetCapture(bool),
     AddGroup,
@@ -386,6 +388,26 @@ impl App {
         if self.view == View::Tester {
             return;
         }
+        // Reject a no-op self-mapping. Assigning the key's own name is
+        // only meaningful when the other slot changes behavior (e.g.
+        // hold → Control with tap kept as the key itself).
+        let name = key_name(code);
+        if action == name {
+            let other = self.mapping(code).and_then(|mapping| {
+                if self.mode == Mode::Hold {
+                    mapping.tap.clone()
+                } else {
+                    mapping.hold.clone()
+                }
+            });
+            if other.is_none() || other.as_deref() == Some(action) {
+                self.flash(
+                    format!("{name} already does that"),
+                    "Mapping a key to itself would change nothing — choose a different output.",
+                );
+                return;
+            }
+        }
         self.undo = Some(Undo::Maps(self.profile_maps.clone()));
         let maps = self.profile_maps.entry(self.profile.clone()).or_default();
         let entry = if let Some(index) = maps.iter().position(|(key, _)| key == code) {
@@ -495,6 +517,11 @@ impl App {
         let Some(code) = self.selected else {
             return;
         };
+        self.remove_mapping(code);
+    }
+
+    /// Remove one key's mapping from the active profile.
+    fn remove_mapping(&mut self, code: &str) {
         self.undo = Some(Undo::Maps(self.profile_maps.clone()));
         if let Some(maps) = self.profile_maps.get_mut(&self.profile) {
             maps.retain(|(key, _)| key != code);
@@ -962,6 +989,11 @@ impl cosmic::Application for App {
                 self.persist();
             }
             Message::ClearKey => self.clear_mapping(),
+            Message::RemoveMapping(code) => {
+                if self.view != View::Tester {
+                    self.remove_mapping(&code);
+                }
+            }
             Message::ClosePanel => {
                 self.selected = None;
                 self.capture = false;
@@ -1327,6 +1359,53 @@ mod tests {
         let mapping = app.mapping("CapsLock").expect("mapping created");
         assert_eq!(mapping.hold.as_deref(), Some("Control"));
         assert_eq!(mapping.tap, None);
+    }
+
+    #[test]
+    fn mapping_a_key_to_itself_is_rejected() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Caps Lock".to_owned()));
+
+        assert!(app.mapping("CapsLock").is_none(), "self-map not stored");
+        let toast = app.toast.as_ref().expect("rejection is explained");
+        assert_eq!(toast.text, "Caps Lock already does that");
+
+        // A hold-only self-map is equally pointless.
+        let _ = app.update(Message::SetMode(Mode::Hold));
+        let _ = app.update(Message::PickAction("Caps Lock".to_owned()));
+        assert!(app.mapping("CapsLock").is_none());
+    }
+
+    #[test]
+    fn self_tap_is_allowed_when_hold_differs() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::SetMode(Mode::Hold));
+        let _ = app.update(Message::PickAction("Left Control".to_owned()));
+
+        // Keep the tap as Caps Lock itself while hold becomes Control.
+        let _ = app.update(Message::SetMode(Mode::Tap));
+        let _ = app.update(Message::PickAction("Caps Lock".to_owned()));
+
+        let mapping = app.mapping("CapsLock").expect("mapping kept");
+        assert_eq!(mapping.tap.as_deref(), Some("Caps Lock"));
+        assert_eq!(mapping.hold.as_deref(), Some("Left Control"));
+    }
+
+    #[test]
+    fn remove_mapping_from_the_remaps_list() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        let count = app.maps().len();
+        assert!(app.mapping("CapsLock").is_some());
+
+        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        assert!(app.mapping("CapsLock").is_none());
+        assert_eq!(app.maps().len(), count - 1);
+
+        let _ = app.update(Message::Undo);
+        assert!(app.mapping("CapsLock").is_some(), "removal is undoable");
     }
 
     #[test]

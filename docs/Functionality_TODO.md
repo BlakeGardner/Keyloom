@@ -40,15 +40,23 @@ pick up on its own.
 
 ## 2. Mapping rule correctness (v0.1)
 
-- [ ] **Reject mapping a key to itself** with a short explanation instead of
-  silently accepting it.
-- [ ] **Audit left/right modifier coverage in the action catalog.** `Right
+- [x] **Reject mapping a key to itself** with a short explanation instead of
+  silently accepting it. (No-op self-maps are rejected with a toast; setting
+  the tap back to the key itself stays allowed when a different hold action
+  makes it meaningful.)
+- [x] **Audit left/right modifier coverage in the action catalog.** `Right
   Shift` is missing, and left-hand entries should be explicit about their side
-  so left/right stay distinct in generated rules.
-- [ ] **Cover numpad keys in the output picker.** The catalog should offer every
+  so left/right stay distinct in generated rules. (The catalog now names every
+  modifier side explicitly; older generic names remain accepted from stored
+  mappings.)
+- [x] **Cover numpad keys in the output picker.** The catalog should offer every
   key the app renders, including keys outside the displayed form factor.
-- [ ] **Remove a mapping directly from the mapping list.** The remaps dialog
-  currently only opens a mapping for editing; add inline removal.
+  (Added a Numpad group plus Scroll Lock and Pause; a test asserts the catalog
+  offers every rendered key under its display name.)
+- [x] **Remove a mapping directly from the mapping list.** The remaps dialog
+  currently only opens a mapping for editing; add inline removal. (Each row
+  has a Remove button; removal is undoable and the dialog shows an empty
+  state.)
 
 ## 3. Layouts and form factors
 

@@ -373,6 +373,24 @@ mod tests {
         }
     }
 
+    /// The output picker must offer every key the app renders, under
+    /// exactly the name `key_name` produces (so selection, generation,
+    /// and the self-mapping check all agree).
+    #[test]
+    fn catalog_offers_every_deck_key() {
+        for cap in model::ALL_KEYS {
+            let name = model::key_name(cap.code);
+            let offered = model::ACTION_GROUPS
+                .iter()
+                .any(|(_, actions)| actions.iter().any(|action| *action == name));
+            assert!(
+                offered,
+                "{name} ({}) is missing from the action catalog",
+                cap.code
+            );
+        }
+    }
+
     #[test]
     fn simple_remap_is_deterministic() {
         let maps = vec![
@@ -575,17 +593,31 @@ mod tests {
             .collect();
         // Every translatable catalog action as an output (plus
         // Disabled; Hyper has no key and is dropped by the generator).
-        let all_actions: Maps = model::ACTION_GROUPS
+        // The catalog holds more actions than the deck has keys, so
+        // cycle sources; one source keeps only its last action, which
+        // is fine because every action still appears in some document
+        // chunk below.
+        let actions: Vec<&&str> = model::ACTION_GROUPS
             .iter()
             .flat_map(|(_, actions)| actions.iter())
-            .enumerate()
-            .map(|(i, action)| map(model::ALL_KEYS[i].code, Some(action), None, "all", false))
+            .collect();
+        let all_action_chunks: Vec<Maps> = actions
+            .chunks(model::ALL_KEYS.len())
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(i, action)| {
+                        map(model::ALL_KEYS[i].code, Some(action), None, "all", false)
+                    })
+                    .collect()
+            })
             .collect();
 
-        let documents = [
-            ("empty", generate(&Vec::new(), no_devices)),
+        let mut documents = vec![
+            ("empty".to_owned(), generate(&Vec::new(), no_devices)),
             (
-                "representative",
+                "representative".to_owned(),
                 generate(&representative_maps(), |id| {
                     if id == "kb1" {
                         "Keychron K2 Pro".to_owned()
@@ -594,9 +626,11 @@ mod tests {
                     }
                 }),
             ),
-            ("all-sources", generate(&all_sources, no_devices)),
-            ("all-actions", generate(&all_actions, no_devices)),
+            ("all-sources".to_owned(), generate(&all_sources, no_devices)),
         ];
+        for (i, chunk) in all_action_chunks.iter().enumerate() {
+            documents.push((format!("all-actions-{i}"), generate(chunk, no_devices)));
+        }
 
         let dir = std::env::temp_dir().join(format!("keyloom-xremap-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();

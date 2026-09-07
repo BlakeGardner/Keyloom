@@ -268,7 +268,7 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
 
     let description = txt(
         format!(
-            "{} · {} mapping{} in this profile. Select a remap to edit it.",
+            "{} · {} mapping{} in this profile. Select a remap to edit it, or remove it here.",
             app.profile_name(),
             maps.len(),
             if maps.len() == 1 { "" } else { "s" }
@@ -277,7 +277,14 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
         muted(),
     );
 
-    let mut rows = widget::column::with_capacity(maps.len()).spacing(8);
+    let mut rows = widget::column::with_capacity(maps.len().max(1)).spacing(8);
+    if maps.is_empty() {
+        rows = rows.push(txt(
+            "No mappings in this profile. Click a key on the keyboard to add one.",
+            14.0,
+            muted(),
+        ));
+    }
     for (code, mapping) in maps {
         let Some(cap) = crate::ui::model::key(code) else {
             continue;
@@ -289,23 +296,34 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
         let scope = app.device_label(&mapping.device);
 
         rows = rows.push(
-            widget::button::custom(
-                widget::column::with_capacity(2)
-                    .spacing(8)
-                    .push(
-                        widget::row::with_capacity(3)
-                            .spacing(12)
-                            .align_y(Alignment::Center)
-                            .push(mono(key_name(code), 13.0, fg()))
-                            .push(txt("→", 13.0, muted()))
-                            .push(txt_semibold(full_to, 14.0, fg())),
+            widget::row::with_capacity(2)
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(
+                    widget::button::custom(
+                        widget::column::with_capacity(2)
+                            .spacing(8)
+                            .push(
+                                widget::row::with_capacity(3)
+                                    .spacing(12)
+                                    .align_y(Alignment::Center)
+                                    .push(mono(key_name(code), 13.0, fg()))
+                                    .push(txt("→", 13.0, muted()))
+                                    .push(txt_semibold(full_to, 14.0, fg())),
+                            )
+                            .push(txt(scope, 12.0, muted())),
                     )
-                    .push(txt(scope, 12.0, muted())),
-            )
-            .class(quiet(false))
-            .padding([12, 14])
-            .width(Length::Fill)
-            .on_press(Message::SelectKey(cap.code)),
+                    .class(quiet(false))
+                    .padding([12, 14])
+                    .width(Length::Fill)
+                    .on_press(Message::SelectKey(cap.code)),
+                )
+                .push(
+                    widget::button::custom(txt("Remove", 13.0, muted()))
+                        .class(quiet(false))
+                        .padding([12, 14])
+                        .on_press(Message::RemoveMapping(code.clone())),
+                ),
         );
     }
 

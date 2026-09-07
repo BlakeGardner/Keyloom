@@ -41,14 +41,19 @@ service itself yet.
   profile, an empty-state prompt when there are none, and a
   "View remaps · N" button.
 - Remaps dialog listing every mapping in the active profile; selecting an
-  entry opens it in the editor.
+  entry opens it in the editor, and each row has an inline Remove button
+  (undoable, with an empty state once the last mapping is gone).
 - "Applies to" device scope selector on the toolbar (see Devices below).
 
 ## Key editor (bottom sheet)
 
 - Searchable action catalog with categories: modifiers, navigation, media,
-  letters, numbers, function keys, punctuation, other (including Disabled).
+  letters, numbers, numpad, function keys, punctuation, other (including
+  Disabled). Modifiers name their side explicitly (Left/Right Control, Shift,
+  Alt, Super), and the catalog offers every key the app renders.
 - The category is preselected to match the clicked key.
+- Mapping a key to itself is rejected with a short explanation, except when a
+  different hold action makes the self-tap meaningful.
 - "Record a key" capture mode: press a physical key to use it as the output,
   with Escape to cancel.
 - Advanced options per key:
