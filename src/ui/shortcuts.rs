@@ -1,4 +1,5 @@
-//! The shortcuts view: rule groups and the bottom rule editor.
+//! The shortcuts view: rule groups, plus the rule editor shown in the
+//! app's context drawer.
 
 use cosmic::iced::{Alignment, Background, Border, Length, Padding};
 use cosmic::widget::{self, container};
@@ -6,7 +7,7 @@ use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, EditRule, Message, Side};
 use crate::ui::theme::{
-    ButtonStyle, accent, accent_button, ghost_button, muted, oklch, quiet, white,
+    ButtonStyle, accent, accent_button, accent_filled, ghost_button, muted, oklch, quiet, white,
 };
 use crate::ui::{chord_pills, eyebrow, txt, txt_semibold};
 
@@ -271,9 +272,9 @@ fn new_group_button() -> Element<'static, Message> {
         .into()
 }
 
-/// The bottom editor for one shortcut rule.
-#[allow(clippy::too_many_lines)]
-pub fn editor(app: &App) -> Element<'_, Message> {
+/// The rule editor content, shown in the app's context drawer while a
+/// shortcut is being edited.
+pub fn rule_editor(app: &App) -> Element<'_, Message> {
     let Some(edit) = app.edit_rule else {
         return widget::Space::new().into();
     };
@@ -282,28 +283,6 @@ pub fn editor(app: &App) -> Element<'_, Message> {
     };
     let rule = edit.rule.and_then(|index| group.rules.get(index));
 
-    // Left: rule context and delete.
-    let left = widget::column::with_capacity(4)
-        .spacing(10)
-        .push(eyebrow(if edit.rule.is_some() {
-            "Edit shortcut"
-        } else {
-            "New shortcut"
-        }))
-        .push(txt_semibold(
-            group.name.clone(),
-            15.0,
-            oklch(0.95, 0.01, 152.0),
-        ))
-        .push(txt(group.scope_label(), 11.5, muted()))
-        .push(
-            widget::button::custom(txt("Delete shortcut", 12.0, oklch(0.85, 0.06, 16.0)))
-                .class(ghost_button())
-                .padding([7, 12])
-                .on_press(Message::DeleteRule),
-        );
-
-    // Middle: the two recorded chords.
     let record_button = |side: Side| {
         let recording = app.recording == Some(side);
         widget::button::custom(txt_semibold(
@@ -360,12 +339,12 @@ pub fn editor(app: &App) -> Element<'_, Message> {
         }))
     };
 
-    let side_column = |label: &'static str, side: Side| {
+    let side_section = |label: &'static str, side: Side| {
         widget::column::with_capacity(2)
             .spacing(7)
             .width(Length::Fill)
             .push(
-                widget::row::with_capacity(2)
+                widget::row::with_capacity(3)
                     .align_y(Alignment::Center)
                     .push(eyebrow(label))
                     .push(crate::ui::hspace())
@@ -381,30 +360,30 @@ pub fn editor(app: &App) -> Element<'_, Message> {
     };
 
     let hint = if app.recording.is_some() {
-        "Hold the modifiers, then press a key. Escape cancels.".to_owned()
+        "Hold the modifiers, then press a key. Escape cancels."
     } else if rule.is_some_and(|rule| !rule.from.key.is_empty() && !rule.to.key.is_empty()) {
-        "Both sides recorded. This shortcut is ready.".to_owned()
+        "Both sides recorded. This shortcut is ready."
     } else {
-        "Record both sides to complete this shortcut.".to_owned()
+        "Record both sides to complete this shortcut."
     };
 
-    let middle = widget::column::with_capacity(2)
-        .spacing(10)
-        .width(Length::Fill)
-        .push(
-            widget::row::with_capacity(3)
-                .spacing(14)
-                .align_y(Alignment::Center)
-                .push(side_column("When I press", Side::From))
-                .push(txt("→", 18.0, accent()))
-                .push(side_column("Send instead", Side::To)),
-        )
-        .push(txt(hint, 11.0, muted()));
-
-    // Right: group behaviour and done.
     let any_mod = group.any_mod;
-    let right = widget::column::with_capacity(4)
+
+    // Wide sheet layout, mirroring the design's original bottom panel:
+    // context · when-I-press → send-instead · group behaviour.
+    let context = widget::column::with_capacity(2)
+        .spacing(4)
+        .width(Length::Fixed(190.0))
+        .push(txt_semibold(
+            group.name.clone(),
+            15.0,
+            oklch(0.95, 0.01, 152.0),
+        ))
+        .push(txt(group.scope_label(), 11.5, muted()));
+
+    let behaviour = widget::column::with_capacity(3)
         .spacing(10)
+        .width(Length::Fixed(230.0))
         .push(eyebrow("Group behaviour"))
         .push(
             widget::button::custom(
@@ -439,73 +418,65 @@ pub fn editor(app: &App) -> Element<'_, Message> {
             .padding([8, 11])
             .on_press(Message::ToggleAnyMod),
         )
+        .push(txt(
+            "Matches the shortcut even while Shift, Ctrl, Alt or Super is held.",
+            11.0,
+            muted(),
+        ));
+
+    let chords = widget::column::with_capacity(2)
+        .spacing(10)
+        .width(Length::Fill)
         .push(
-            txt(
-                "Matches the shortcut even while Shift, Ctrl, Alt or Super is held.",
-                11.0,
-                muted(),
-            )
+            widget::row::with_capacity(3)
+                .spacing(14)
+                .align_y(Alignment::Center)
+                .push(side_section("When I press", Side::From))
+                .push(txt("→", 18.0, accent()))
+                .push(side_section("Send instead", Side::To)),
+        )
+        .push(txt(hint, 11.0, muted()));
+
+    widget::row::with_capacity(3)
+        .spacing(24)
+        .push(context)
+        .push(chords)
+        .push(behaviour)
+        .into()
+}
+
+/// The drawer footer: delete and done actions for the rule editor.
+pub fn rule_editor_footer(app: &App) -> Element<'_, Message> {
+    let complete = app
+        .edit_rule
+        .and_then(|edit| {
+            app.groups()
+                .get(edit.group)
+                .and_then(|group| edit.rule.and_then(|index| group.rules.get(index)))
+        })
+        .is_some_and(|rule| !rule.from.key.is_empty() && !rule.to.key.is_empty());
+
+    let mut done = widget::button::custom(
+        txt_semibold("Done", 14.0, crate::ui::theme::bg())
+            .align_x(Alignment::Center)
             .width(Length::Fill),
-        )
-        .push({
-            let mut done = widget::button::custom(txt_semibold(
-                "Done",
-                12.0,
-                oklch(0.88, 0.01, 152.0),
-            ))
-            .class(ghost_button())
-            .padding([7, 12]);
-            let complete =
-                rule.is_some_and(|rule| !rule.from.key.is_empty() && !rule.to.key.is_empty());
-            if complete {
-                done = done.on_press(Message::CloseEdit);
-            }
-            done
-        });
-
-    let vertical_rule = || {
-        container(widget::Space::new().width(1.0).height(Length::Fill)).class(
-            ctheme::Container::custom(|_| container::Style {
-                background: Some(white(0.06).into()),
-                ..container::Style::default()
-            }),
-        )
-    };
-
-    container(
-        widget::row::with_capacity(5)
-            .push(
-                container(left)
-                    .width(Length::Fixed(236.0))
-                    .padding([20, 22]),
-            )
-            .push(vertical_rule())
-            .push(
-                container(middle)
-                    .width(Length::Fill)
-                    .padding(Padding {
-                        top: 18.0,
-                        right: 22.0,
-                        bottom: 20.0,
-                        left: 22.0,
-                    }),
-            )
-            .push(vertical_rule())
-            .push(
-                container(right)
-                    .width(Length::Fixed(212.0))
-                    .padding([20, 22]),
-            ),
     )
-    .width(Length::Fill)
-    .class(ctheme::Container::custom(|_| container::Style {
-        background: Some(oklch(0.185, 0.007, 152.0).into()),
-        border: Border {
-            color: white(0.08),
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..container::Style::default()
-    }))
-    .into()
+    .class(accent_filled())
+    .padding([10, 24])
+    .width(Length::Fixed(104.0));
+    if complete {
+        done = done.on_press(Message::CloseEdit);
+    }
+
+    widget::row::with_capacity(3)
+        .spacing(12)
+        .push(
+            widget::button::custom(txt("Delete shortcut", 12.0, oklch(0.85, 0.06, 16.0)))
+                .class(ghost_button())
+                .padding([10, 12])
+                .on_press(Message::DeleteRule),
+        )
+        .push(crate::ui::hspace())
+        .push(done)
+        .into()
 }

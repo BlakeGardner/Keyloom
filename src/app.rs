@@ -518,11 +518,18 @@ impl App {
             return;
         }
         if escape {
-            self.popover = None;
-            self.remaps_open = false;
-            if self.onboarding {
+            // Close the topmost surface first, like a native app.
+            if self.popover.is_some() {
+                self.popover = None;
+            } else if self.remaps_open {
+                self.remaps_open = false;
+            } else if self.onboarding {
                 self.onboarding = false;
                 self.onb_step = 0;
+            } else if self.selected.is_some() || self.edit_rule.is_some() {
+                self.selected = None;
+                self.edit_rule = None;
+                self.recording = None;
             }
         }
 
@@ -1021,6 +1028,20 @@ impl cosmic::Application for App {
         Subscription::run(monitor_stream)
     }
 
+    /// Modal dialogs render natively above the window content.
+    fn dialog(&self) -> Option<Element<'_, Message>> {
+        if self.view == View::Keyboard && self.selected.is_some() && self.capture {
+            return Some(ui::overlays::capture_dialog(self));
+        }
+        if self.view == View::Keyboard && self.remaps_open {
+            return Some(ui::overlays::remaps_dialog(self));
+        }
+        if self.onboarding && self.view != View::Tester {
+            return Some(ui::overlays::onboarding(self));
+        }
+        None
+    }
+
     fn view(&self) -> Element<'_, Message> {
         ui::view(self)
     }
@@ -1092,6 +1113,31 @@ mod tests {
 
         let toast = app.toast.as_ref().expect("newer toast survives");
         assert_eq!(toast.text, "A → Escape");
+    }
+
+    #[test]
+    fn selection_drives_the_bottom_sheet() {
+        let mut app = app();
+        assert!(app.selected.is_none());
+
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        assert_eq!(app.selected, Some("CapsLock"), "selecting opens the sheet");
+
+        let _ = app.update(Message::ClosePanel);
+        assert!(app.selected.is_none(), "done closes the sheet");
+
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::EditRule {
+            group: 0,
+            rule: None,
+        });
+        assert!(app.edit_rule.is_some(), "editing opens the sheet");
+
+        let _ = app.update(Message::SetView(View::Keyboard));
+        assert!(
+            app.edit_rule.is_none(),
+            "switching views closes the sheet"
+        );
     }
 
     #[test]

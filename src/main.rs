@@ -27,7 +27,13 @@ fn main() -> cosmic::iced::Result {
 
     let settings = cosmic::app::Settings::default()
         .theme(cosmic::theme::Theme::custom(std::sync::Arc::new(theme)))
-        .size(cosmic::iced::Size::new(1280.0, 900.0));
+        // Fit the 100% keyboard deck like a purpose-built tool.
+        .size(cosmic::iced::Size::new(1210.0, 620.0))
+        .size_limits(
+            cosmic::iced::core::layout::Limits::NONE
+                .min_width(760.0)
+                .min_height(480.0),
+        );
 
     cosmic::app::run::<app::App>(settings, ())
 }

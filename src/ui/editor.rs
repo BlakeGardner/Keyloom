@@ -11,9 +11,10 @@ use crate::ui::theme::{
     ButtonStyle, accent, accent_filled, black, border, fg, flat_button, flat_tab, keycap, muted,
     oklch, outline_button, quiet, white,
 };
-use crate::ui::{eyebrow, mono, txt, txt_semibold};
+use crate::ui::{mono, txt, txt_semibold};
 
-/// The `CHANGE A KEY` section shown while a key is selected.
+/// The key editor content, shown in the app's context drawer while a
+/// key is selected.
 #[allow(clippy::too_many_lines)]
 pub fn key_editor(app: &App) -> Element<'_, Message> {
     let Some(selected) = app.selected else {
@@ -21,9 +22,9 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
     };
     let mapping = app.mapping(selected);
 
-    let mut section = widget::column::with_capacity(10).spacing(14);
+    let mut section = widget::column::with_capacity(9).spacing(14);
 
-    // Heading.
+    // Current behavior summary (the sheet title names the key).
     let mut summary = format!(
         "Now: {}",
         mapping
@@ -33,49 +34,41 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
     if let Some(hold) = mapping.and_then(|m| m.hold.as_deref()) {
         summary.push_str(&format!(" · When held: {hold}"));
     }
-    section = section.push(
-        widget::column::with_capacity(3)
-            .spacing(6)
-            .push(eyebrow("Change a key"))
-            .push(txt_semibold(
-                format!("Make {} act as…", key_name(selected)),
-                24.0,
-                fg(),
-            ))
-            .push(txt(summary, 14.0, oklch(0.78, 0.01, 152.0))),
-    );
+    section = section.push(txt(summary, 13.0, oklch(0.78, 0.01, 152.0)));
 
-    // Search plus key recording.
-    let search = widget::column::with_capacity(2)
-        .spacing(8)
-        .push(txt("Find a key or action", 13.0, fg()))
-        .push(
-            widget::text_input("Search Escape, volume, letters…", &app.query)
-                .on_input(Message::Query),
-        )
-        .width(Length::Fill);
-    let record = widget::button::custom(txt(
-        if app.capture {
-            "Cancel recording · Esc"
-        } else {
-            "Record a key"
-        },
-        14.0,
-        fg(),
-    ))
-    .class(if app.capture {
-        quiet(true)
-    } else {
-        outline_button()
-    })
-    .padding([10, 15])
-    .on_press(Message::SetCapture(!app.capture));
+    // Search plus key recording, side by side in the wide sheet.
     section = section.push(
         widget::row::with_capacity(2)
             .spacing(20)
             .align_y(Alignment::End)
-            .push(search)
-            .push(record),
+            .push(
+                widget::column::with_capacity(2)
+                    .spacing(8)
+                    .width(Length::Fill)
+                    .push(txt("Find a key or action", 13.0, fg()))
+                    .push(
+                        widget::text_input("Search Escape, volume, letters…", &app.query)
+                            .on_input(Message::Query),
+                    ),
+            )
+            .push(
+                widget::button::custom(txt(
+                    if app.capture {
+                        "Cancel recording · Esc"
+                    } else {
+                        "Record a key"
+                    },
+                    14.0,
+                    fg(),
+                ))
+                .class(if app.capture {
+                    quiet(true)
+                } else {
+                    outline_button()
+                })
+                .padding([10, 15])
+                .on_press(Message::SetCapture(!app.capture)),
+            ),
     );
 
     // Flat category tabs over a shared baseline (`.editor-categories`).
@@ -168,11 +161,7 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
             .collect();
 
         section = section.push(
-            container(widget::scrollable(
-                widget::flex_row(items).row_spacing(10).column_spacing(10),
-            ))
-            .max_height(260.0)
-            .padding(5),
+            container(widget::flex_row(items).row_spacing(10).column_spacing(10)).padding(5),
         );
     }
 
@@ -191,7 +180,7 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
             "{hint} · Applies to {}. Changes update this preview immediately.",
             app.device_label(&app.device)
         ),
-        14.0,
+        13.0,
         oklch(0.78, 0.01, 152.0),
     ));
 
@@ -223,46 +212,32 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         section = section.push(advanced_area(app, selected));
     }
 
-    // Footer (`.editor-footer`): flat restore, accent-filled done.
-    section = section.push(
-        widget::column::with_capacity(2)
-            .spacing(18)
-            .push(crate::ui::keyboard_view::rule(border()))
-            .push(
-                widget::row::with_capacity(3)
-                    .spacing(12)
-                    .push(
-                        widget::button::custom(txt("Restore original key", 14.0, fg()))
-                            .class(flat_button())
-                            .padding([10, 15])
-                            .on_press(Message::ClearKey),
-                    )
-                    .push(crate::ui::hspace())
-                    .push(
-                        widget::button::custom(
-                            txt_semibold("Done", 14.0, crate::ui::theme::bg())
-                                .align_x(Alignment::Center)
-                                .width(Length::Fill),
-                        )
-                        .class(accent_filled())
-                        .padding([10, 24])
-                        .width(Length::Fixed(104.0))
-                        .on_press(Message::ClosePanel),
-                    ),
-            ),
-    );
+    section.into()
+}
 
-    container(section)
-        .width(Length::Fill)
-        .padding([26, 30])
-        .class(ctheme::Container::custom(|_| container::Style {
-            background: Some(oklch(0.185, 0.007, 152.0).into()),
-            border: Border {
-                radius: [0.0, 0.0, 14.0, 14.0].into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        }))
+/// The drawer footer: restore and done actions for the key editor.
+pub fn key_editor_footer(app: &App) -> Element<'_, Message> {
+    let _ = app;
+    widget::row::with_capacity(3)
+        .spacing(12)
+        .push(
+            widget::button::custom(txt("Restore original key", 14.0, fg()))
+                .class(flat_button())
+                .padding([10, 15])
+                .on_press(Message::ClearKey),
+        )
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(
+                txt_semibold("Done", 14.0, crate::ui::theme::bg())
+                    .align_x(Alignment::Center)
+                    .width(Length::Fill),
+            )
+            .class(accent_filled())
+            .padding([10, 24])
+            .width(Length::Fixed(104.0))
+            .on_press(Message::ClosePanel),
+        )
         .into()
 }
 
@@ -343,16 +318,19 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
             .class(quiet(app.mode == mode))
             .padding([9, 14])
             .on_press(Message::SetMode(mode))
+            .into()
     };
     area = area.push(
-        widget::row::with_capacity(3)
-            .spacing(8)
-            .push(mode_button("Normal press", Mode::Tap))
-            .push(mode_button("When held", Mode::Hold))
-            .push(mode_button("With other keys", Mode::Combo)),
+        widget::flex_row(vec![
+            mode_button("Normal press", Mode::Tap),
+            mode_button("When held", Mode::Hold),
+            mode_button("With other keys", Mode::Combo),
+        ])
+        .row_spacing(8)
+        .column_spacing(8),
     );
 
-    // Combo builder.
+    // Combo builder, stacked to fit the drawer.
     if app.mode == Mode::Combo {
         let mod_chip = |label: &'static str, on: bool, message: Message| {
             widget::button::custom(txt_semibold(
@@ -376,15 +354,17 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
             )
             .padding([5, 10])
             .on_press(message)
+            .into()
         };
 
-        let mut bar = widget::row::with_capacity(8)
-            .spacing(8)
-            .align_y(Alignment::Center);
-        bar = bar.push(txt("WITH", 10.0, muted()));
-        for (index, name) in MODS.iter().enumerate() {
-            bar = bar.push(mod_chip(name, app.from_mods[index], Message::ToggleFromMod(index)));
-        }
+        let mod_row = |label: &'static str, states: [bool; 4], message: fn(usize) -> Message| {
+            let mut chips: Vec<Element<'_, Message>> =
+                vec![container(txt(label, 10.0, muted())).padding([7, 0]).into()];
+            for (index, name) in MODS.iter().enumerate() {
+                chips.push(mod_chip(name, states[index], message(index)));
+            }
+            widget::flex_row(chips).row_spacing(6).column_spacing(6)
+        };
 
         let picked: Vec<&str> = MODS
             .iter()
@@ -396,15 +376,20 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
         } else {
             format!("{} + {}", picked.join(" + "), key_name(selected))
         };
-        bar = bar.push(txt_semibold(combo_from, 12.0, oklch(0.9, 0.01, 152.0)));
-        bar = bar.push(txt("→", 14.0, accent()));
-        bar = bar.push(txt("SEND", 10.0, muted()));
-        for (index, name) in MODS.iter().enumerate() {
-            bar = bar.push(mod_chip(name, app.to_mods[index], Message::ToggleToMod(index)));
-        }
-        bar = bar.push(crate::ui::hspace());
+
+        let mut builder = widget::column::with_capacity(5)
+            .spacing(10)
+            .push(mod_row("WITH", app.from_mods, Message::ToggleFromMod))
+            .push(
+                widget::row::with_capacity(2)
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(txt_semibold(combo_from, 12.0, oklch(0.9, 0.01, 152.0)))
+                    .push(txt("→", 14.0, accent())),
+            )
+            .push(mod_row("SEND", app.to_mods, Message::ToggleToMod));
         if picked.is_empty() {
-            bar = bar.push(txt(
+            builder = builder.push(txt(
                 "Select at least one modifier for the input side.",
                 11.0,
                 oklch(0.72, 0.08, 16.0),
@@ -412,7 +397,7 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
         }
 
         area = area.push(
-            container(bar)
+            container(builder)
                 .padding(Padding {
                     top: 9.0,
                     right: 12.0,
@@ -452,23 +437,21 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
                 format!("{}+{}", rule.to.mods.join("+"), rule.to.key)
             };
             area = area.push(
-                widget::row::with_capacity(2)
-                    .spacing(12)
-                    .align_y(Alignment::Center)
-                    .push(txt(format!("{label} → {out}"), 13.0, fg()))
-                    .push(
-                        widget::button::custom(txt(
-                            "Remove shortcut",
-                            13.0,
-                            oklch(0.95, 0.01, 152.0),
-                        ))
+                widget::flex_row(vec![
+                    container(txt(format!("{label} → {out}"), 13.0, fg()))
+                        .padding([8, 0])
+                        .into(),
+                    widget::button::custom(txt("Remove shortcut", 13.0, oklch(0.95, 0.01, 152.0)))
                         .class(quiet(false))
                         .padding([8, 12])
                         .on_press(Message::RemoveCombo {
                             group,
                             rule: rule_index,
-                        }),
-                    ),
+                        })
+                        .into(),
+                ])
+                .row_spacing(8)
+                .column_spacing(12),
             );
         }
     }
