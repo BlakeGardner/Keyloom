@@ -193,17 +193,27 @@ pub fn area(app: &App) -> Element<'_, Message> {
     }
 
     let (deck_width, deck_height) = model::deck_size(app.deck());
-    let deck = container(canvas(app))
-        .width(Length::Fixed(deck_width))
-        .height(Length::Fixed(deck_height));
+    // The deck centers itself in the available width; only when the
+    // window is narrower does it fall back to a horizontal scroll.
+    // (Inside the scrollable, width limits are unbounded, so a plain
+    // centering `Fill` container would collapse to the deck's width.)
     column = column.push(
-        widget::scrollable::horizontal(
-            container(deck)
-                .width(Length::Fill)
-                .align_x(Alignment::Center)
-                .padding(5),
-        )
-        .width(Length::Fill),
+        container(widget::responsive(move |size| {
+            let deck = container(canvas(app))
+                .width(Length::Fixed(deck_width))
+                .height(Length::Fixed(deck_height));
+            let framed = container(deck).padding(5);
+            let element: Element<'_, Message> = if size.width >= deck_width + 10.0 {
+                framed.width(Length::Fill).align_x(Alignment::Center).into()
+            } else {
+                widget::scrollable::horizontal(framed)
+                    .width(Length::Fill)
+                    .into()
+            };
+            element
+        }))
+        .width(Length::Fill)
+        .height(Length::Fixed(deck_height + 10.0)),
     );
 
     if app.view == View::Keyboard && app.layer == Layer::Base && app.selected.is_none() {
