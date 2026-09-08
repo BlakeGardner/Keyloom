@@ -104,6 +104,12 @@ pub enum Message {
     NewProfile {
         duplicate: bool,
     },
+    /// Create an editable copy of a built-in preset and switch to it.
+    UsePreset(String),
+    /// Start (or cancel) renaming the active profile.
+    RenameToggle,
+    RenameInput(String),
+    RenameCommit,
     SelectDevice(String),
     /// Show a specific form factor (size picker; marks it user-chosen).
     SetForm(usize),
@@ -170,6 +176,8 @@ pub struct App {
     pub profile_maps: HashMap<String, Maps>,
     pub profile_groups: HashMap<String, Vec<Group>>,
     custom_profiles: usize,
+    /// In-progress rename of the active profile (the edited text).
+    pub rename: Option<String>,
     pub undo: Option<Undo>,
     // Keyboard view state.
     pub device: String,
@@ -238,28 +246,20 @@ impl App {
         if id == "all" {
             return "All keyboards".to_owned();
         }
-        if let Some(device) = self
-            .devices
+        self.devices
             .iter()
             .find(|device| device.path.to_string_lossy() == id)
-        {
-            return device.name.clone();
-        }
-        model::DEMO_DEVICES
-            .iter()
-            .find(|(demo, _, _)| *demo == id)
-            .map_or_else(|| id.to_owned(), |(_, name, _)| (*name).to_owned())
+            .map_or_else(|| id.to_owned(), |device| device.name.clone())
     }
 
     /// The device rows offered by the "Applies to" popover:
-    /// `(id, name, sub)`. Real keyboards replace the demo entries as
-    /// soon as the monitor reports them.
+    /// `(id, name, sub)`.
     pub fn device_entries(&self) -> Vec<(String, String, String)> {
         let mut entries = vec![(
             "all".to_owned(),
             "All keyboards".to_owned(),
             if self.devices.is_empty() {
-                "Demo device choices".to_owned()
+                "No keyboards detected".to_owned()
             } else {
                 format!(
                     "{} detected keyboard{}",
@@ -268,22 +268,16 @@ impl App {
                 )
             },
         )];
-        if self.devices.is_empty() {
-            for (id, name, sub) in model::DEMO_DEVICES.iter().skip(1) {
-                entries.push(((*id).to_owned(), (*name).to_owned(), (*sub).to_owned()));
-            }
-        } else {
-            for device in &self.devices {
-                entries.push((
-                    device.path.to_string_lossy().into_owned(),
-                    device.name.clone(),
-                    if device.connected {
-                        device.path.display().to_string()
-                    } else {
-                        format!("{} (disconnected)", device.path.display())
-                    },
-                ));
-            }
+        for device in &self.devices {
+            entries.push((
+                device.path.to_string_lossy().into_owned(),
+                device.name.clone(),
+                if device.connected {
+                    device.path.display().to_string()
+                } else {
+                    format!("{} (disconnected)", device.path.display())
+                },
+            ));
         }
         entries
     }
@@ -625,6 +619,7 @@ impl App {
         self.profile_groups.insert(id.clone(), groups);
         self.profile = id;
         self.popover = None;
+        self.rename = None;
         self.selected = None;
         self.edit_rule = None;
         self.capture = false;
@@ -636,6 +631,68 @@ impl App {
             "Click a key to add your first mapping."
         };
         self.flash(format!("{name} created"), sub);
+        self.persist();
+    }
+
+    /// Create an editable copy of a built-in preset and switch to it.
+    /// Presets themselves stay read-only templates.
+    fn use_preset(&mut self, preset_id: &str) {
+        if self.view == View::Tester {
+            return;
+        }
+        let Some(preset) = model::presets()
+            .into_iter()
+            .find(|preset| preset.id == preset_id)
+        else {
+            return;
+        };
+        self.custom_profiles += 1;
+        let id = format!("custom-{}", self.custom_profiles);
+        // Copies keep the preset's name; number any further copies.
+        let mut name = preset.name.to_owned();
+        let mut copy = 1;
+        while self.profiles.iter().any(|profile| profile.name == name) {
+            copy += 1;
+            name = format!("{} {copy}", preset.name);
+        }
+        self.profiles.push(Profile {
+            id: id.clone(),
+            name: name.clone(),
+        });
+        self.profile_maps.insert(id.clone(), preset.maps);
+        self.profile_groups.insert(id.clone(), Vec::new());
+        self.profile = id;
+        self.popover = None;
+        self.rename = None;
+        self.selected = None;
+        self.edit_rule = None;
+        self.capture = false;
+        self.recording = None;
+        self.undo = None;
+        self.flash(
+            format!("{name} added to your profiles"),
+            "An editable copy of the preset — the preset itself never changes.",
+        );
+        self.persist();
+    }
+
+    /// Apply the pending rename to the active profile.
+    fn commit_rename(&mut self) {
+        let Some(name) = self.rename.take() else {
+            return;
+        };
+        let name = name.trim().to_owned();
+        if name.is_empty() || name == self.profile_name() {
+            return;
+        }
+        if let Some(profile) = self
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == self.profile)
+        {
+            profile.name = name.clone();
+        }
+        self.flash("Profile renamed", format!("now called {name}"));
         self.persist();
     }
 
@@ -778,19 +835,18 @@ impl cosmic::Application for App {
                 (profiles, maps, active, custom as usize)
             }
             None => {
-                // Fresh install: seed the demo profiles until the user
-                // makes a change worth saving.
-                let mut profiles = Vec::new();
-                let mut profile_maps = HashMap::new();
-                for (profile, maps) in model::demo_profiles() {
-                    profile_maps.insert(profile.id.clone(), maps);
-                    profiles.push(profile);
-                }
-                (profiles, profile_maps, "default".to_owned(), 0)
+                // Fresh install: start with a single empty profile.
+                // The built-in presets stay available from the profile
+                // switcher as read-only templates.
+                let default = Profile {
+                    id: "default".to_owned(),
+                    name: "Default".to_owned(),
+                };
+                let profile_maps = HashMap::from([(default.id.clone(), Vec::new())]);
+                (vec![default], profile_maps, "default".to_owned(), 0)
             }
         };
-        let profile_groups: HashMap<String, Vec<Group>> =
-            model::demo_groups().into_iter().collect();
+        let profile_groups: HashMap<String, Vec<Group>> = HashMap::new();
 
         let mut app = App {
             core,
@@ -806,6 +862,7 @@ impl cosmic::Application for App {
             profile_maps,
             profile_groups,
             custom_profiles,
+            rename: None,
             undo: None,
             device: "all".to_owned(),
             form: keyboard::FORM_FULL,
@@ -883,14 +940,19 @@ impl cosmic::Application for App {
                 } else {
                     Some(popover)
                 };
+                self.rename = None;
             }
-            Message::CloseOverlays => self.popover = None,
+            Message::CloseOverlays => {
+                self.popover = None;
+                self.rename = None;
+            }
             Message::SelectProfile(id) => {
                 self.profile = id;
                 self.capture = false;
                 self.toast = None;
                 self.undo = None;
                 self.popover = None;
+                self.rename = None;
                 self.remaps_open = false;
                 self.selected = None;
                 self.edit_rule = None;
@@ -907,6 +969,22 @@ impl cosmic::Application for App {
                 });
             }
             Message::NewProfile { duplicate } => self.create_profile(duplicate),
+            Message::UsePreset(id) => self.use_preset(&id),
+            Message::RenameToggle => {
+                if self.view != View::Tester {
+                    self.rename = if self.rename.is_some() {
+                        None
+                    } else {
+                        Some(self.profile_name().to_owned())
+                    };
+                }
+            }
+            Message::RenameInput(text) => {
+                if self.rename.is_some() {
+                    self.rename = Some(text);
+                }
+            }
+            Message::RenameCommit => self.commit_rename(),
             Message::SelectDevice(id) => {
                 self.device = id;
                 self.popover = None;
@@ -1205,6 +1283,42 @@ impl cosmic::Application for App {
                         self.form = form;
                     }
                 }
+                monitor::Event::Connected(device) => {
+                    let id = device.path.to_string_lossy().into_owned();
+                    // A replugged keyboard usually returns on a new
+                    // event node: follow it if its stale entry was the
+                    // selected mapping scope.
+                    if self.devices.iter().any(|old| {
+                        !old.connected
+                            && old.name == device.name
+                            && old.path.to_string_lossy() == self.device
+                    }) {
+                        self.device = id;
+                    }
+                    // Drop the node being reused plus any stale entry
+                    // for the same keyboard.
+                    self.devices.retain(|old| {
+                        old.path != device.path && (old.connected || old.name != device.name)
+                    });
+                    self.pressed.retain(|(path, _)| *path != device.path);
+                    let name = device.name.clone();
+                    self.devices.push(device);
+                    self.devices
+                        .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+                    if !self.form_overridden
+                        && let Some(form) = monitor::detected_form(self.devices.iter())
+                    {
+                        self.form = form;
+                    }
+                    let toast = self.flash(
+                        format!("{name} connected"),
+                        "Keys light up as you type; mappings can target it.",
+                    );
+                    return cosmic::task::future(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                        Message::ToastExpired(toast)
+                    });
+                }
                 monitor::Event::Key { device, event } => match event {
                     monitor::KeyEvent::Pressed(code) => self.phys_press(&device, code),
                     monitor::KeyEvent::Repeated(_) => {}
@@ -1295,7 +1409,7 @@ mod tests {
     #[test]
     fn profile_switch_toast_expires_by_id() {
         let mut app = app();
-        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        let _ = app.update(Message::SelectProfile("default".to_owned()));
         let id = app.toast.as_ref().expect("switch shows a toast").id;
 
         // A stale expiry (e.g. from an earlier toast) is ignored.
@@ -1309,7 +1423,7 @@ mod tests {
     #[test]
     fn expiry_never_removes_a_newer_toast() {
         let mut app = app();
-        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        let _ = app.update(Message::SelectProfile("default".to_owned()));
         let stale = app.toast.as_ref().unwrap().id;
 
         // A new mapping replaces the toast before the timer fires.
@@ -1368,7 +1482,6 @@ mod tests {
     #[test]
     fn remaps_dialog_opens_and_selecting_a_row_closes_it() {
         let mut app = app();
-        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
         let _ = app.update(Message::OpenRemaps);
         assert!(app.remaps_open);
 
@@ -1438,7 +1551,10 @@ mod tests {
     #[test]
     fn remove_mapping_from_the_remaps_list() {
         let mut app = app();
-        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
         let count = app.maps().len();
         assert!(app.mapping("CapsLock").is_some());
 
@@ -1511,16 +1627,149 @@ mod tests {
         );
     }
 
+    fn connected(path: &str, name: &str, form: usize, form_hinted: bool) -> Message {
+        Message::Monitor(monitor::Event::Connected(monitor::KeyboardDevice {
+            path: PathBuf::from(path),
+            name: name.to_owned(),
+            connected: true,
+            form,
+            form_hinted,
+        }))
+    }
+
+    #[test]
+    fn hotplugged_keyboard_joins_the_device_list() {
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_SIXTY, true));
+        assert_eq!(app.devices.len(), 1);
+        assert_eq!(app.form, keyboard::FORM_SIXTY);
+
+        let _ = app.update(connected(
+            "/dev/input/event5",
+            "Desk Board",
+            keyboard::FORM_FULL,
+            true,
+        ));
+        assert_eq!(app.devices.len(), 2, "the new keyboard is listed");
+        assert_eq!(app.device_entries().len(), 3, "and offered as a scope");
+        assert_eq!(
+            app.form,
+            keyboard::FORM_FULL,
+            "detection re-runs for the new keyboard"
+        );
+        assert!(app.toast.is_some(), "the connection is announced");
+    }
+
+    #[test]
+    fn replugged_keyboard_replaces_its_stale_entry() {
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_FULL, true));
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            PathBuf::from("/dev/input/event0"),
+        )));
+        assert!(!app.devices[0].connected);
+
+        // The same keyboard returns on a different event node.
+        let _ = app.update(connected(
+            "/dev/input/event7",
+            "Test Keyboard",
+            keyboard::FORM_FULL,
+            true,
+        ));
+        assert_eq!(app.devices.len(), 1, "no duplicate disconnected entry");
+        assert!(app.devices[0].connected);
+        assert_eq!(app.devices[0].path, PathBuf::from("/dev/input/event7"));
+        assert_eq!(
+            app.device, "/dev/input/event7",
+            "the selected scope follows the replugged keyboard"
+        );
+    }
+
     #[test]
     fn duplicate_profile_copies_mappings() {
         let mut app = app();
-        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        let _ = app.update(Message::UsePreset("laptop".to_owned()));
         let count = app.maps().len();
         assert!(count > 0);
 
         let _ = app.update(Message::NewProfile { duplicate: true });
         assert_eq!(app.profile_name(), "Laptop copy");
         assert_eq!(app.maps().len(), count);
+    }
+
+    #[test]
+    fn fresh_install_starts_with_one_empty_profile() {
+        let app = app();
+        assert_eq!(app.profiles.len(), 1);
+        assert_eq!(app.profile_name(), "Default");
+        assert!(app.maps().is_empty(), "no demo mappings are seeded");
+        assert!(app.groups().is_empty(), "no demo groups are seeded");
+        assert!(app.devices.is_empty(), "no demo devices are listed");
+        assert_eq!(app.device_entries().len(), 1, "only the All keyboards row");
+    }
+
+    #[test]
+    fn selecting_a_preset_creates_an_editable_copy() {
+        let mut app = app();
+        let preset = model::presets()
+            .into_iter()
+            .find(|preset| preset.id == "laptop")
+            .expect("laptop preset ships");
+
+        let _ = app.update(Message::UsePreset("laptop".to_owned()));
+        assert_eq!(app.profiles.len(), 2, "the copy joins the user's profiles");
+        assert_eq!(app.profile_name(), "Laptop");
+        assert!(
+            app.profile.starts_with("custom-"),
+            "copies get their own id"
+        );
+        assert_eq!(app.maps(), &preset.maps);
+
+        // The copy is editable like any other profile.
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        assert_eq!(app.maps().len(), preset.maps.len() + 1);
+        assert_eq!(
+            model::presets()
+                .into_iter()
+                .find(|preset| preset.id == "laptop")
+                .unwrap()
+                .maps,
+            preset.maps,
+            "the preset itself never changes"
+        );
+    }
+
+    #[test]
+    fn repeated_preset_copies_get_numbered_names() {
+        let mut app = app();
+        let _ = app.update(Message::UsePreset("gaming".to_owned()));
+        let _ = app.update(Message::UsePreset("gaming".to_owned()));
+        assert_eq!(app.profile_name(), "Gaming 2");
+    }
+
+    #[test]
+    fn renaming_the_active_profile() {
+        let mut app = app();
+        let _ = app.update(Message::RenameToggle);
+        assert_eq!(app.rename.as_deref(), Some("Default"));
+
+        let _ = app.update(Message::RenameInput("Typing".to_owned()));
+        let _ = app.update(Message::RenameCommit);
+        assert_eq!(app.profile_name(), "Typing");
+        assert!(app.rename.is_none());
+
+        // A blank name cancels instead of renaming.
+        let _ = app.update(Message::RenameToggle);
+        let _ = app.update(Message::RenameInput("   ".to_owned()));
+        let _ = app.update(Message::RenameCommit);
+        assert_eq!(app.profile_name(), "Typing");
+
+        // The tester never edits state.
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::RenameToggle);
+        assert!(app.rename.is_none());
     }
 
     #[test]

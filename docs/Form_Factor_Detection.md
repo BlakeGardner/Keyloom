@@ -82,9 +82,9 @@ With several keyboards connected (`detected_form`):
 2. Within the preferred group, the **largest** board wins, so no
    physically present key is hidden from the deck.
 
-Disconnected devices are ignored. The result is applied once, when the
-startup device scan reports in — and only if the user hasn't already
-picked a size manually.
+Disconnected devices are ignored. The result is applied when the startup
+device scan reports in and again whenever a keyboard is plugged in later —
+but only until the user picks a size manually.
 
 ## ANSI/ISO detection
 
@@ -104,9 +104,6 @@ default to ANSI.
 
 ## Known limitations
 
-- Detection runs once, against the startup device list. Keyboards
-  plugged in later don't re-trigger it (tracked in
-  [Functionality_TODO.md](Functionality_TODO.md) §4).
 - Without read access to `/dev/input` (the `input` group), no devices are
   visible and the deck defaults to 100%.
 - Over-reporting laptop and compact keyboards without a size in their

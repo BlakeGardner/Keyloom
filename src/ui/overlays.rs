@@ -51,11 +51,35 @@ fn popup_row<'a>(
         .into()
 }
 
-/// The profile picker popover.
+/// The profile picker popover: the user's profiles, the built-in
+/// presets (read-only templates copied on selection), and the
+/// rename / duplicate / new actions.
 pub fn profiles_popup(app: &App) -> Element<'_, Message> {
-    let mut column = widget::column::with_capacity(app.profiles.len() + 2).spacing(2);
+    let presets = crate::ui::model::presets();
+    let mut column =
+        widget::column::with_capacity(app.profiles.len() + presets.len() + 6).spacing(2);
+
+    column = column.push(container(eyebrow("Your profiles")).padding(Padding {
+        top: 4.0,
+        right: 10.0,
+        bottom: 2.0,
+        left: 10.0,
+    }));
 
     for profile in &app.profiles {
+        let active = app.profile == profile.id;
+        // While renaming, the active profile's row becomes an input.
+        if active && let Some(name) = &app.rename {
+            column = column.push(
+                container(
+                    widget::text_input("Profile name", name)
+                        .on_input(Message::RenameInput)
+                        .on_submit(|_| Message::RenameCommit),
+                )
+                .padding([2, 4]),
+            );
+            continue;
+        }
         let count = app
             .profile_maps
             .get(&profile.id)
@@ -68,7 +92,7 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
         column = column.push(popup_row(
             profile.name.clone(),
             Some(txt(sub, 10.5, muted()).into()),
-            app.profile == profile.id,
+            active,
             Message::SelectProfile(profile.id.clone()),
         ));
     }
@@ -77,19 +101,53 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
         column =
             column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
         column = column.push(
-            widget::row::with_capacity(2)
+            container(
+                widget::column::with_capacity(2)
+                    .spacing(2)
+                    .push(eyebrow("Presets"))
+                    .push(txt("Selecting one adds an editable copy.", 10.5, muted())),
+            )
+            .padding(Padding {
+                top: 2.0,
+                right: 10.0,
+                bottom: 2.0,
+                left: 10.0,
+            }),
+        );
+        for preset in &presets {
+            column = column.push(popup_row(
+                preset.name.to_owned(),
+                Some(txt(preset.blurb.to_owned(), 10.5, muted()).into()),
+                false,
+                Message::UsePreset(preset.id.to_owned()),
+            ));
+        }
+
+        column =
+            column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
+        let action = |label: &'static str, message: Message| {
+            widget::button::custom(
+                txt(label, 11.5, oklch(0.9, 0.01, 152.0))
+                    .align_x(Alignment::Center)
+                    .width(Length::Fill),
+            )
+            .class(ghost_button())
+            .padding([6, 8])
+            .width(Length::Fill)
+            .on_press(message)
+        };
+        column = column.push(
+            widget::row::with_capacity(3)
                 .spacing(6)
-                .push(
-                    widget::button::custom(
-                        txt("Duplicate", 11.5, oklch(0.9, 0.01, 152.0))
-                            .align_x(Alignment::Center)
-                            .width(Length::Fill),
-                    )
-                    .class(ghost_button())
-                    .padding([6, 10])
-                    .width(Length::Fill)
-                    .on_press(Message::NewProfile { duplicate: true }),
-                )
+                .push(action(
+                    if app.rename.is_some() {
+                        "Cancel"
+                    } else {
+                        "Rename"
+                    },
+                    Message::RenameToggle,
+                ))
+                .push(action("Duplicate", Message::NewProfile { duplicate: true }))
                 .push(
                     widget::button::custom(
                         txt_semibold("New", 11.5, oklch(0.93, 0.02, 152.0))
@@ -97,7 +155,7 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
                             .width(Length::Fill),
                     )
                     .class(accent_button())
-                    .padding([6, 10])
+                    .padding([6, 8])
                     .width(Length::Fill)
                     .on_press(Message::NewProfile { duplicate: false }),
                 ),

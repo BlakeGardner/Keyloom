@@ -75,9 +75,12 @@ service itself yet.
 ## Profiles
 
 - Multiple named profiles, each with its own mappings and shortcut groups.
-- Profile switcher popover with new-profile and duplicate-profile actions.
-- Ships with demo profiles (Default, Laptop, Mac-style, Gaming, Mac + Cosmic)
-  that showcase mappings, swaps, device scopes, and shortcut groups.
+- Profile switcher popover with rename, new-profile, and duplicate-profile
+  actions; a fresh install starts with a single empty Default profile.
+- Built-in sample presets (Laptop, Mac-style, Gaming, Media F-row) listed in
+  their own labeled section of the switcher. Presets are read-only templates:
+  selecting one adds an editable copy to the user's profiles, so the preset
+  itself never changes.
 - "Reset all mappings" clears the active profile (undoable).
 
 ## Devices
@@ -86,8 +89,11 @@ service itself yet.
   the compositor still receives every event.
 - Detects readable keyboards at startup, distinguishes real keyboards from
   other input devices, and marks keyboards that disconnect.
-- Per-mapping device scope: "All keyboards" or one specific keyboard.
-  Detected keyboards replace the demo device list as soon as they appear.
+- Keyboards plugged in after launch are picked up by a background scan of
+  `/dev/input` and announced with a toast; a replugged keyboard replaces its
+  stale entry, and a selected device scope follows it to the new node.
+- Per-mapping device scope: "All keyboards" or one specific detected
+  keyboard, with an explicit empty state when none are readable.
 - Best-effort form-factor guess per device from its name and reported keys,
   used to pick the default deck (see
   [Form_Factor_Detection.md](Form_Factor_Detection.md)).
@@ -111,14 +117,15 @@ service itself yet.
 - Rule editor with **Record** buttons for both sides: hold modifiers and press
   a key on the physical keyboard to capture a chord; Escape cancels.
 - Add group, delete rule, and edit existing rules.
-- Demo groups on the Mac + Cosmic profile (desktop shortcuts, terminal
-  copy/paste translation, media keys that ignore modifiers).
+- Groups start empty for every profile; combo mappings made in the key
+  editor appear under an automatic "From the keyboard" group.
 
 ## Persistence and generated configuration
 
 - Profiles and their mappings (plus the active profile) are stored via
   cosmic-config under `~/.config/cosmic/io.github.blakegardner.Keyloom/`
-  and restored on launch; a fresh install seeds the demo profiles.
+  and restored on launch; a fresh install starts with one empty Default
+  profile (the sample presets are built in, not stored).
 - Every mapping or profile change regenerates a deterministic xremap
   document from the internal rule model and writes it to
   `$XDG_CONFIG_HOME/xremap/config.yml` (usually `~/.config`), so identical
@@ -143,8 +150,9 @@ language charmaps and typed-text preview were removed with it.
 ## Test coverage
 
 - Unit tests for the update logic in `src/app.rs`: mapping assignment, undo,
-  toast lifecycle, profile switching and duplication, editor/sheet state
-  transitions, hold mappings, combo rules, and onboarding.
+  toast lifecycle, profile switching, duplication, renaming, preset copies,
+  editor/sheet state transitions, hold mappings, combo rules, onboarding,
+  and device hotplug/replug handling.
 - Generator tests in `src/xremap.rs`: key-name translation coverage,
   deterministic golden output, tap/hold, swaps, disabled keys, device
   scoping, and foreign-file backup behavior. Generated documents

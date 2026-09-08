@@ -1,5 +1,5 @@
 //! UI data model ported from the design export's prototype script:
-//! key geometry, the action catalog, demo profiles, and shortcut groups,
+//! key geometry, the action catalog, and the built-in preset profiles,
 //! plus the per-form-factor deck assembly.
 
 use std::sync::LazyLock;
@@ -776,159 +776,78 @@ fn entry(code: &str, mapping: Mapping) -> (String, Mapping) {
     (code.to_owned(), mapping)
 }
 
-/// The demo profiles shipped with the design prototype.
-pub fn demo_profiles() -> Vec<(Profile, Maps)> {
-    let profile = |id: &str, name: &str| Profile {
-        id: id.to_owned(),
-        name: name.to_owned(),
+/// A built-in sample profile. Presets are read-only templates that live
+/// outside the user's profile list; picking one in the profile switcher
+/// creates an editable copy, so the preset itself never changes.
+#[derive(Clone, Debug)]
+pub struct Preset {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// One-line description shown in the profile switcher.
+    pub blurb: &'static str,
+    pub maps: Maps,
+}
+
+/// The sample presets shipped with the application. All mappings apply
+/// to every keyboard: presets cannot know which devices exist.
+pub fn presets() -> Vec<Preset> {
+    let preset = |id, name, blurb, maps| Preset {
+        id,
+        name,
+        blurb,
+        maps,
     };
 
     vec![
-        (profile("default", "Default"), Vec::new()),
-        (
-            profile("laptop", "Laptop"),
+        preset(
+            "laptop",
+            "Laptop",
+            "Caps Lock taps Escape, holds Control",
             vec![
                 entry(
                     "CapsLock",
-                    mapping("Escape", Some("Left Control"), "builtin", false),
+                    mapping("Escape", Some("Left Control"), "all", false),
                 ),
                 entry("ContextMenu", mapping("Left Super", None, "all", false)),
                 entry("F12", mapping("Play/Pause", None, "all", false)),
             ],
         ),
-        (
-            profile("mac", "Mac-style"),
+        preset(
+            "mac",
+            "Mac-style",
+            "Command-style modifiers, Caps Lock as Control",
             vec![
-                entry("MetaLeft", mapping("Left Alt", None, "apple", false)),
-                entry("AltLeft", mapping("Left Super", None, "apple", false)),
-                entry("CapsLock", mapping("Left Control", None, "apple", false)),
+                entry("MetaLeft", mapping("Left Alt", None, "all", false)),
+                entry("AltLeft", mapping("Left Super", None, "all", false)),
+                entry("CapsLock", mapping("Left Control", None, "all", false)),
             ],
         ),
-        (
-            profile("gaming", "Gaming"),
+        preset(
+            "gaming",
+            "Gaming",
+            "Disables Super and Caps Lock",
             vec![
                 entry("MetaLeft", mapping("Disabled", None, "all", false)),
                 entry("CapsLock", mapping("Disabled", None, "all", false)),
             ],
         ),
-        (
-            profile("cosmic", "Mac + Cosmic"),
+        preset(
+            "media",
+            "Media F-row",
+            "Function keys double as media keys (two-way)",
             vec![
-                entry("MetaLeft", mapping("Left Alt", None, "keychron", false)),
-                entry("AltLeft", mapping("Right Control", None, "keychron", false)),
-                entry(
-                    "AltRight",
-                    mapping("Right Control", None, "keychron", false),
-                ),
-                entry("MetaRight", mapping("Right Alt", None, "keychron", false)),
-                entry("CapsLock", mapping("Left Super", None, "keychron", false)),
-                entry("F1", mapping("Brightness Down", None, "keychron", true)),
-                entry("F2", mapping("Brightness Up", None, "keychron", true)),
-                entry("F7", mapping("Previous", None, "keychron", true)),
-                entry("F8", mapping("Play/Pause", None, "keychron", true)),
-                entry("F9", mapping("Next", None, "keychron", true)),
-                entry("F10", mapping("Mute", None, "keychron", true)),
-                entry("F11", mapping("Volume Down", None, "keychron", true)),
-                entry("F12", mapping("Volume Up", None, "keychron", true)),
+                entry("F1", mapping("Brightness Down", None, "all", true)),
+                entry("F2", mapping("Brightness Up", None, "all", true)),
+                entry("F7", mapping("Previous", None, "all", true)),
+                entry("F8", mapping("Play/Pause", None, "all", true)),
+                entry("F9", mapping("Next", None, "all", true)),
+                entry("F10", mapping("Mute", None, "all", true)),
+                entry("F11", mapping("Volume Down", None, "all", true)),
+                entry("F12", mapping("Volume Up", None, "all", true)),
             ],
         ),
     ]
 }
-
-fn chord(mods: &[&str], key: &str) -> Chord {
-    Chord {
-        mods: mods.iter().map(|m| (*m).to_owned()).collect(),
-        key: key.to_owned(),
-    }
-}
-
-fn rule(from: Chord, to: Chord, note: &str) -> Rule {
-    Rule {
-        from,
-        to,
-        note: note.to_owned(),
-    }
-}
-
-/// The demo shortcut groups for the `Mac + Cosmic` profile.
-pub fn demo_groups() -> Vec<(String, Vec<Group>)> {
-    let term_rules: Vec<Rule> = [
-        ("T", "New tab"),
-        ("N", "New window"),
-        ("W", "Close tab"),
-        ("Q", "Close window"),
-        ("C", "Copy"),
-        ("V", "Paste"),
-        ("F", "Find"),
-        ("G", "Find next"),
-        ("H", "Find previous"),
-        ("J", "Clear highlight"),
-    ]
-    .iter()
-    .map(|(key, note)| {
-        rule(
-            chord(&["R Ctrl"], key),
-            chord(&["Ctrl", "Shift"], key),
-            note,
-        )
-    })
-    .collect();
-
-    let media_rules: Vec<Rule> = [
-        "Volume Up",
-        "Volume Down",
-        "Mute",
-        "Play/Pause",
-        "Next",
-        "Previous",
-    ]
-    .iter()
-    .map(|key| rule(chord(&["Any"], key), chord(&[], key), ""))
-    .collect();
-
-    vec![(
-        "cosmic".to_owned(),
-        vec![
-            Group {
-                id: "g1".to_owned(),
-                name: "Cosmic Desktop".to_owned(),
-                apps: Vec::new(),
-                enabled: true,
-                any_mod: false,
-                rules: vec![
-                    rule(chord(&["R Ctrl"], "Space"), chord(&[], "Super"), "Launcher"),
-                    rule(chord(&[], "F3"), chord(&["Super"], "W"), "Workspaces"),
-                    rule(chord(&[], "F4"), chord(&["Super"], "A"), "Applications"),
-                ],
-            },
-            Group {
-                id: "g2".to_owned(),
-                name: "Terminals".to_owned(),
-                apps: vec!["Cosmic Terminal".to_owned()],
-                enabled: true,
-                any_mod: false,
-                rules: term_rules,
-            },
-            Group {
-                id: "g3".to_owned(),
-                name: "Media keys ignore modifiers".to_owned(),
-                apps: Vec::new(),
-                enabled: true,
-                any_mod: true,
-                rules: media_rules,
-            },
-        ],
-    )]
-}
-
-/// Demo device scopes from the prototype, used until real keyboards are
-/// discovered (and to label the demo profiles' scopes).
-pub const DEMO_DEVICES: &[(&str, &str, &str)] = &[
-    ("all", "All keyboards", "Demo device choices"),
-    ("builtin", "Built-in keyboard", "Demo laptop keyboard"),
-    ("keychron", "Keychron K2 Pro", "Demo USB keyboard"),
-    ("apple", "Apple Magic Keyboard", "Demo Bluetooth keyboard"),
-];
 
 /// The three onboarding steps.
 pub const ONBOARDING: &[(&str, &str, &str, &str, &str)] = &[
