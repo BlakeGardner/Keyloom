@@ -51,6 +51,12 @@ fn popup_row<'a>(
         .into()
 }
 
+/// Stable widget id for the profile rename input so it can be
+/// focused when rename mode is entered.
+pub fn rename_input_id() -> widget::Id {
+    widget::Id::new("profile-rename-input")
+}
+
 /// The profile picker popover: the user's profiles, the built-in
 /// presets (read-only templates copied on selection), and the
 /// rename / duplicate / new actions.
@@ -73,6 +79,7 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
             column = column.push(
                 container(
                     widget::text_input("Profile name", name)
+                        .id(rename_input_id())
                         .on_input(Message::RenameInput)
                         .on_submit(|_| Message::RenameCommit),
                 )

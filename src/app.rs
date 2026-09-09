@@ -1092,6 +1092,15 @@ impl cosmic::Application for App {
                     } else {
                         Some(self.profile_name().to_owned())
                     };
+                    if self.rename.is_some() {
+                        // Focus the rename input and select the current
+                        // name so the user can edit it immediately.
+                        let id = ui::overlays::rename_input_id();
+                        return Task::batch([
+                            cosmic::widget::text_input::focus(id.clone()),
+                            cosmic::widget::text_input::select_all(id),
+                        ]);
+                    }
                 }
             }
             Message::RenameInput(text) => {
