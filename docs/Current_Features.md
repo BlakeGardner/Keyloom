@@ -82,7 +82,8 @@ yet install xremap, register the unit, or set up permissions.
 - Profile switcher popover with rename, new-profile, and duplicate-profile
   actions, plus per-row deletion behind a confirmation dialog. The active
   profile can't be deleted, so at least one profile always remains;
-  deletion is undoable from the toast.
+  deletion is undoable from the toast. While closed, the switcher shows
+  a tooltip explaining what profiles are.
 - A fresh install seeds an empty Default profile plus editable starter
   profiles (Laptop, Mac-style, Gaming, Media F-row). They are ordinary
   profiles from then on: renamed, edited, and stored like any other.

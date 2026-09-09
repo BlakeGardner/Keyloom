@@ -1,6 +1,8 @@
 //! Native header-bar content: brand, profile picker, navigation tabs,
 //! and the overflow menu (`.app-header` in the export).
 
+use std::time::Duration;
+
 use cosmic::iced::{Alignment, Border, Length};
 use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
@@ -8,7 +10,7 @@ use cosmic::{Element, theme as ctheme};
 use crate::app::{App, Message, Popover, View};
 use crate::service;
 use crate::ui::overlays;
-use crate::ui::theme::{accent, black, header_chip, muted, oklch, tab};
+use crate::ui::theme::{accent, black, header_chip, muted, oklch, tab, white};
 use crate::ui::{txt, txt_semibold};
 
 /// Brand dot, product name, and the profile picker.
@@ -60,7 +62,31 @@ pub fn start(app: &App) -> Vec<Element<'_, Message>> {
             .on_close(Message::CloseOverlays)
             .into()
     } else {
-        profile.into()
+        // A quick explanation of profiles while the picker is closed.
+        widget::tooltip(
+            profile,
+            txt(
+                "Each profile is its own set of remaps and shortcuts. \
+                 Click to switch or manage profiles.",
+                11.5,
+                oklch(0.88, 0.01, 152.0),
+            )
+            .width(Length::Fixed(220.0)),
+            widget::tooltip::Position::Bottom,
+        )
+        .delay(Duration::from_millis(500))
+        .gap(6)
+        .padding(10)
+        .class(ctheme::Container::custom(|_| container::Style {
+            background: Some(oklch(0.26, 0.008, 152.0).into()),
+            border: Border {
+                color: white(0.12),
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..container::Style::default()
+        }))
+        .into()
     };
 
     vec![
