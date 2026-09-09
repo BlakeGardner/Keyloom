@@ -179,7 +179,7 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
     };
     section = section.push(txt(
         format!(
-            "{hint} · Applies to {}. Changes are saved to your xremap config immediately.",
+            "{hint} · Applies to {}. Changes save and apply automatically.",
             app.device_label(&app.device)
         ),
         13.0,

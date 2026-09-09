@@ -854,7 +854,7 @@ pub const ONBOARDING: &[(&str, &str, &str, &str, &str)] = &[
     (
         "A",
         "Your keyboard, your rules",
-        "Press a key to see it light up. Mappings you add are saved and written to your xremap configuration automatically.",
+        "Press a key to see it light up. Mappings you add are saved and applied automatically.",
         "Continue with an example",
         "Waiting for input…",
     ),

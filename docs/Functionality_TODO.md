@@ -28,8 +28,9 @@ pick up on its own.
 - [ ] ~~**Copy YAML button.**~~ Superseded by automatic writing.
 - [ ] ~~**Empty state for the preview.**~~ Superseded: an empty profile writes
   `modmap: []`.
-- [ ] **Boundary messaging.** Make it clear in the UI that the config is
-  written for xremap but the service is not yet managed by this app.
+- [ ] ~~**Boundary messaging.**~~ Superseded: the header now shows the remap
+  service state, and changes apply themselves by restarting the service, so
+  the app itself communicates where its management currently ends.
 - [ ] ~~**Session-only notice.**~~ Superseded: mappings now persist via
   cosmic-config.
 - [x] **Validate against a recorded xremap version.** Check representative
@@ -107,18 +108,44 @@ pick up on its own.
 
 ## 6. Apply and service management ("Apply" / "Manage" iterations)
 
-- [ ] **Detect an xremap installation** and show its status without blocking
-  any editing or copying when it is absent.
+> **Current assumption:** xremap is already installed on `$PATH`, registered as
+> a systemd *user* unit named `xremap.service`, and the permissions from
+> xremap's [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md)
+> are in place (user in the `input` group for `/dev/input` access, a udev rule
+> granting the `input` group access to `/dev/uinput`, and the `uinput` module
+> loaded). Keyloom talks to the unit through `systemctl --user`
+> (`src/service.rs`). Removing these assumptions is tracked in
+> [§9](#9-installation-and-distribution-support-long-term).
+
+- [x] **Show the service status** without blocking any editing when it is
+  absent. (A header chip shows the state in deliberately generic wording —
+  Remapping Enabled / Off / Failed / not set up / Unavailable, plus a
+  transient Applying Remaps state while a change makes its way to the
+  service — queried at startup and re-checked on click; xremap is never
+  named in the UI. It reflects the unit, not yet whether an xremap binary
+  exists at all.)
 - [x] **Write the generated config to the user's xremap config path** with
   validation and clear failure feedback. (Written to
   `$XDG_CONFIG_HOME/xremap/config.yml`; hand-written files are backed up
   before the first overwrite, and write failures surface as a toast.)
-- [ ] **Reload/apply on demand** so saved changes take effect.
-- [ ] **Service controls:** status display plus explicit start, stop, reload,
-  and restart.
+- [x] **Reload/apply on demand** so saved changes take effect. (Changes apply
+  themselves: every change that actually rewrites the config schedules a
+  debounced restart of the `xremap.service` user unit, paced to stay under
+  systemd's start rate limit. Success is silent — the change's own toast is
+  the confirmation — and failures surface the systemctl error as a toast.
+  There is deliberately no Apply button.)
+- [ ] **Full service controls:** explicit start, stop, and enable/disable on
+  login, beyond the restart that Apply performs.
+- [ ] **Point the unit at the generated config.** Auto-apply restarts
+  whatever `ExecStart` the unit has; verify (or help fix) that the unit
+  actually reads `$XDG_CONFIG_HOME/xremap/config.yml` instead of some other
+  file. A unit running with `--watch=config` would even make restarts
+  unnecessary.
 - [ ] **Permission guidance.** Detect missing `/dev/input` read access (the
   `input` group) and walk the user through fixing it instead of failing
-  silently.
+  silently. Per xremap's running-without-sudo guide this also covers write
+  access to `/dev/uinput` (udev rule for the `input` group) and the `uinput`
+  kernel module being loaded.
 
 ## 7. Advanced remapping in generated config ("Expand" iteration)
 
@@ -142,3 +169,33 @@ still only previewed in memory.
 - [ ] **Desktop entry and icon** in `data/` so the app installs and launches
   from a menu.
 - [ ] **Choose a license** (README currently says TBD).
+
+## 9. Installation and distribution support (long term)
+
+Removing the assumptions listed in [§6](#6-apply-and-service-management-apply--manage-iterations):
+today Keyloom requires a preinstalled xremap on `$PATH`, a registered
+`xremap.service` systemd user unit, and manually configured permissions.
+
+- [ ] **Detect an xremap installation** (binary on `$PATH`, its version) as
+  distinct from the service unit's state, without blocking any editing when
+  it is absent.
+- [ ] **Per-distribution dependency strategy.** Decide how xremap gets onto
+  each supported distro: declare it as a package dependency where a package
+  exists (e.g. Fedora copr, AUR, Gentoo guru), bundle/ship our own copy where
+  none does, or install via `cargo install` as a fallback. Track this per
+  packaging target (deb for Pop!_OS/Ubuntu first, Flatpak needs its own
+  answer since a sandboxed app cannot manage host services directly).
+- [ ] **Service-manager abstraction.** `src/service.rs` shells out to
+  `systemctl --user` today; keep status/restart behind one interface so other
+  supervision schemes (system-level systemd unit, runit/OpenRC, plain
+  desktop-autostart process) can slot in per distro. Also make the unit name
+  configurable instead of the hardcoded `xremap.service`.
+- [ ] **First-time setup wizard.** Guided flow that takes a machine from
+  nothing to a working setup: install xremap (per the strategy above), add
+  the user to the `input` group, install the udev rule granting the `input`
+  group access to `/dev/uinput`, ensure the `uinput` module loads at boot,
+  then register and enable an `xremap.service` user unit pointing at the
+  generated config (steps from xremap's
+  [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md)).
+  Needs privilege escalation (polkit/pkexec) for the group, udev, and module
+  steps, and must explain the keylogging implication of joining `input`.

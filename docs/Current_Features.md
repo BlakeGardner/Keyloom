@@ -9,16 +9,20 @@ target.
 for the current session. Profiles and key mappings, however, are persisted
 via cosmic-config and translated into an xremap configuration file at
 `~/.config/xremap/config.yml` on every change (see "Persistence and
-generated configuration" below). Keyloom does not run or manage the xremap
-service itself yet.
+generated configuration" below). Keyloom applies changes by restarting an
+existing `xremap.service` systemd user unit automatically, but it does not
+yet install xremap, register the unit, or set up permissions.
 
 ## Application shell
 
 - Native Rust + libcosmic application; runs on Wayland and X11.
 - Follows the system light/dark theme.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
-  Shortcuts), and an overflow menu (show first-run setup, reset all mappings,
-  about).
+  Shortcuts), a remap status chip (Remapping Enabled / Off / Failed /
+  not set up / Unavailable, plus a transient Applying Remaps state while a
+  change is applied — generic wording that never names xremap; click to
+  re-check), and an overflow menu (show first-run setup, reset all
+  mappings, about).
 - Three-step onboarding flow on first launch, including a one-click
   Caps Lock → Escape example; can be skipped or reopened from the menu.
 - Confirmation toasts for every destructive or notable change, with a working
@@ -140,6 +144,27 @@ service itself yet.
 - Shortcut groups are not yet part of the generated output or the stored
   model.
 
+## Applying (xremap service)
+
+- Changes apply themselves — there is no Apply button. Every change that
+  actually rewrites the generated config schedules a restart of the
+  `xremap.service` systemd user unit (`systemctl --user restart`) after a
+  short debounce, so xremap re-reads the file; restarts are paced to stay
+  under systemd's default start rate limit. Success is silent (the change's
+  own toast is the confirmation); failures surface systemctl's error as a
+  toast.
+- The unit's state is queried at startup (`systemctl --user show`) and shown
+  as a chip in the header with generic wording: Remapping Enabled, Remapping
+  Off, Remapping Failed, Remapping not set up (no such unit), or Remapping
+  Unavailable (no systemd). While a change is on its way to the service —
+  from the debounce until the restart settles — the chip shows Applying
+  Remaps with an amber dot. Clicking the chip re-checks. An absent or broken
+  service never blocks editing, and auto-apply skips restarting when there
+  is no unit to restart.
+- Keyloom assumes xremap is installed and the user unit plus permissions are
+  already set up; installing or registering them is not handled yet (see
+  [Functionality_TODO.md](Functionality_TODO.md) §6 and §9).
+
 ## Layout engine (retired)
 
 The pre-redesign layout system was retired: form factors and ANSI/ISO
@@ -152,7 +177,7 @@ language charmaps and typed-text preview were removed with it.
 - Unit tests for the update logic in `src/app.rs`: mapping assignment, undo,
   toast lifecycle, profile switching, duplication, renaming, preset copies,
   editor/sheet state transitions, hold mappings, combo rules, onboarding,
-  and device hotplug/replug handling.
+  apply/service-status handling, and device hotplug/replug handling.
 - Generator tests in `src/xremap.rs`: key-name translation coverage,
   deterministic golden output, tap/hold, swaps, disabled keys, device
   scoping, and foreign-file backup behavior. Generated documents

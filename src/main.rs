@@ -5,6 +5,7 @@ mod app;
 mod config;
 mod keyboard;
 mod monitor;
+mod service;
 mod ui;
 mod xremap;
 

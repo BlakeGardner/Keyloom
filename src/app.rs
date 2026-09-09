@@ -3,7 +3,8 @@
 //! The interface follows the design export in `design/`. Profiles and
 //! their mappings persist via cosmic-config, and every change
 //! regenerates the xremap configuration written to the user's config
-//! directory; shortcut groups are still previewed in memory only.
+//! directory and restarts the xremap user service (debounced) so it
+//! takes effect; shortcut groups are still previewed in memory only.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -18,12 +19,22 @@ use cosmic::prelude::*;
 use crate::config::{self, KeyloomConfig};
 use crate::keyboard;
 use crate::monitor;
+use crate::service;
 use crate::ui;
 use crate::ui::model::{self, Chord, Group, Mapping, Maps, Profile, Rule, key_by_evdev, key_name};
 use crate::xremap;
 
 /// How long the bottom sheet takes to rise (the design's `kbRise`).
 const SHEET_RISE: Duration = Duration::from_millis(220);
+
+/// Quiet period between the last config change and the automatic
+/// service restart that applies it.
+const APPLY_DEBOUNCE: Duration = Duration::from_millis(600);
+
+/// Minimum spacing between restarts. Rapid-fire restarts would trip
+/// systemd's default start rate limit (5 starts per 10 s) and leave
+/// the unit failed, so applies are paced well under it.
+const APPLY_MIN_GAP: Duration = Duration::from_millis(2500);
 
 /// Main navigation tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +88,19 @@ pub struct Toast {
 pub enum Undo {
     Maps(HashMap<String, Maps>),
     Groups(HashMap<String, Vec<Group>>),
+}
+
+/// What a due apply should do, given the current state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApplyStep {
+    /// Superseded by a newer change whose own apply is still coming.
+    Stale,
+    /// There is no unit to restart; nothing will apply.
+    Skip,
+    /// Busy or too soon after the last restart; retry after the delay.
+    Wait(Duration),
+    /// Restart the service now.
+    Restart,
 }
 
 /// The rule opened in the shortcut editor (`rule` is `None` while a
@@ -149,6 +173,15 @@ pub enum Message {
     CloseEdit,
     Undo,
     ToastExpired(u64),
+    /// A debounced apply came due; the id lets a newer change
+    /// supersede it. Applying restarts the xremap service so it
+    /// re-reads the written config.
+    Apply(u64),
+    /// Result of the restart an apply performed.
+    Applied(Result<(), String>),
+    /// Re-query the xremap service state (header status chip).
+    RefreshService,
+    ServiceStatus(service::Status),
     /// Redraw tick while the bottom sheet rises.
     SheetAnimate,
     MenuShowSetup,
@@ -207,6 +240,22 @@ pub struct App {
     pub monitor_started: bool,
     pub pressed: HashSet<(PathBuf, u16)>,
     pub last: Option<LastKey>,
+    /// Last known state of the xremap service (None until queried).
+    pub service: Option<service::Status>,
+    /// Generation of the latest scheduled apply; a due apply carrying
+    /// an older id has been superseded and is dropped.
+    apply_seq: u64,
+    /// An apply was scheduled during this update pass and its
+    /// debounce task still has to be spawned.
+    apply_pending: bool,
+    /// A change is on its way to the running service — from being
+    /// scheduled until its restart settles (or is skipped). Drives
+    /// the header's "Applying Remaps" state.
+    apply_outstanding: bool,
+    /// The generation a restart in flight covers (None when idle).
+    applying: Option<u64>,
+    /// When the last restart was issued, for pacing.
+    last_apply: Option<Instant>,
     /// Persistent settings store (None when unavailable or in tests).
     settings: Option<cosmic_config::Config>,
 }
@@ -356,11 +405,14 @@ impl App {
     }
 
     /// Save the configuration model and regenerate the xremap file.
-    /// Called after every change to profiles or their mappings.
+    /// Called after every change to profiles or their mappings; a
+    /// changed file schedules the debounced apply.
     fn persist(&mut self) {
         // Tests exercise the update loop; never touch the real
-        // ~/.config from them.
+        // ~/.config from them. The apply is still scheduled so the
+        // debounce logic stays observable (its tasks never run).
         if cfg!(test) {
+            self.schedule_apply();
             return;
         }
         if let Some(settings) = &self.settings {
@@ -386,16 +438,66 @@ impl App {
     fn write_xremap(&mut self, overwrite_foreign: bool) {
         let yaml = xremap::generate(self.maps(), |id| self.device_label(id));
         match xremap::write(&yaml, overwrite_foreign) {
+            // Only a real content change warrants a service restart.
+            Ok(xremap::WriteOutcome::Written(_)) => self.schedule_apply(),
+            Ok(xremap::WriteOutcome::Unchanged(_)) => {}
             Ok(xremap::WriteOutcome::SkippedForeign(path)) => {
                 eprintln!(
                     "keyloom: leaving existing xremap config untouched: {}",
                     path.display()
                 );
             }
-            Ok(_) => {}
             Err(err) => {
-                self.flash("Could not write xremap config", err.to_string());
+                self.flash("Could not save remaps", err.to_string());
             }
+        }
+    }
+
+    /// Note that the on-disk config changed: the service should be
+    /// restarted once changes stop for a moment. The debounce task is
+    /// spawned by [`Self::pending_apply`] as the update pass ends.
+    fn schedule_apply(&mut self) {
+        self.apply_seq += 1;
+        self.apply_pending = true;
+        self.apply_outstanding = true;
+    }
+
+    /// Whether a change is still on its way to the running service
+    /// (debounce pending or restart in flight).
+    pub fn apply_in_progress(&self) -> bool {
+        self.apply_outstanding || self.applying.is_some()
+    }
+
+    /// The debounce task for a scheduled apply, if one is due.
+    fn pending_apply(&mut self) -> Task<Message> {
+        if !self.apply_pending {
+            return Task::none();
+        }
+        self.apply_pending = false;
+        let seq = self.apply_seq;
+        cosmic::task::future(async move {
+            tokio::time::sleep(APPLY_DEBOUNCE).await;
+            Message::Apply(seq)
+        })
+    }
+
+    /// Decide what a due [`Message::Apply`] should do right now.
+    fn apply_step(&self, seq: u64) -> ApplyStep {
+        // A newer change owns the apply.
+        if seq != self.apply_seq {
+            return ApplyStep::Stale;
+        }
+        // Without a manageable unit a restart cannot help (the
+        // status chip tells why).
+        if !self.service.is_none_or(service::Status::manageable) {
+            return ApplyStep::Skip;
+        }
+        if self.applying.is_some() {
+            return ApplyStep::Wait(APPLY_DEBOUNCE);
+        }
+        match self.last_apply.map(|last| last.elapsed()) {
+            Some(elapsed) if elapsed < APPLY_MIN_GAP => ApplyStep::Wait(APPLY_MIN_GAP - elapsed),
+            _ => ApplyStep::Restart,
         }
     }
 
@@ -443,7 +545,7 @@ impl App {
         let device = self.device_label(&self.device.clone()).to_lowercase();
         self.flash(
             format!("{}{held} → {action}", key_name(code)),
-            format!("Saved to xremap config · {device}"),
+            format!("applies automatically · {device}"),
         );
         self.persist();
     }
@@ -544,7 +646,7 @@ impl App {
         }
         self.flash(
             format!("{} back to default", key_name(code)),
-            "Saved to xremap config",
+            "applies automatically",
         );
         self.persist();
     }
@@ -886,6 +988,12 @@ impl cosmic::Application for App {
             monitor_started: false,
             pressed: HashSet::new(),
             last: None,
+            service: None,
+            apply_seq: 0,
+            apply_pending: false,
+            apply_outstanding: false,
+            applying: None,
+            last_apply: None,
             settings,
         };
 
@@ -895,8 +1003,12 @@ impl cosmic::Application for App {
         if !cfg!(test) {
             app.write_xremap(false);
         }
+        // Never restart the remapper just because the app opened; the
+        // next real change applies any startup rewrite along with it.
+        app.apply_pending = false;
+        app.apply_outstanding = false;
 
-        (app, Task::none())
+        (app, service_status_task())
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
@@ -963,10 +1075,13 @@ impl cosmic::Application for App {
                 );
                 self.persist();
                 // The profile-switch confirmation dismisses itself.
-                return cosmic::task::future(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
-                    Message::ToastExpired(toast)
-                });
+                return Task::batch([
+                    self.pending_apply(),
+                    cosmic::task::future(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                        Message::ToastExpired(toast)
+                    }),
+                ]);
             }
             Message::NewProfile { duplicate } => self.create_profile(duplicate),
             Message::UsePreset(id) => self.use_preset(&id),
@@ -1212,6 +1327,38 @@ impl cosmic::Application for App {
                     self.toast = None;
                 }
             }
+            Message::Apply(seq) => match self.apply_step(seq) {
+                ApplyStep::Stale => {}
+                ApplyStep::Skip => self.apply_outstanding = false,
+                ApplyStep::Wait(delay) => {
+                    return cosmic::task::future(async move {
+                        tokio::time::sleep(delay).await;
+                        Message::Apply(seq)
+                    });
+                }
+                ApplyStep::Restart => {
+                    self.applying = Some(seq);
+                    self.last_apply = Some(Instant::now());
+                    return cosmic::task::future(async {
+                        Message::Applied(service::restart().await)
+                    });
+                }
+            },
+            Message::Applied(result) => {
+                // A change made during the restart keeps the applying
+                // state alive: its own apply is still on the way.
+                if self.applying.take() == Some(self.apply_seq) {
+                    self.apply_outstanding = false;
+                }
+                // Success is silent — the change's own toast already
+                // confirmed it. Either way, reflect the service state.
+                if let Err(err) = result {
+                    self.flash("Could not apply remaps", err);
+                }
+                return service_status_task();
+            }
+            Message::RefreshService => return service_status_task(),
+            Message::ServiceStatus(status) => self.service = Some(status),
             // The redraw itself re-reads the animation clock.
             Message::SheetAnimate => {}
             Message::MenuShowSetup => {
@@ -1233,7 +1380,7 @@ impl cosmic::Application for App {
                 self.undo = None;
                 self.flash(
                     "Keyloom",
-                    "Mappings are saved and written to your xremap config automatically.",
+                    "Mappings are saved and applied automatically as you edit.",
                 );
             }
             Message::SkipOnboarding => {
@@ -1336,7 +1483,9 @@ impl cosmic::Application for App {
             },
         }
 
-        Task::none()
+        // Any arm that persisted a change lands here; spawn the
+        // debounced apply for it.
+        self.pending_apply()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1370,6 +1519,11 @@ impl cosmic::Application for App {
 /// Adapts the evdev watcher into this app's message stream.
 fn monitor_stream() -> impl Stream<Item = Message> + Send {
     monitor::watch().map(Message::Monitor)
+}
+
+/// One-off query of the xremap service state.
+fn service_status_task() -> Task<Message> {
+    cosmic::task::future(async { Message::ServiceStatus(service::status().await) })
 }
 
 #[cfg(test)]
@@ -1433,6 +1587,135 @@ mod tests {
 
         let toast = app.toast.as_ref().expect("newer toast survives");
         assert_eq!(toast.text, "A → Escape");
+    }
+
+    #[test]
+    fn changes_schedule_a_debounced_apply() {
+        let mut app = app();
+        assert_eq!(app.apply_seq, 0, "nothing to apply on a fresh start");
+
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        assert_eq!(app.apply_seq, 1, "a mapping change schedules an apply");
+
+        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        assert_eq!(app.apply_seq, 2, "each change supersedes the last");
+    }
+
+    #[test]
+    fn apply_restarts_only_for_the_newest_change() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let seq = app.apply_seq;
+
+        // An apply superseded by a newer change does nothing.
+        let _ = app.update(Message::Apply(seq - 1));
+        assert!(app.applying.is_none());
+
+        let _ = app.update(Message::Apply(seq));
+        assert!(app.applying.is_some(), "the current apply restarts");
+
+        // Success is silent: the mapping's own toast stays put.
+        let before = app.toast.as_ref().map(|toast| toast.text.clone());
+        let _ = app.update(Message::Applied(Ok(())));
+        assert!(app.applying.is_none());
+        assert_eq!(app.toast.as_ref().map(|toast| toast.text.clone()), before);
+    }
+
+    #[test]
+    fn applying_state_spans_schedule_to_settled_restart() {
+        let mut app = app();
+        assert!(!app.apply_in_progress());
+
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        assert!(
+            app.apply_in_progress(),
+            "a scheduled apply shows as applying"
+        );
+
+        let _ = app.update(Message::Apply(app.apply_seq));
+        assert!(app.apply_in_progress(), "so does the restart in flight");
+
+        let _ = app.update(Message::Applied(Ok(())));
+        assert!(!app.apply_in_progress(), "settled once the restart returns");
+    }
+
+    #[test]
+    fn a_change_during_the_restart_keeps_applying_shown() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let _ = app.update(Message::Apply(app.apply_seq));
+
+        // A second change lands while the restart is in flight.
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+
+        let _ = app.update(Message::Applied(Ok(())));
+        assert!(
+            app.apply_in_progress(),
+            "the newer change's apply is still on the way"
+        );
+
+        // Once the pacing gap has passed, the retry restarts and the
+        // applying state settles with it.
+        app.last_apply = None;
+        let _ = app.update(Message::Apply(app.apply_seq));
+        let _ = app.update(Message::Applied(Ok(())));
+        assert!(!app.apply_in_progress());
+    }
+
+    #[test]
+    fn applies_wait_or_skip_as_the_service_allows() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let seq = app.apply_seq;
+
+        // While a restart is in flight, a due apply waits its turn.
+        app.applying = Some(seq);
+        assert!(matches!(app.apply_step(seq), ApplyStep::Wait(_)));
+        app.applying = None;
+
+        // Right after a restart, the next one waits out the gap that
+        // keeps us under systemd's start rate limit.
+        app.last_apply = Some(Instant::now());
+        assert!(matches!(app.apply_step(seq), ApplyStep::Wait(_)));
+        app.last_apply = None;
+
+        // Stale applies are dropped; without a unit nothing can run.
+        assert_eq!(app.apply_step(seq - 1), ApplyStep::Stale);
+        app.service = Some(service::Status::NotFound);
+        assert_eq!(app.apply_step(seq), ApplyStep::Skip);
+
+        // A skipped apply also stops showing as in progress.
+        let _ = app.update(Message::Apply(seq));
+        assert!(!app.apply_in_progress());
+
+        app.service = Some(service::Status::Active);
+        assert_eq!(app.apply_step(seq), ApplyStep::Restart);
+    }
+
+    #[test]
+    fn failed_apply_surfaces_the_error() {
+        let mut app = app();
+        let _ = app.update(Message::Applied(Err("unit not loaded".to_owned())));
+
+        assert!(app.applying.is_none());
+        let toast = app.toast.as_ref().expect("failure is explained");
+        assert_eq!(toast.text, "Could not apply remaps");
+        assert_eq!(toast.sub, "unit not loaded");
+    }
+
+    #[test]
+    fn service_status_is_recorded() {
+        let mut app = app();
+        assert_eq!(app.service, None, "state is unknown until queried");
+
+        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        assert_eq!(app.service, Some(service::Status::Active));
     }
 
     #[test]

@@ -6,8 +6,9 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message, Popover, View};
+use crate::service;
 use crate::ui::overlays;
-use crate::ui::theme::{accent, black, header_chip, oklch, tab};
+use crate::ui::theme::{accent, black, header_chip, muted, oklch, tab};
 use crate::ui::{txt, txt_semibold};
 
 /// Brand dot, product name, and the profile picker.
@@ -115,8 +116,48 @@ pub fn center(app: &App) -> Vec<Element<'_, Message>> {
     vec![nav.into()]
 }
 
-/// The `⋯` overflow menu button.
+/// The remap status chip and `⋯` overflow menu. Changes apply on
+/// their own, so there is no Apply control here.
 pub fn end(app: &App) -> Vec<Element<'_, Message>> {
+    // Small dot + state label; clicking re-checks. xremap and systemd
+    // are implementation details the wording deliberately avoids.
+    let (dot_color, label) = if app.apply_in_progress() {
+        // A change is on its way to the running service.
+        (oklch(0.78, 0.13, 85.0), "Applying Remaps")
+    } else {
+        match app.service {
+            Some(status) => (
+                match status {
+                    service::Status::Active => accent(),
+                    service::Status::Failed => oklch(0.62, 0.19, 25.0),
+                    _ => muted(),
+                },
+                status.label(),
+            ),
+            None => (muted(), "Checking remapping…"),
+        }
+    };
+    let status_dot = container(widget::Space::new().width(7.0).height(7.0)).class(
+        ctheme::Container::custom(move |_| container::Style {
+            background: Some(dot_color.into()),
+            border: Border {
+                radius: 4.0.into(),
+                ..Border::default()
+            },
+            ..container::Style::default()
+        }),
+    );
+    let status = widget::button::custom(
+        widget::row::with_capacity(2)
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .push(status_dot)
+            .push(txt(label, 11.0, oklch(0.85, 0.01, 152.0))),
+    )
+    .class(header_chip())
+    .padding([7, 10])
+    .on_press(Message::RefreshService);
+
     let menu = widget::button::custom(
         txt("⋯", 14.0, oklch(0.85, 0.01, 152.0))
             .align_x(Alignment::Center)
@@ -129,15 +170,22 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
     .height(Length::Fixed(30.0))
     .on_press(Message::TogglePopover(Popover::Menu));
 
-    if app.popover == Some(Popover::Menu) {
-        vec![
-            widget::popover(menu)
-                .popup(overlays::menu_popup(app))
-                .position(widget::popover::Position::Bottom)
-                .on_close(Message::CloseOverlays)
-                .into(),
-        ]
+    let menu: Element<'_, Message> = if app.popover == Some(Popover::Menu) {
+        widget::popover(menu)
+            .popup(overlays::menu_popup(app))
+            .position(widget::popover::Position::Bottom)
+            .on_close(Message::CloseOverlays)
+            .into()
     } else {
-        vec![menu.into()]
-    }
+        menu.into()
+    };
+
+    vec![
+        widget::row::with_capacity(2)
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(status)
+            .push(menu)
+            .into(),
+    ]
 }
