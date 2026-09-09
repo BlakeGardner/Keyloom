@@ -57,13 +57,10 @@ pub fn rename_input_id() -> widget::Id {
     widget::Id::new("profile-rename-input")
 }
 
-/// The profile picker popover: the user's profiles, the built-in
-/// presets (read-only templates copied on selection), and the
+/// The profile picker popover: the user's profiles and the
 /// rename / duplicate / new actions.
 pub fn profiles_popup(app: &App) -> Element<'_, Message> {
-    let presets = crate::ui::model::presets();
-    let mut column =
-        widget::column::with_capacity(app.profiles.len() + presets.len() + 6).spacing(2);
+    let mut column = widget::column::with_capacity(app.profiles.len() + 4).spacing(2);
 
     column = column.push(container(eyebrow("Your profiles")).padding(Padding {
         top: 4.0,
@@ -105,31 +102,6 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
     }
 
     if app.view != View::Tester {
-        column =
-            column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
-        column = column.push(
-            container(
-                widget::column::with_capacity(2)
-                    .spacing(2)
-                    .push(eyebrow("Presets"))
-                    .push(txt("Selecting one adds an editable copy.", 10.5, muted())),
-            )
-            .padding(Padding {
-                top: 2.0,
-                right: 10.0,
-                bottom: 2.0,
-                left: 10.0,
-            }),
-        );
-        for preset in &presets {
-            column = column.push(popup_row(
-                preset.name.to_owned(),
-                Some(txt(preset.blurb.to_owned(), 10.5, muted()).into()),
-                false,
-                Message::UsePreset(preset.id.to_owned()),
-            ));
-        }
-
         column =
             column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
         let action = |label: &'static str, message: Message| {

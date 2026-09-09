@@ -80,10 +80,9 @@ pick up on its own.
 - [x] **Start new installs with an empty Default profile** instead of the demo
   profiles (`Laptop`, `Mac-style`, `Gaming`, `Mac + Cosmic`), or gate the demo
   content behind onboarding as an explicit example. (A fresh install starts
-  with a single empty Default profile. The samples now ship as read-only
-  presets in a labeled section of the profile switcher; selecting one adds
-  an editable copy to the user's profiles, and user profiles can be renamed
-  in place.)
+  on an empty Default profile, with the sample profiles seeded alongside it
+  as ordinary editable profiles — nothing applies until the user switches to
+  one, and user profiles can be renamed in place.)
 - [x] **Drop the demo shortcut groups** the same way once real groups can be
   created and kept. (Shortcut groups now start empty; the demo groups were
   removed together with the demo profiles they belonged to.)

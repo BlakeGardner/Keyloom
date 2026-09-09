@@ -80,11 +80,10 @@ yet install xremap, register the unit, or set up permissions.
 
 - Multiple named profiles, each with its own mappings and shortcut groups.
 - Profile switcher popover with rename, new-profile, and duplicate-profile
-  actions; a fresh install starts with a single empty Default profile.
-- Built-in sample presets (Laptop, Mac-style, Gaming, Media F-row) listed in
-  their own labeled section of the switcher. Presets are read-only templates:
-  selecting one adds an editable copy to the user's profiles, so the preset
-  itself never changes.
+  actions.
+- A fresh install seeds an empty Default profile plus editable starter
+  profiles (Laptop, Mac-style, Gaming, Media F-row). They are ordinary
+  profiles from then on: renamed, edited, and stored like any other.
 - "Reset all mappings" clears the active profile (undoable).
 
 ## Devices
@@ -128,8 +127,8 @@ yet install xremap, register the unit, or set up permissions.
 
 - Profiles and their mappings (plus the active profile) are stored via
   cosmic-config under `~/.config/cosmic/io.github.blakegardner.Keyloom/`
-  and restored on launch; a fresh install starts with one empty Default
-  profile (the sample presets are built in, not stored).
+  and restored on launch; a fresh install seeds the Default profile and
+  the starter profiles, which persist like any other from then on.
 - Every mapping or profile change regenerates a deterministic xremap
   document from the internal rule model and writes it to
   `$XDG_CONFIG_HOME/xremap/config.yml` (usually `~/.config`), so identical
@@ -175,9 +174,10 @@ language charmaps and typed-text preview were removed with it.
 ## Test coverage
 
 - Unit tests for the update logic in `src/app.rs`: mapping assignment, undo,
-  toast lifecycle, profile switching, duplication, renaming, preset copies,
-  editor/sheet state transitions, hold mappings, combo rules, onboarding,
-  apply/service-status handling, and device hotplug/replug handling.
+  toast lifecycle, profile switching, duplication, renaming, starter-profile
+  seeding and editing, editor/sheet state transitions, hold mappings,
+  combo rules, onboarding, apply/service-status handling, and device
+  hotplug/replug handling.
 - Generator tests in `src/xremap.rs`: key-name translation coverage,
   deterministic golden output, tap/hold, swaps, disabled keys, device
   scoping, and foreign-file backup behavior. Generated documents

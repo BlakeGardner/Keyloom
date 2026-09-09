@@ -1,6 +1,6 @@
 //! UI data model ported from the design export's prototype script:
-//! key geometry, the action catalog, and the built-in preset profiles,
-//! plus the per-form-factor deck assembly.
+//! key geometry, the action catalog, and the starter profiles seeded
+//! on first launch, plus the per-form-factor deck assembly.
 
 use std::sync::LazyLock;
 
@@ -776,33 +776,26 @@ fn entry(code: &str, mapping: Mapping) -> (String, Mapping) {
     (code.to_owned(), mapping)
 }
 
-/// A built-in sample profile. Presets are read-only templates that live
-/// outside the user's profile list; picking one in the profile switcher
-/// creates an editable copy, so the preset itself never changes.
-#[derive(Clone, Debug)]
-pub struct Preset {
-    pub id: &'static str,
-    pub name: &'static str,
-    /// One-line description shown in the profile switcher.
-    pub blurb: &'static str,
-    pub maps: Maps,
-}
-
-/// The sample presets shipped with the application. All mappings apply
-/// to every keyboard: presets cannot know which devices exist.
-pub fn presets() -> Vec<Preset> {
-    let preset = |id, name, blurb, maps| Preset {
-        id,
-        name,
-        blurb,
-        maps,
+/// The starter profiles seeded on a fresh install, alongside the empty
+/// Default profile. They are ordinary profiles: fully editable, stored
+/// with the rest, and treated the same as user-created ones from then
+/// on. All mappings apply to every keyboard: the seeds cannot know
+/// which devices exist.
+pub fn starter_profiles() -> Vec<(Profile, Maps)> {
+    let profile = |id: &str, name: &str, maps| {
+        (
+            Profile {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            },
+            maps,
+        )
     };
 
     vec![
-        preset(
+        profile(
             "laptop",
             "Laptop",
-            "Caps Lock taps Escape, holds Control",
             vec![
                 entry(
                     "CapsLock",
@@ -812,29 +805,26 @@ pub fn presets() -> Vec<Preset> {
                 entry("F12", mapping("Play/Pause", None, "all", false)),
             ],
         ),
-        preset(
+        profile(
             "mac",
             "Mac-style",
-            "Command-style modifiers, Caps Lock as Control",
             vec![
                 entry("MetaLeft", mapping("Left Alt", None, "all", false)),
                 entry("AltLeft", mapping("Left Super", None, "all", false)),
                 entry("CapsLock", mapping("Left Control", None, "all", false)),
             ],
         ),
-        preset(
+        profile(
             "gaming",
             "Gaming",
-            "Disables Super and Caps Lock",
             vec![
                 entry("MetaLeft", mapping("Disabled", None, "all", false)),
                 entry("CapsLock", mapping("Disabled", None, "all", false)),
             ],
         ),
-        preset(
+        profile(
             "media",
             "Media F-row",
-            "Function keys double as media keys (two-way)",
             vec![
                 entry("F1", mapping("Brightness Down", None, "all", true)),
                 entry("F2", mapping("Brightness Up", None, "all", true)),

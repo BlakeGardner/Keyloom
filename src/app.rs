@@ -128,8 +128,6 @@ pub enum Message {
     NewProfile {
         duplicate: bool,
     },
-    /// Create an editable copy of a built-in preset and switch to it.
-    UsePreset(String),
     /// Start (or cancel) renaming the active profile.
     RenameToggle,
     RenameInput(String),
@@ -736,48 +734,6 @@ impl App {
         self.persist();
     }
 
-    /// Create an editable copy of a built-in preset and switch to it.
-    /// Presets themselves stay read-only templates.
-    fn use_preset(&mut self, preset_id: &str) {
-        if self.view == View::Tester {
-            return;
-        }
-        let Some(preset) = model::presets()
-            .into_iter()
-            .find(|preset| preset.id == preset_id)
-        else {
-            return;
-        };
-        self.custom_profiles += 1;
-        let id = format!("custom-{}", self.custom_profiles);
-        // Copies keep the preset's name; number any further copies.
-        let mut name = preset.name.to_owned();
-        let mut copy = 1;
-        while self.profiles.iter().any(|profile| profile.name == name) {
-            copy += 1;
-            name = format!("{} {copy}", preset.name);
-        }
-        self.profiles.push(Profile {
-            id: id.clone(),
-            name: name.clone(),
-        });
-        self.profile_maps.insert(id.clone(), preset.maps);
-        self.profile_groups.insert(id.clone(), Vec::new());
-        self.profile = id;
-        self.popover = None;
-        self.rename = None;
-        self.selected = None;
-        self.edit_rule = None;
-        self.capture = false;
-        self.recording = None;
-        self.undo = None;
-        self.flash(
-            format!("{name} added to your profiles"),
-            "An editable copy of the preset — the preset itself never changes.",
-        );
-        self.persist();
-    }
-
     /// Apply the pending rename to the active profile.
     fn commit_rename(&mut self) {
         let Some(name) = self.rename.take() else {
@@ -937,15 +893,20 @@ impl cosmic::Application for App {
                 (profiles, maps, active, custom as usize)
             }
             None => {
-                // Fresh install: start with a single empty profile.
-                // The built-in presets stay available from the profile
-                // switcher as read-only templates.
+                // Fresh install: an empty Default profile plus the
+                // editable starter profiles. Once persisted they are
+                // ordinary profiles like any the user creates.
                 let default = Profile {
                     id: "default".to_owned(),
                     name: "Default".to_owned(),
                 };
-                let profile_maps = HashMap::from([(default.id.clone(), Vec::new())]);
-                (vec![default], profile_maps, "default".to_owned(), 0)
+                let mut profile_maps = HashMap::from([(default.id.clone(), Vec::new())]);
+                let mut profiles = vec![default];
+                for (profile, maps) in model::starter_profiles() {
+                    profile_maps.insert(profile.id.clone(), maps);
+                    profiles.push(profile);
+                }
+                (profiles, profile_maps, "default".to_owned(), 0)
             }
         };
         let profile_groups: HashMap<String, Vec<Group>> = HashMap::new();
@@ -1084,7 +1045,6 @@ impl cosmic::Application for App {
                 ]);
             }
             Message::NewProfile { duplicate } => self.create_profile(duplicate),
-            Message::UsePreset(id) => self.use_preset(&id),
             Message::RenameToggle => {
                 if self.view != View::Tester {
                     self.rename = if self.rename.is_some() {
@@ -1981,7 +1941,7 @@ mod tests {
     #[test]
     fn duplicate_profile_copies_mappings() {
         let mut app = app();
-        let _ = app.update(Message::UsePreset("laptop".to_owned()));
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
         let count = app.maps().len();
         assert!(count > 0);
 
@@ -1991,54 +1951,49 @@ mod tests {
     }
 
     #[test]
-    fn fresh_install_starts_with_one_empty_profile() {
+    fn fresh_install_seeds_default_and_starter_profiles() {
         let app = app();
-        assert_eq!(app.profiles.len(), 1);
-        assert_eq!(app.profile_name(), "Default");
-        assert!(app.maps().is_empty(), "no demo mappings are seeded");
+        let starters = model::starter_profiles();
+        assert_eq!(app.profiles.len(), 1 + starters.len());
+        assert_eq!(app.profile_name(), "Default", "the empty profile is active");
+        assert!(app.maps().is_empty(), "no mappings apply out of the box");
         assert!(app.groups().is_empty(), "no demo groups are seeded");
         assert!(app.devices.is_empty(), "no demo devices are listed");
         assert_eq!(app.device_entries().len(), 1, "only the All keyboards row");
+        for (profile, maps) in &starters {
+            assert!(
+                app.profiles.iter().any(|seeded| seeded.id == profile.id),
+                "{} ships as a regular profile",
+                profile.name
+            );
+            assert_eq!(app.profile_maps.get(&profile.id), Some(maps));
+        }
     }
 
     #[test]
-    fn selecting_a_preset_creates_an_editable_copy() {
+    fn starter_profiles_are_editable_like_any_other() {
         let mut app = app();
-        let preset = model::presets()
+        let seeded = model::starter_profiles()
             .into_iter()
-            .find(|preset| preset.id == "laptop")
-            .expect("laptop preset ships");
+            .find(|(profile, _)| profile.id == "laptop")
+            .map(|(_, maps)| maps)
+            .expect("laptop profile ships");
 
-        let _ = app.update(Message::UsePreset("laptop".to_owned()));
-        assert_eq!(app.profiles.len(), 2, "the copy joins the user's profiles");
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
         assert_eq!(app.profile_name(), "Laptop");
-        assert!(
-            app.profile.starts_with("custom-"),
-            "copies get their own id"
-        );
-        assert_eq!(app.maps(), &preset.maps);
+        assert_eq!(app.maps(), &seeded);
 
-        // The copy is editable like any other profile.
+        // Editing changes the profile itself; nothing is copied.
         let _ = app.update(Message::SelectKey("KeyA"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
-        assert_eq!(app.maps().len(), preset.maps.len() + 1);
-        assert_eq!(
-            model::presets()
-                .into_iter()
-                .find(|preset| preset.id == "laptop")
-                .unwrap()
-                .maps,
-            preset.maps,
-            "the preset itself never changes"
-        );
-    }
+        assert_eq!(app.profiles.len(), 1 + model::starter_profiles().len());
+        assert_eq!(app.maps().len(), seeded.len() + 1);
 
-    #[test]
-    fn repeated_preset_copies_get_numbered_names() {
-        let mut app = app();
-        let _ = app.update(Message::UsePreset("gaming".to_owned()));
-        let _ = app.update(Message::UsePreset("gaming".to_owned()));
-        assert_eq!(app.profile_name(), "Gaming 2");
+        // Renaming works in place, like any profile.
+        let _ = app.update(Message::RenameToggle);
+        let _ = app.update(Message::RenameInput("Travel".to_owned()));
+        let _ = app.update(Message::RenameCommit);
+        assert_eq!(app.profile_name(), "Travel");
     }
 
     #[test]
