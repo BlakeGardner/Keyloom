@@ -80,7 +80,9 @@ yet install xremap, register the unit, or set up permissions.
 
 - Multiple named profiles, each with its own mappings and shortcut groups.
 - Profile switcher popover with rename, new-profile, and duplicate-profile
-  actions.
+  actions, plus per-row deletion behind a confirmation dialog. The active
+  profile can't be deleted, so at least one profile always remains;
+  deletion is undoable from the toast.
 - A fresh install seeds an empty Default profile plus editable starter
   profiles (Laptop, Mac-style, Gaming, Media F-row). They are ordinary
   profiles from then on: renamed, edited, and stored like any other.
@@ -174,10 +176,10 @@ language charmaps and typed-text preview were removed with it.
 ## Test coverage
 
 - Unit tests for the update logic in `src/app.rs`: mapping assignment, undo,
-  toast lifecycle, profile switching, duplication, renaming, starter-profile
-  seeding and editing, editor/sheet state transitions, hold mappings,
-  combo rules, onboarding, apply/service-status handling, and device
-  hotplug/replug handling.
+  toast lifecycle, profile switching, duplication, renaming, deletion,
+  starter-profile seeding and editing, editor/sheet state transitions,
+  hold mappings, combo rules, onboarding, apply/service-status handling,
+  and device hotplug/replug handling.
 - Generator tests in `src/xremap.rs`: key-name translation coverage,
   deterministic golden output, tap/hold, swaps, disabled keys, device
   scoping, and foreign-file backup behavior. Generated documents

@@ -88,6 +88,13 @@ pub struct Toast {
 pub enum Undo {
     Maps(HashMap<String, Maps>),
     Groups(HashMap<String, Vec<Group>>),
+    /// A deleted profile: its list position, mappings, and groups.
+    Profile {
+        index: usize,
+        profile: Profile,
+        maps: Maps,
+        groups: Vec<Group>,
+    },
 }
 
 /// What a due apply should do, given the current state.
@@ -128,6 +135,13 @@ pub enum Message {
     NewProfile {
         duplicate: bool,
     },
+    /// Ask for confirmation before deleting this profile (never the
+    /// active one).
+    DeleteProfile(String),
+    /// Delete the profile pending confirmation.
+    DeleteConfirm,
+    /// Dismiss the delete confirmation dialog.
+    DeleteCancel,
     /// Start (or cancel) renaming the active profile.
     RenameToggle,
     RenameInput(String),
@@ -209,6 +223,8 @@ pub struct App {
     custom_profiles: usize,
     /// In-progress rename of the active profile (the edited text).
     pub rename: Option<String>,
+    /// Profile id awaiting delete confirmation in the modal dialog.
+    pub confirm_delete: Option<String>,
     pub undo: Option<Undo>,
     // Keyboard view state.
     pub device: String,
@@ -734,6 +750,31 @@ impl App {
         self.persist();
     }
 
+    /// Delete a profile by id, once confirmed. The active profile is
+    /// protected — which also guarantees at least one profile always
+    /// remains — and the toast's Undo restores the deleted one in place.
+    fn delete_profile(&mut self, id: &str) {
+        if self.view == View::Tester || id == self.profile || self.profiles.len() <= 1 {
+            return;
+        }
+        let Some(index) = self.profiles.iter().position(|profile| profile.id == id) else {
+            return;
+        };
+        let profile = self.profiles.remove(index);
+        let maps = self.profile_maps.remove(id).unwrap_or_default();
+        let groups = self.profile_groups.remove(id).unwrap_or_default();
+        let name = profile.name.clone();
+        self.undo = Some(Undo::Profile {
+            index,
+            profile,
+            maps,
+            groups,
+        });
+        self.popover = None;
+        self.flash(format!("{name} deleted"), "Undo restores it.");
+        self.persist();
+    }
+
     /// Apply the pending rename to the active profile.
     fn commit_rename(&mut self) {
         let Some(name) = self.rename.take() else {
@@ -926,6 +967,7 @@ impl cosmic::Application for App {
             profile_groups,
             custom_profiles,
             rename: None,
+            confirm_delete: None,
             undo: None,
             device: "all".to_owned(),
             form: keyboard::FORM_FULL,
@@ -1045,6 +1087,23 @@ impl cosmic::Application for App {
                 ]);
             }
             Message::NewProfile { duplicate } => self.create_profile(duplicate),
+            Message::DeleteProfile(id) => {
+                // Only open the confirmation for profiles that could
+                // actually be deleted.
+                if self.view != View::Tester
+                    && id != self.profile
+                    && self.profiles.len() > 1
+                    && self.profiles.iter().any(|profile| profile.id == id)
+                {
+                    self.confirm_delete = Some(id);
+                }
+            }
+            Message::DeleteConfirm => {
+                if let Some(id) = self.confirm_delete.take() {
+                    self.delete_profile(&id);
+                }
+            }
+            Message::DeleteCancel => self.confirm_delete = None,
             Message::RenameToggle => {
                 if self.view != View::Tester {
                     self.rename = if self.rename.is_some() {
@@ -1288,6 +1347,19 @@ impl cosmic::Application for App {
                         self.recording = None;
                         self.toast = None;
                     }
+                    Some(Undo::Profile {
+                        index,
+                        profile,
+                        maps,
+                        groups,
+                    }) => {
+                        self.profile_maps.insert(profile.id.clone(), maps);
+                        self.profile_groups.insert(profile.id.clone(), groups);
+                        self.profiles
+                            .insert(index.min(self.profiles.len()), profile);
+                        self.toast = None;
+                        self.persist();
+                    }
                     None => self.toast = None,
                 }
             }
@@ -1468,6 +1540,9 @@ impl cosmic::Application for App {
 
     /// Modal dialogs render natively above the window content.
     fn dialog(&self) -> Option<Element<'_, Message>> {
+        if self.confirm_delete.is_some() {
+            return Some(ui::overlays::delete_profile_dialog(self));
+        }
         if self.view == View::Keyboard && self.selected.is_some() && self.capture {
             return Some(ui::overlays::capture_dialog(self));
         }
@@ -1994,6 +2069,69 @@ mod tests {
         let _ = app.update(Message::RenameInput("Travel".to_owned()));
         let _ = app.update(Message::RenameCommit);
         assert_eq!(app.profile_name(), "Travel");
+    }
+
+    #[test]
+    fn deleting_a_profile_asks_for_confirmation_first() {
+        let mut app = app();
+        let before = app.profiles.len();
+
+        // The request only opens the dialog; nothing is deleted yet.
+        let _ = app.update(Message::DeleteProfile("laptop".to_owned()));
+        assert_eq!(app.confirm_delete.as_deref(), Some("laptop"));
+        assert_eq!(app.profiles.len(), before);
+
+        // Cancelling keeps the profile.
+        let _ = app.update(Message::DeleteCancel);
+        assert!(app.confirm_delete.is_none());
+        assert_eq!(app.profiles.len(), before);
+
+        // Confirming deletes it, and undo restores it in place.
+        let _ = app.update(Message::DeleteProfile("laptop".to_owned()));
+        let _ = app.update(Message::DeleteConfirm);
+        assert!(app.confirm_delete.is_none());
+        assert_eq!(app.profiles.len(), before - 1);
+        assert!(!app.profiles.iter().any(|profile| profile.id == "laptop"));
+        assert!(!app.profile_maps.contains_key("laptop"));
+        assert_eq!(app.profile, "default", "the active profile is untouched");
+
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.profiles.len(), before);
+        assert_eq!(app.profiles[1].id, "laptop", "undo restores its position");
+        assert!(
+            !app.profile_maps["laptop"].is_empty(),
+            "undo restores its mappings"
+        );
+    }
+
+    #[test]
+    fn the_active_and_last_profiles_cannot_be_deleted() {
+        let mut app = app();
+        let before = app.profiles.len();
+
+        // The active profile is protected: no confirmation opens.
+        let _ = app.update(Message::DeleteProfile("default".to_owned()));
+        assert!(app.confirm_delete.is_none());
+        assert_eq!(app.profiles.len(), before);
+
+        // The tester never edits state.
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::DeleteProfile("laptop".to_owned()));
+        assert!(app.confirm_delete.is_none());
+        assert_eq!(app.profiles.len(), before);
+        let _ = app.update(Message::SetView(View::Keyboard));
+
+        // Deleting every inactive profile leaves the active one.
+        for id in ["laptop", "mac", "gaming", "media"] {
+            let _ = app.update(Message::DeleteProfile(id.to_owned()));
+            let _ = app.update(Message::DeleteConfirm);
+        }
+        assert_eq!(app.profiles.len(), 1);
+        let _ = app.update(Message::DeleteProfile("default".to_owned()));
+        assert!(app.confirm_delete.is_none());
+        let _ = app.update(Message::DeleteConfirm);
+        assert_eq!(app.profiles.len(), 1, "at least one profile remains");
+        assert_eq!(app.profile_name(), "Default");
     }
 
     #[test]

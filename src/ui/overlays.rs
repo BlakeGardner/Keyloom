@@ -93,12 +93,30 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
         } else {
             format!("{count} mapping{}", if count == 1 { "" } else { "s" })
         };
-        column = column.push(popup_row(
+        let row = popup_row(
             profile.name.clone(),
             Some(txt(sub, 10.5, muted()).into()),
             active,
             Message::SelectProfile(profile.id.clone()),
-        ));
+        );
+        // Inactive profiles can be deleted; the active one is
+        // protected, so at least one profile always remains.
+        if active || app.view == View::Tester {
+            column = column.push(row);
+        } else {
+            column = column.push(
+                widget::row::with_capacity(2)
+                    .spacing(2)
+                    .align_y(Alignment::Center)
+                    .push(row)
+                    .push(
+                        widget::button::custom(txt("✕", 11.0, oklch(0.85, 0.06, 16.0)))
+                            .class(ghost_button())
+                            .padding([8, 8])
+                            .on_press(Message::DeleteProfile(profile.id.clone())),
+                    ),
+            );
+        }
     }
 
     if app.view != View::Tester {
@@ -486,6 +504,55 @@ pub fn capture_dialog(app: &App) -> Element<'_, Message> {
     );
 
     modal(card, Message::SetCapture(false))
+}
+
+/// The delete-profile confirmation dialog.
+pub fn delete_profile_dialog(app: &App) -> Element<'_, Message> {
+    let profile = app
+        .confirm_delete
+        .as_ref()
+        .and_then(|id| app.profiles.iter().find(|profile| &profile.id == id));
+    let name = profile.map_or("this profile", |profile| profile.name.as_str());
+    let count = profile
+        .and_then(|profile| app.profile_maps.get(&profile.id))
+        .map_or(0, |maps| maps.len());
+    let body = match count {
+        0 => "It has no mappings. You can undo right after deleting.".to_owned(),
+        1 => "Its 1 mapping is deleted with it. You can undo right after.".to_owned(),
+        n => format!("Its {n} mappings are deleted with it. You can undo right after."),
+    };
+
+    let buttons = widget::row::with_capacity(3)
+        .spacing(10)
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(txt_semibold("Cancel", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::DeleteCancel),
+        )
+        .push(
+            widget::button::custom(txt_semibold(
+                "Delete profile",
+                12.5,
+                oklch(0.85, 0.06, 16.0),
+            ))
+            .class(quiet(false))
+            .padding([9, 18])
+            .on_press(Message::DeleteConfirm),
+        );
+
+    let card = dialog_card(
+        widget::column::with_capacity(4)
+            .spacing(16)
+            .push(eyebrow("Delete profile"))
+            .push(txt_semibold(format!("Delete {name}?"), 24.0, fg()))
+            .push(txt(body, 15.0, muted()))
+            .push(buttons)
+            .into(),
+    );
+
+    modal(card, Message::DeleteCancel)
 }
 
 /// The three-step first-run walkthrough.
