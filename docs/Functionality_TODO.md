@@ -156,6 +156,9 @@ still only previewed in memory.
 
 ## 8. App polish and distribution
 
+- [x] **Keep custom dialogs open when clicking inside them.** The shared
+  modal card captures clicks on text, padding, and unused space so they
+  cannot reach the dismissal backdrop; controls and outside clicks still work.
 - [x] **Real About dialog** replacing the toast, with the embedded SVG logo,
   Cargo build version, application description, and technology credits.
   Uses the same modal chrome as onboarding; Close, Escape, and backdrop

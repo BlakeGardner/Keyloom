@@ -303,7 +303,10 @@ pub fn toast<'a>(app: &'a App, toast: &'a Toast) -> Element<'a, Message> {
 }
 
 /// A dimmed backdrop with a centered dialog card.
-fn modal<'a>(card: Element<'a, Message>, on_backdrop: Message) -> Element<'a, Message> {
+fn modal<'a, Renderer: cosmic::iced::core::Renderer + 'a>(
+    card: cosmic::iced::Element<'a, Message, cosmic::Theme, Renderer>,
+    on_backdrop: Message,
+) -> cosmic::iced::Element<'a, Message, cosmic::Theme, Renderer> {
     let backdrop = mouse_area(
         container(widget::Space::new())
             .width(Length::Fill)
@@ -315,7 +318,9 @@ fn modal<'a>(card: Element<'a, Message>, on_backdrop: Message) -> Element<'a, Me
     )
     .on_press(on_backdrop);
 
-    let centered = container(card)
+    // Capture presses on the card's text and padding before they reach the scrim.
+    // Keep the full-window centering container transparent to backdrop clicks.
+    let centered = container(cosmic::iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(Alignment::Center)
@@ -706,4 +711,66 @@ pub fn onboarding(app: &App) -> Element<'_, Message> {
     );
 
     modal(card, Message::SkipOnboarding)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmic::iced::core::{
+        Event, Layout, Point, Rectangle, Shell, Size, clipboard, layout, mouse, widget::Tree,
+    };
+
+    #[test]
+    fn modal_captures_card_clicks_but_keeps_controls_and_backdrop_active() {
+        // Use the headless renderer to exercise the actual stack's event routing.
+        let control =
+            mouse_area(widget::Space::new().width(80).height(40)).on_press(Message::CloseAbout);
+        let card: cosmic::iced::Element<'_, Message, cosmic::Theme, ()> =
+            container(control).width(200).height(120).padding(20).into();
+        let mut modal = modal(card, Message::SkipOnboarding);
+        let mut tree = Tree::new(modal.as_widget());
+        let viewport = Rectangle::with_size(Size::new(800.0, 600.0));
+        let node = modal.as_widget_mut().layout(
+            &mut tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, viewport.size()),
+        );
+        let event = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+
+        // The centered card spans (300, 240)..(500, 360), with a control
+        // at (320, 260)..(400, 300). Both padding and unused content stay open.
+        for (point, expected) in [
+            (Point::new(310.0, 250.0), None),
+            (Point::new(450.0, 330.0), None),
+            (Point::new(330.0, 270.0), Some(Message::CloseAbout)),
+            (Point::new(100.0, 100.0), Some(Message::SkipOnboarding)),
+        ] {
+            let mut messages = Vec::new();
+            let mut shell = Shell::new(&mut messages);
+            modal.as_widget_mut().update(
+                &mut tree,
+                &event,
+                Layout::new(&node),
+                mouse::Cursor::Available(point),
+                &(),
+                &mut clipboard::Null,
+                &mut shell,
+                &viewport,
+            );
+            assert!(shell.is_event_captured());
+            match expected {
+                None => assert!(
+                    messages.is_empty(),
+                    "card click at {point:?} dismissed dialog"
+                ),
+                Some(Message::CloseAbout) => {
+                    assert!(matches!(messages.as_slice(), [Message::CloseAbout]));
+                }
+                Some(Message::SkipOnboarding) => {
+                    assert!(matches!(messages.as_slice(), [Message::SkipOnboarding]));
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
 }
