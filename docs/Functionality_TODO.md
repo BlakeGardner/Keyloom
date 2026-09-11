@@ -44,9 +44,14 @@ workflow is not planned.
   (Added a Numpad group plus Scroll Lock and Pause; a test asserts the catalog
   offers every rendered key under its display name.)
 - [x] **Remove a mapping directly from the mapping list.** The remaps dialog
-  currently only opens a mapping for editing; add inline removal. (Each row
-  has a Remove button; removal is undoable and the dialog shows an empty
-  state.)
+  supports inline removal through the same small red X button used in the
+  profile switcher, with a confirmation dialog. The X uses native button
+  hover handling without a tooltip overlay, matching the adjacent remap row.
+  The scrollbar occupies a separate gutter so it cannot cover the buttons
+  or block their pointer cursor on hover.
+  Cancel, Escape, and backdrop clicks preserve the mapping and return to
+  the list; confirmed removal is undoable, with an empty state after the
+  last mapping is removed.
 
 ## 3. Layouts and form factors
 

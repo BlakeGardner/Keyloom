@@ -51,6 +51,15 @@ fn popup_row<'a>(
         .into()
 }
 
+/// Shared compact destructive action for profile and remap rows.
+fn remove_button(message: Message) -> Element<'static, Message> {
+    widget::button::custom(txt("✕", 11.0, oklch(0.85, 0.06, 16.0)))
+        .class(ghost_button())
+        .padding([8, 8])
+        .on_press(message)
+        .into()
+}
+
 /// Stable widget id for the profile rename input so it can be
 /// focused when rename mode is entered.
 pub fn rename_input_id() -> widget::Id {
@@ -109,12 +118,7 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
                     .spacing(2)
                     .align_y(Alignment::Center)
                     .push(row)
-                    .push(
-                        widget::button::custom(txt("✕", 11.0, oklch(0.85, 0.06, 16.0)))
-                            .class(ghost_button())
-                            .padding([8, 8])
-                            .on_press(Message::DeleteProfile(profile.id.clone())),
-                    ),
+                    .push(remove_button(Message::DeleteProfile(profile.id.clone()))),
             );
         }
     }
@@ -418,12 +422,7 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
                     .width(Length::Fill)
                     .on_press(Message::SelectKey(cap.code)),
                 )
-                .push(
-                    widget::button::custom(txt("Remove", 13.0, muted()))
-                        .class(quiet(false))
-                        .padding([12, 14])
-                        .on_press(Message::RemoveMapping(code.clone())),
-                ),
+                .push(remove_button(Message::RemoveMapping(code.clone()))),
         );
     }
 
@@ -433,7 +432,9 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
             .push(header)
             .push(description)
             .push(
-                container(widget::scrollable(rows))
+                // Reserve a scrollbar gutter so it cannot cover the remove buttons
+                // or intercept their hover and click events.
+                container(widget::scrollable(rows).spacing(8))
                     .max_height(420.0)
                     .padding(4),
             ),
@@ -509,6 +510,46 @@ pub fn capture_dialog(app: &App) -> Element<'_, Message> {
     );
 
     modal(card, Message::SetCapture(false))
+}
+
+/// Confirm removal while keeping the remaps list open underneath.
+pub fn remove_mapping_dialog(app: &App) -> Element<'_, Message> {
+    let name = app
+        .confirm_remove_mapping
+        .as_deref()
+        .map_or_else(|| "this key".to_owned(), key_name);
+    let buttons = widget::row::with_capacity(3)
+        .spacing(10)
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(txt_semibold("Cancel", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::RemoveMappingCancel),
+        )
+        .push(
+            widget::button::custom(txt_semibold("Remove remap", 12.5, oklch(0.85, 0.06, 16.0)))
+                .class(quiet(false))
+                .padding([9, 18])
+                .on_press(Message::RemoveMappingConfirm),
+        );
+    let card = dialog_card(
+        widget::column::with_capacity(4)
+            .spacing(16)
+            .push(eyebrow("Remove remap"))
+            .push(txt_semibold(format!("Remove remap for {name}?"), 24.0, fg()))
+            .push(txt(
+                format!(
+                    "This removes the remap from {} and restores the key's original behavior. You can undo right after removing.",
+                    app.profile_name()
+                ),
+                15.0,
+                muted(),
+            ))
+            .push(buttons)
+            .into(),
+    );
+    modal(card, Message::RemoveMappingCancel)
 }
 
 /// The delete-profile confirmation dialog.

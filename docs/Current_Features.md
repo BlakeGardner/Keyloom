@@ -64,8 +64,13 @@ yet install xremap, register the unit, or set up permissions.
   profile, an empty-state prompt when there are none, and a
   "View remaps · N" button.
 - Remaps dialog listing every mapping in the active profile; selecting an
-  entry opens it in the editor, and each row has an inline Remove button
-  (undoable, with an empty state once the last mapping is gone).
+  entry opens it in the editor, and each row has the same small red X button
+  as the profile switcher, using the same native button pointer cursor as
+  the adjacent remap row, without a tooltip overlay. The scrollbar has its
+  own space beside the row controls. Removal requires confirmation; Cancel,
+  Escape, or a backdrop click returns to the list
+  without changes. Confirmed removal is undoable, and the list stays open
+  with an empty state once the last mapping is gone.
 - "Applies to" device scope selector on the toolbar (see Devices below).
 
 ## Key editor (bottom sheet)

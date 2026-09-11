@@ -169,8 +169,10 @@ pub enum Message {
     },
     ToggleSwap,
     ClearKey,
-    /// Remove one key's mapping from the remaps list.
+    /// Ask for confirmation before removing a mapping from the remaps list.
     RemoveMapping(String),
+    RemoveMappingConfirm,
+    RemoveMappingCancel,
     ClosePanel,
     SetCapture(bool),
     AddGroup,
@@ -214,6 +216,8 @@ pub struct App {
     pub toast: Option<Toast>,
     toast_seq: u64,
     pub remaps_open: bool,
+    /// Key code awaiting removal confirmation in the active profile.
+    pub confirm_remove_mapping: Option<String>,
     pub about_open: bool,
     pub onboarding: bool,
     pub onb_step: usize,
@@ -736,6 +740,7 @@ impl App {
         self.profile_maps.insert(id.clone(), maps);
         self.profile_groups.insert(id.clone(), groups);
         self.profile = id;
+        self.confirm_remove_mapping = None;
         self.popover = None;
         self.rename = None;
         self.selected = None;
@@ -948,6 +953,7 @@ impl cosmic::Application for App {
             toast: None,
             toast_seq: 0,
             remaps_open: false,
+            confirm_remove_mapping: None,
             about_open: false,
             onboarding: false,
             onb_step: 0,
@@ -1024,6 +1030,7 @@ impl cosmic::Application for App {
                 self.popover = None;
                 self.recording = None;
                 self.remaps_open = false;
+                self.confirm_remove_mapping = None;
                 match view {
                     View::Keyboard => self.edit_rule = None,
                     View::Tester => {
@@ -1059,6 +1066,7 @@ impl cosmic::Application for App {
                 self.popover = None;
                 self.rename = None;
                 self.remaps_open = false;
+                self.confirm_remove_mapping = None;
                 self.selected = None;
                 self.edit_rule = None;
                 self.recording = None;
@@ -1136,7 +1144,10 @@ impl cosmic::Application for App {
                     self.remaps_open = true;
                 }
             }
-            Message::CloseRemaps => self.remaps_open = false,
+            Message::CloseRemaps => {
+                self.remaps_open = false;
+                self.confirm_remove_mapping = None;
+            }
             Message::SetLayer(layer) => {
                 self.layer = layer;
                 if layer == Layer::Nav {
@@ -1166,6 +1177,7 @@ impl cosmic::Application for App {
                     self.capture = false;
                     self.popover = None;
                     self.remaps_open = false;
+                    self.confirm_remove_mapping = None;
                 }
             }
             Message::Query(query) => self.query = query,
@@ -1236,10 +1248,21 @@ impl cosmic::Application for App {
             }
             Message::ClearKey => self.clear_mapping(),
             Message::RemoveMapping(code) => {
-                if self.view != View::Tester {
+                if self.view == View::Keyboard && self.remaps_open && self.mapping(&code).is_some()
+                {
+                    self.confirm_remove_mapping = Some(code);
+                }
+            }
+            Message::RemoveMappingConfirm => {
+                if let Some(code) = self.confirm_remove_mapping.take()
+                    && self.view == View::Keyboard
+                    && self.remaps_open
+                    && self.mapping(&code).is_some()
+                {
                     self.remove_mapping(&code);
                 }
             }
+            Message::RemoveMappingCancel => self.confirm_remove_mapping = None,
             Message::ClosePanel => {
                 self.selected = None;
                 self.capture = false;
@@ -1533,6 +1556,9 @@ impl cosmic::Application for App {
         if self.confirm_delete.is_some() {
             return Some(ui::overlays::delete_profile_dialog(self));
         }
+        if self.confirm_remove_mapping.is_some() {
+            return Some(ui::overlays::remove_mapping_dialog(self));
+        }
         if self.view == View::Keyboard && self.selected.is_some() && self.capture {
             return Some(ui::overlays::capture_dialog(self));
         }
@@ -1557,10 +1583,13 @@ impl cosmic::Application for App {
             self.about_open = false;
         } else if self.confirm_delete.is_some() {
             self.confirm_delete = None;
+        } else if self.confirm_remove_mapping.is_some() {
+            self.confirm_remove_mapping = None;
         } else if self.capture {
             self.capture = false;
         } else if self.remaps_open {
             self.remaps_open = false;
+            self.confirm_remove_mapping = None;
         } else if self.onboarding {
             self.onboarding = false;
             self.onb_step = 0;
@@ -1603,6 +1632,7 @@ mod tests {
         app.selected = Some("CapsLock");
         app.about_open = true;
         app.confirm_delete = Some("laptop".to_owned());
+        app.confirm_remove_mapping = Some("CapsLock".to_owned());
         app.capture = true;
         app.remaps_open = true;
         app.onboarding = true;
@@ -1613,6 +1643,7 @@ mod tests {
             app.phys_press(&device, evdev::KeyCode::KEY_ESC.0);
             assert_eq!(app.about_open, about_open);
             assert!(app.confirm_delete.is_some());
+            assert!(app.confirm_remove_mapping.is_some());
             assert!(app.capture);
             assert!(app.remaps_open);
             assert!(app.onboarding);
@@ -1730,7 +1761,13 @@ mod tests {
         let _ = app.update(Message::PickAction("Escape".to_owned()));
         assert_eq!(app.apply_seq, 1, "a mapping change schedules an apply");
 
+        let _ = app.update(Message::OpenRemaps);
         let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        assert!(
+            app.mapping("CapsLock").is_some(),
+            "request keeps the mapping"
+        );
+        let _ = app.update(Message::RemoveMappingConfirm);
         assert_eq!(app.apply_seq, 2, "each change supersedes the last");
     }
 
@@ -1973,12 +2010,117 @@ mod tests {
         let count = app.maps().len();
         assert!(app.mapping("CapsLock").is_some());
 
+        let _ = app.update(Message::OpenRemaps);
         let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        assert!(
+            app.mapping("CapsLock").is_some(),
+            "request keeps the mapping"
+        );
+        let _ = app.update(Message::RemoveMappingConfirm);
         assert!(app.mapping("CapsLock").is_none());
         assert_eq!(app.maps().len(), count - 1);
 
         let _ = app.update(Message::Undo);
         assert!(app.mapping("CapsLock").is_some(), "removal is undoable");
+    }
+
+    #[test]
+    fn cancelling_remap_removal_keeps_mapping_and_list_open() {
+        for escape in [false, true] {
+            let mut app = app();
+            let _ = app.update(Message::SelectKey("CapsLock"));
+            let _ = app.update(Message::PickAction("Escape".to_owned()));
+            let _ = app.update(Message::OpenRemaps);
+            let apply_seq = app.apply_seq;
+            let toast_id = app.toast.as_ref().unwrap().id;
+            let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+            assert_eq!(app.confirm_remove_mapping.as_deref(), Some("CapsLock"));
+            assert_eq!(app.apply_seq, apply_seq, "request does not apply changes");
+
+            if escape {
+                let _ = app.on_escape();
+            } else {
+                // Cancel and the confirmation's backdrop share this message.
+                let _ = app.update(Message::RemoveMappingCancel);
+            }
+            assert!(app.confirm_remove_mapping.is_none());
+            assert!(app.remaps_open);
+            assert!(app.mapping("CapsLock").is_some());
+            assert_eq!(app.apply_seq, apply_seq);
+            assert_eq!(app.toast.as_ref().unwrap().id, toast_id);
+
+            let _ = app.update(Message::RemoveMappingConfirm);
+            assert!(
+                app.mapping("CapsLock").is_some(),
+                "stale confirmation is ignored"
+            );
+            let _ = app.update(Message::Undo);
+            assert!(
+                app.mapping("CapsLock").is_none(),
+                "previous undo is preserved"
+            );
+        }
+    }
+
+    #[test]
+    fn confirming_last_remap_removal_keeps_empty_list_open() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let _ = app.update(Message::OpenRemaps);
+        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        let _ = app.update(Message::RemoveMappingConfirm);
+        assert!(app.confirm_remove_mapping.is_none());
+        assert!(app.remaps_open);
+        assert!(app.maps().is_empty());
+        assert!(app.dialog().is_some());
+        let _ = app.update(Message::Undo);
+        assert!(app.mapping("CapsLock").is_some());
+    }
+
+    #[test]
+    fn leaving_remaps_clears_pending_removal() {
+        for message in [
+            Message::CloseRemaps,
+            Message::SelectKey("KeyA"),
+            Message::SetView(View::Tester),
+            Message::SetView(View::Shortcuts),
+            Message::SelectProfile("laptop".to_owned()),
+            Message::NewProfile { duplicate: true },
+        ] {
+            let mut app = app();
+            let _ = app.update(Message::SelectKey("CapsLock"));
+            let _ = app.update(Message::PickAction("Escape".to_owned()));
+            let _ = app.update(Message::OpenRemaps);
+            let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+            let _ = app.update(message);
+            assert!(app.confirm_remove_mapping.is_none());
+            let before = app.profile_maps.clone();
+            let _ = app.update(Message::RemoveMappingConfirm);
+            assert_eq!(app.profile_maps, before);
+        }
+    }
+
+    #[test]
+    fn remap_removal_requires_an_existing_mapping_and_open_list() {
+        let mut app = app();
+        let _ = app.update(Message::OpenRemaps);
+        let _ = app.update(Message::RemoveMapping("missing".to_owned()));
+        assert!(app.confirm_remove_mapping.is_none());
+
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        assert!(
+            app.confirm_remove_mapping.is_none(),
+            "closed list ignores removal"
+        );
+
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        let _ = app.update(Message::RemoveMappingConfirm);
+        assert!(app.confirm_remove_mapping.is_none());
+        assert!(app.mapping("CapsLock").is_some());
     }
 
     #[test]
