@@ -354,11 +354,16 @@ impl App {
         self.view != View::Tester || self.device == "all" || device == Path::new(&self.device)
     }
 
-    /// Whether a key cap is held, respecting the tester's device filter.
+    /// Whether a key is held, respecting the tester's device filter.
     pub fn is_pressed(&self, evdev: u16) -> bool {
         self.pressed
             .iter()
             .any(|(device, code)| *code == evdev && self.shows_input_from(device))
+    }
+
+    /// Live key-cap highlights are shown only in the tester.
+    pub fn highlights_key(&self, evdev: u16) -> bool {
+        self.view == View::Tester && self.is_pressed(evdev)
     }
 
     /// The key caps of the currently displayed deck.
@@ -2408,6 +2413,48 @@ mod tests {
 
         let _ = app.update(Message::NextOnboarding); // closes
         assert!(!app.onboarding);
+    }
+
+    #[test]
+    fn remap_view_does_not_mirror_keys_but_tester_and_capture_still_work() {
+        use evdev::KeyCode as K;
+        let first = PathBuf::from("/dev/input/event0");
+        let second = PathBuf::from("/dev/input/event1");
+
+        for scope in ["all", "/dev/input/event0"] {
+            let mut app = app();
+            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            let _ = app.update(Message::SelectKey("CapsLock"));
+            app.phys_press(&first, K::KEY_A.0);
+            app.phys_press(&second, K::KEY_B.0);
+
+            assert!(!app.highlights_key(K::KEY_A.0));
+            assert!(!app.highlights_key(K::KEY_B.0));
+            assert_eq!(app.selected, Some("CapsLock"));
+            assert!(app.maps().is_empty());
+
+            let _ = app.update(Message::SetView(View::Tester));
+            assert!(app.highlights_key(K::KEY_A.0));
+            assert_eq!(app.highlights_key(K::KEY_B.0), scope == "all");
+            let _ = app.update(Message::Monitor(monitor::Event::Key {
+                device: first.clone(),
+                event: monitor::KeyEvent::Released(K::KEY_A.0),
+            }));
+            assert!(!app.highlights_key(K::KEY_A.0));
+
+            let _ = app.update(Message::SetView(View::Keyboard));
+            assert!(!app.highlights_key(K::KEY_B.0));
+            let _ = app.update(Message::SelectKey("CapsLock"));
+            let _ = app.update(Message::SetCapture(true));
+            app.phys_press(&first, K::KEY_C.0);
+            assert!(!app.capture);
+            assert_eq!(
+                app.mapping("CapsLock")
+                    .and_then(|mapping| mapping.tap.as_deref()),
+                Some("C")
+            );
+            assert!(!app.highlights_key(K::KEY_C.0));
+        }
     }
 
     #[test]

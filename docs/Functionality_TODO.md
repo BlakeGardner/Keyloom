@@ -71,6 +71,11 @@ workflow is not planned.
 
 ## 4. Real data instead of demo data
 
+- [x] **Keep live key mirroring in Tester only.** The remap deck no longer
+  lights up for physical key presses, avoiding input from unrelated keyboards
+  appearing under a selected "Applies to" scope. Tester retains device-filtered
+  highlights, and explicit key recording remains available in the editor.
+  Regression coverage checks both scopes, switching views, and key capture.
 - [x] **Filter tester input by the selected keyboard.** The "Listen to"
   selector filters physical last-key updates, key highlights, and modifier
   chips; "All keyboards" restores aggregate input. Changing the selection

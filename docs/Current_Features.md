@@ -55,7 +55,8 @@ yet install xremap, register the unit, or set up permissions.
   [Form_Factor_Detection.md](Form_Factor_Detection.md)); the toolbar's
   Size picker overrides both for the session, and mappings survive deck
   switches untouched.
-- Keys light up live as they are pressed on any monitored physical keyboard.
+- Physical key presses do not light up the remap deck; live key highlights
+  are reserved for Tester. "Record a key" capture still accepts physical input.
 - Clicking a key opens the key editor; mapped keys show their new action on
   the cap (tap and hold legends), and swap/disabled states are styled.
 - Layer preview: a toggleable Navigation layer shows what H/J/K/L and friends
@@ -145,6 +146,7 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 
 ## Tester view
 
+- Keys light up live while held, with mirroring available only in this view.
 - The device selector reads "Listen to" and filters the last key, deck
   highlights, and held modifiers to that keyboard; "All keyboards" shows
   input from every monitored keyboard. The selection is shared with the

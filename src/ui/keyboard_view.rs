@@ -332,7 +332,7 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
     let is_trigger = nav_active && cap.code == "CapsLock";
     let mapping = app.mapping(cap.code);
     let selected = app.selected == Some(cap.code);
-    let pressed = app.is_pressed(cap.evdev);
+    let pressed = app.highlights_key(cap.evdev);
 
     // Base cap colors, overridden per state exactly like the export.
     let mut bg = vgradient(oklch(0.325, 0.007, 152.0), oklch(0.275, 0.007, 152.0));
