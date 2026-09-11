@@ -115,6 +115,11 @@ yet install xremap, register the unit, or set up permissions.
 - Keyboards plugged in after launch are picked up by a background scan of
   `/dev/input` and announced with a toast; a replugged keyboard replaces its
   stale entry, and a selected device scope follows it to the new node.
+- The scan runs every two seconds and also reconnects keyboards whose readers
+  stopped, even if a replacement reuses the same event path between scans.
+  This restores key testing after profile or remap changes restart xremap
+  and recreate its virtual keyboard. Input during the reconnection gap is
+  not captured; nodes still awaiting read permissions are retried on later scans.
 - Per-mapping device scope: "All keyboards" or one specific detected
   keyboard, with an explicit empty state when none are readable.
 - Best-effort form-factor guess per device from its name and reported keys,
@@ -224,6 +229,10 @@ language charmaps and typed-text preview were removed with it.
   starter-profile seeding and editing, editor/sheet state transitions,
   hold mappings, combo rules, onboarding, apply/service-status handling,
   and device hotplug/replug handling.
+- Monitor regression tests in `src/monitor.rs` cover repeated reader exits
+  with an unchanged node list, waiting for an old reader to finish before
+  reconnecting, and retrying nodes that could not yet be opened. Tester
+  tests cover recovery on both reused and changed event paths.
 - Generator tests in `src/xremap.rs`: key-name translation coverage,
   deterministic golden output, tap/hold, swaps, disabled keys, device
   scoping, and foreign-file backup behavior. Generated documents

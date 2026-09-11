@@ -95,6 +95,13 @@ workflow is not planned.
   keyboard. (A scanner thread polls `/dev/input` for new event nodes and
   adopts keyboards among them; a replugged keyboard replaces its stale
   entry, and a selected device scope follows it to the new node.)
+- [x] **Recover key testing after applying profiles or remaps.** Track reader
+  lifetime so the two-second hotplug scan reopens xremap's recreated virtual
+  keyboard even when it reuses the same event path between scans. Wait for
+  the old reader to finish before reconnecting and retry unreadable nodes,
+  including ones missed at startup. Input during the reconnection gap is
+  not captured. Regression tests cover repeated reader exits and tester
+  recovery with reused or changed paths.
 
 ## 5. Persistence ("Save" iteration)
 

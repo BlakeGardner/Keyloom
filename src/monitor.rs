@@ -8,8 +8,9 @@
 use cosmic::iced::futures::channel::mpsc;
 use cosmic::iced::futures::{Stream, StreamExt, stream};
 use evdev::{Device, EventSummary, KeyCode};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::keyboard;
@@ -126,10 +127,40 @@ fn input_nodes() -> HashSet<PathBuf> {
         .collect()
 }
 
+/// Keep a keyboard's path reserved until its reader has sent its final
+/// events and exited. Other input nodes only need to be classified once.
+enum WatchedNode {
+    Keyboard(JoinHandle<()>),
+    Other,
+}
+
+/// Find nodes that need opening, including keyboards whose readers stopped.
+fn scan_candidates(
+    known: &mut HashMap<PathBuf, WatchedNode>,
+    current: HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    known.retain(|path, node| match node {
+        // xremap can recreate its virtual keyboard at the same path between
+        // scans. Path presence alone does not mean we still have a reader.
+        // Conversely, don't replace a reader until its Disconnected event
+        // has been queued, even if its path temporarily disappears.
+        WatchedNode::Keyboard(reader) => !reader.is_finished(),
+        WatchedNode::Other => current.contains(path),
+    });
+    current
+        .into_iter()
+        .filter(|path| !known.contains_key(path))
+        .collect()
+}
+
 /// Read one device on a blocking thread, forwarding its key events.
 /// The thread exits when the receiver is dropped or the device goes
 /// away (reported as [`Event::Disconnected`]).
-fn spawn_reader(path: PathBuf, mut device: Device, tx: mpsc::UnboundedSender<Event>) {
+fn spawn_reader(
+    path: PathBuf,
+    mut device: Device,
+    tx: mpsc::UnboundedSender<Event>,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
         eprintln!(
             "monitoring {} ({})",
@@ -171,7 +202,7 @@ fn spawn_reader(path: PathBuf, mut device: Device, tx: mpsc::UnboundedSender<Eve
                 }
             }
         }
-    });
+    })
 }
 
 /// Stream of [`Event`]s from every keyboard-capable evdev device.
@@ -184,14 +215,17 @@ fn spawn_reader(path: PathBuf, mut device: Device, tx: mpsc::UnboundedSender<Eve
 pub fn watch() -> impl Stream<Item = Event> + Send {
     let (tx, rx) = mpsc::unbounded::<Event>();
 
-    // Snapshot the node list before enumerating: a keyboard appearing
-    // in between is then unknown and adopted by the scanner instead of
-    // being missed.
-    let mut known = input_nodes();
-
-    let mut keyboards: Vec<(PathBuf, Device)> = evdev::enumerate()
-        .filter(|(path, device)| known.contains(path) && is_keyboard(device))
-        .collect();
+    // Only remember devices we could open. Nodes missed by enumeration
+    // (including ones awaiting udev permissions) are retried by the scanner.
+    let mut known = HashMap::new();
+    let mut keyboards = Vec::new();
+    for (path, device) in evdev::enumerate() {
+        if is_keyboard(&device) {
+            keyboards.push((path, device));
+        } else {
+            known.insert(path, WatchedNode::Other);
+        }
+    }
     keyboards.sort_by(|(path_a, a), (path_b, b)| {
         a.name().cmp(&b.name()).then_with(|| path_a.cmp(path_b))
     });
@@ -202,15 +236,13 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
         .collect();
     let started = Event::Started(devices);
 
-    // Everything in the snapshot is now known: keyboards are monitored
-    // below, the rest was rejected (or unreadable) during enumeration.
-
     for (path, device) in keyboards {
-        spawn_reader(path, device, tx.clone());
+        let reader = spawn_reader(path.clone(), device, tx.clone());
+        known.insert(path, WatchedNode::Keyboard(reader));
     }
 
-    // Hotplug scanner: watch for new event nodes and adopt the ones
-    // that turn out to be keyboards.
+    // Hotplug scanner: adopt new keyboards and replace stopped readers,
+    // including when a virtual device is recreated at the same event node.
     let scan_tx = tx.clone();
     std::thread::spawn(move || {
         loop {
@@ -219,22 +251,14 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
                 return;
             }
 
-            let current = input_nodes();
-            // Forget nodes that disappeared so a keyboard replugged
-            // onto the same node is picked up again.
-            known.retain(|path| current.contains(path));
-
-            for path in current {
-                if known.contains(&path) {
-                    continue;
-                }
+            for path in scan_candidates(&mut known, input_nodes()) {
                 // Right after attach the node may not be readable yet
                 // (udev still applying permissions); retry next scan.
                 let Ok(device) = Device::open(&path) else {
                     continue;
                 };
-                known.insert(path.clone());
                 if !is_keyboard(&device) {
+                    known.insert(path, WatchedNode::Other);
                     continue;
                 }
                 if scan_tx
@@ -243,7 +267,8 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
                 {
                     return;
                 }
-                spawn_reader(path, device, scan_tx.clone());
+                let reader = spawn_reader(path.clone(), device, scan_tx.clone());
+                known.insert(path, WatchedNode::Keyboard(reader));
             }
         }
     });
@@ -251,4 +276,96 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
     // Prepend the startup notice so the UI can report the device count
     // (or the lack of access to any device).
     stream::iter([started]).chain(rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc as sync_mpsc;
+    use std::time::Instant;
+
+    /// Stand in for a reader blocked waiting for device events.
+    fn running_reader() -> (WatchedNode, sync_mpsc::Sender<()>) {
+        let (tx, rx) = sync_mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let _ = rx.recv();
+        });
+        (WatchedNode::Keyboard(reader), tx)
+    }
+
+    fn wait_for_reader(node: &WatchedNode) {
+        let WatchedNode::Keyboard(reader) = node else {
+            panic!("expected a keyboard reader");
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !reader.is_finished() {
+            assert!(Instant::now() < deadline, "reader did not exit");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn stopped_reader_is_retried_when_the_node_never_disappears_from_scans() {
+        let remapper = PathBuf::from("/dev/input/event19");
+        let physical = PathBuf::from("/dev/input/event4");
+        let current = HashSet::from([remapper.clone(), physical.clone()]);
+        let (reader, mut stop) = running_reader();
+        let (physical_reader, _physical_stop) = running_reader();
+        let mut known = HashMap::from([(remapper.clone(), reader), (physical, physical_reader)]);
+
+        // Repeated applies can replace xremap's device between scans without
+        // changing the node list. Each stopped reader must be replaced once.
+        for _ in 0..2 {
+            assert!(scan_candidates(&mut known, current.clone()).is_empty());
+            stop.send(()).unwrap();
+            wait_for_reader(&known[&remapper]);
+            assert_eq!(
+                scan_candidates(&mut known, current.clone()),
+                vec![remapper.clone()]
+            );
+
+            let (replacement, replacement_stop) = running_reader();
+            known.insert(remapper.clone(), replacement);
+            stop = replacement_stop;
+            assert!(scan_candidates(&mut known, current.clone()).is_empty());
+        }
+    }
+
+    #[test]
+    fn disappearing_node_waits_for_its_reader_to_finish_before_reconnecting() {
+        let path = PathBuf::from("/dev/input/event19");
+        let current = HashSet::from([path.clone()]);
+        let (reader, stop) = running_reader();
+        let mut known = HashMap::from([(path.clone(), reader)]);
+
+        // The old reader may still have events to send, including its final
+        // Disconnected. Don't let those arrive after a new Connected notice.
+        assert!(scan_candidates(&mut known, HashSet::new()).is_empty());
+        assert!(scan_candidates(&mut known, current.clone()).is_empty());
+        stop.send(()).unwrap();
+        wait_for_reader(&known[&path]);
+        assert_eq!(scan_candidates(&mut known, current), vec![path]);
+    }
+
+    #[test]
+    fn unreadable_nodes_are_retried_while_known_other_devices_are_skipped() {
+        let keyboard = PathBuf::from("/dev/input/event19");
+        let mouse = PathBuf::from("/dev/input/event1");
+        let current = HashSet::from([keyboard.clone(), mouse.clone()]);
+        let mut known = HashMap::from([(mouse.clone(), WatchedNode::Other)]);
+
+        // A failed open leaves the node unknown so later udev permissions
+        // can make it readable, including after startup enumeration.
+        for _ in 0..2 {
+            assert_eq!(
+                scan_candidates(&mut known, current.clone()),
+                vec![keyboard.clone()]
+            );
+        }
+        assert!(scan_candidates(&mut known, HashSet::new()).is_empty());
+        assert_eq!(
+            scan_candidates(&mut known, HashSet::from([mouse.clone()])),
+            vec![mouse]
+        );
+    }
 }

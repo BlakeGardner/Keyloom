@@ -2515,24 +2515,34 @@ mod tests {
     #[test]
     fn tester_filter_follows_replugged_keyboard() {
         use evdev::KeyCode as K;
-        let mut app = app();
-        let _ = app.update(started(keyboard::FORM_FULL, true));
-        let _ = app.update(Message::SetView(View::Tester));
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
-        app.phys_press(&PathBuf::from("/dev/input/event0"), K::KEY_LEFTSHIFT.0);
-        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
-            PathBuf::from("/dev/input/event0"),
-        )));
-        assert_eq!(app.held_mods(), [false; 4]);
-        let _ = app.update(connected(
-            "/dev/input/event7",
-            "Test Keyboard",
-            keyboard::FORM_FULL,
-            true,
-        ));
-        app.phys_press(&PathBuf::from("/dev/input/event7"), K::KEY_A.0);
-        assert!(app.is_pressed(K::KEY_A.0));
-        assert_eq!(app.last.as_ref().map(|last| last.code), Some("KeyA"));
+        // A service restart may reuse the same path; a physical replug may
+        // assign a new one. Both must restore testing for the selected device.
+        for path in ["/dev/input/event0", "/dev/input/event7"] {
+            let mut app = app();
+            let _ = app.update(started(keyboard::FORM_FULL, true));
+            let _ = app.update(Message::SetView(View::Tester));
+            let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+            app.phys_press(&PathBuf::from("/dev/input/event0"), K::KEY_LEFTSHIFT.0);
+            let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+                PathBuf::from("/dev/input/event0"),
+            )));
+            assert_eq!(app.held_mods(), [false; 4]);
+            let _ = app.update(connected(path, "Test Keyboard", keyboard::FORM_FULL, true));
+            assert_eq!(app.devices.len(), 1);
+            assert!(app.devices[0].connected);
+            assert_eq!(app.device, path);
+            let _ = app.update(Message::Monitor(monitor::Event::Key {
+                device: PathBuf::from(path),
+                event: monitor::KeyEvent::Pressed(K::KEY_A.0),
+            }));
+            assert!(app.is_pressed(K::KEY_A.0));
+            assert_eq!(app.last.as_ref().map(|last| last.code), Some("KeyA"));
+            let _ = app.update(Message::Monitor(monitor::Event::Key {
+                device: PathBuf::from(path),
+                event: monitor::KeyEvent::Released(K::KEY_A.0),
+            }));
+            assert!(!app.is_pressed(K::KEY_A.0));
+        }
     }
 
     #[test]
