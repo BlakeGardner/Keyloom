@@ -145,7 +145,7 @@ pub fn center(app: &App) -> Vec<Element<'_, Message>> {
 /// The remap status chip and `⋯` overflow menu. Changes apply on
 /// their own, so there is no Apply control here.
 pub fn end(app: &App) -> Vec<Element<'_, Message>> {
-    // Small dot + state label; clicking re-checks. xremap and systemd
+    // Passive dot + state label. xremap and systemd
     // are implementation details the wording deliberately avoids.
     let (dot_color, label) = if app.apply_in_progress() {
         // A change is on its way to the running service.
@@ -173,16 +173,23 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
             ..container::Style::default()
         }),
     );
-    let status = widget::button::custom(
+    let status = container(
         widget::row::with_capacity(2)
             .spacing(6)
             .align_y(Alignment::Center)
             .push(status_dot)
             .push(txt(label, 11.0, oklch(0.85, 0.01, 152.0))),
     )
-    .class(header_chip())
     .padding([7, 10])
-    .on_press(Message::RefreshService);
+    .class(ctheme::Container::custom(|_| container::Style {
+        background: Some(white(0.05).into()),
+        border: Border {
+            color: white(0.10),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..container::Style::default()
+    }));
 
     let menu = widget::button::custom(
         txt("⋯", 14.0, oklch(0.85, 0.01, 152.0))

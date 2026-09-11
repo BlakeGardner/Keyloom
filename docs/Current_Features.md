@@ -20,8 +20,8 @@ yet install xremap, register the unit, or set up permissions.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
   Shortcuts), a remap status chip (Remapping Enabled / Off / Failed /
   not set up / Unavailable, plus a transient Applying Remaps state while a
-  change is applied — generic wording that never names xremap; click to
-  re-check), and an overflow menu (show first-run setup, reset all
+  change is applied — generic wording that never names xremap), and an
+  overflow menu (show first-run setup, reset all
   mappings, about).
 - Three-step onboarding flow available from "Show first-run setup" in the
   menu, including a one-click Caps Lock → Escape example; can be skipped
@@ -177,7 +177,9 @@ yet install xremap, register the unit, or set up permissions.
   Off, Remapping Failed, Remapping not set up (no such unit), or Remapping
   Unavailable (no systemd). While a change is on its way to the service —
   from the debounce until the restart settles — the chip shows Applying
-  Remaps with an amber dot. Clicking the chip re-checks. An absent or broken
+  Remaps with an amber dot. The chip is a passive status indicator with a
+  standard arrow cursor and no click action; status refreshes at startup and
+  after an apply attempt finishes. An absent or broken
   service never blocks editing, and auto-apply skips restarting when there
   is no unit to restart.
 - Keyloom assumes xremap is installed and the user unit plus permissions are

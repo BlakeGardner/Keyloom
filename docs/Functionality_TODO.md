@@ -117,7 +117,8 @@ workflow is not planned.
   absent. (A header chip shows the state in deliberately generic wording —
   Remapping Enabled / Off / Failed / not set up / Unavailable, plus a
   transient Applying Remaps state while a change makes its way to the
-  service — queried at startup and re-checked on click; xremap is never
+  service — queried at startup and after an apply attempt finishes. The chip
+  is passive, with a standard arrow cursor and no click action; xremap is never
   named in the status chip. It reflects the unit, not yet whether an xremap binary
   exists at all.)
 - [x] **Write the generated config to the user's xremap config path** with

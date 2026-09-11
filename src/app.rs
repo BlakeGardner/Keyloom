@@ -193,8 +193,6 @@ pub enum Message {
     Apply(u64),
     /// Result of the restart an apply performed.
     Applied(Result<(), String>),
-    /// Re-query the xremap service state (header status chip).
-    RefreshService,
     ServiceStatus(service::Status),
     /// Redraw tick while the bottom sheet rises.
     SheetAnimate,
@@ -1411,7 +1409,6 @@ impl cosmic::Application for App {
                 }
                 return service_status_task();
             }
-            Message::RefreshService => return service_status_task(),
             Message::ServiceStatus(status) => self.service = Some(status),
             // The redraw itself re-reads the animation clock.
             Message::SheetAnimate => {}
