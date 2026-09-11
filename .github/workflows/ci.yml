@@ -61,9 +61,6 @@ jobs:
       # validated against (see generated_documents_parse_with_real_xremap
       # in src/xremap.rs). Bump deliberately when targeting a new xremap.
       XREMAP_VERSION: 0.15.12
-      # Turn a missing binary into a test failure so the validation can
-      # never silently skip in CI.
-      KEYLOOM_REQUIRE_XREMAP: 1
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
@@ -80,6 +77,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --verbose --locked
+      - name: Validate generated configs with pinned xremap
+        run: cargo test --verbose --locked xremap::tests::generated_documents_parse_with_real_xremap -- --ignored --exact
 
   deny:
     name: Audit dependencies

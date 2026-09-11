@@ -193,12 +193,12 @@ language charmaps and typed-text preview were removed with it.
   deterministic golden output, tap/hold, swaps, disabled keys, device
   scoping, and foreign-file backup behavior. Generated documents
   (including every source key and every catalog action) are additionally
-  parsed by a real xremap binary when one is on PATH — CI installs the
-  pinned release (0.15.12) so this always runs there.
-  Run the full suite with `cargo test`. A restricted sandbox that hides
-  `/dev/input` can prevent the integration test from reaching its expected
-  device-selection error; rerun outside that sandbox to verify the full suite.
-  This is distinct from `/dev/uinput` setup for running remaps.
+  parsed by a real xremap binary in CI, which installs the pinned release
+  (0.15.12) and explicitly runs the ignored integration test. A missing
+  binary fails that CI check.
+  Run the local suite with `cargo test`; it does not launch xremap, even
+  when xremap is installed on PATH. The real-binary check is reported as
+  ignored, while the generator unit tests still run.
 - Store round-trip tests in `src/config.rs`.
 - Deck assembly tests in `src/ui/model.rs` (per-form clusters, ISO
   transform, overlap and identity checks) and detection tests in

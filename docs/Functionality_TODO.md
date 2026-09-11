@@ -24,9 +24,9 @@ workflow is not planned.
   ordering, identical output for identical mappings.
 - [x] **Validate against a recorded xremap version.** Check representative
   generated configs (simple remap, modifier remap, two-rule swap) against a
-  pinned xremap release during development. (Automated: the test suite
-  parses generated documents with a real xremap binary, and CI installs the
-  pinned release so it runs on every push.)
+  pinned xremap release in CI. (Automated: CI installs the pinned release
+  and explicitly runs the real-binary integration test. Normal local test
+  runs ignore that test and do not launch the installed xremap.)
 
 ## 2. Mapping rule correctness (v0.1)
 

@@ -575,11 +575,11 @@ mod tests {
     /// parsed" (fails preparing input devices) from "config rejected"
     /// (fails loading the config).
     ///
-    /// Runs whenever an `xremap` binary is on PATH and is otherwise
-    /// skipped; CI installs the pinned release and sets
-    /// `KEYLOOM_REQUIRE_XREMAP=1` so the check can never silently
-    /// disappear there.
+    /// Ignored during normal local tests to avoid launching the installed
+    /// xremap. CI installs the pinned release and explicitly runs this test
+    /// with `--ignored`; a missing binary is a failure.
     #[test]
+    #[ignore = "launches xremap; CI runs this explicitly with a pinned binary"]
     fn generated_documents_parse_with_real_xremap() {
         use std::process::Command;
 
@@ -633,24 +633,12 @@ mod tests {
         for (name, yaml) in &documents {
             let path = dir.join(format!("{name}.yml"));
             fs::write(&path, yaml).unwrap();
-            let output = match Command::new("xremap")
+            let output = Command::new("xremap")
                 .arg("--device")
                 .arg("keyloom-validation-no-such-device")
                 .arg(&path)
                 .output()
-            {
-                Ok(output) => output,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    fs::remove_dir_all(&dir).unwrap();
-                    assert!(
-                        std::env::var_os("KEYLOOM_REQUIRE_XREMAP").is_none(),
-                        "KEYLOOM_REQUIRE_XREMAP is set but no xremap binary is on PATH"
-                    );
-                    eprintln!("skipping: no xremap binary on PATH");
-                    return;
-                }
-                Err(err) => panic!("failed to run xremap: {err}"),
-            };
+                .expect("xremap validation requires the pinned binary on PATH");
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 !stderr.contains("Failed to load config"),
