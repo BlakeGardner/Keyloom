@@ -160,11 +160,13 @@ still only previewed in memory.
   Cargo build version, application description, and technology credits.
   Uses the same modal chrome as onboarding; Close, Escape, and backdrop
   clicks dismiss it.
-- [ ] **Add license information to About** once the project license is chosen.
+- [x] **Add license information to About** for GPLv3-only (`GPL-3.0-only`),
+  with the license identifier from Cargo metadata and a no-warranty notice.
 - [ ] **Desktop entry and icon** in `data/` so the app installs and launches
   from a menu. The embedded logo in `assets/keyloom_logo.svg` is available,
   but desktop integration and an installed application icon are still missing.
-- [ ] **Choose a license** (README currently says TBD).
+- [x] **Choose a license** — GPLv3-only (`GPL-3.0-only`), with the full text
+  in [LICENSE](../LICENSE), Cargo package metadata, and a README license summary.
 
 ## 9. Installation and distribution support (long term)
 

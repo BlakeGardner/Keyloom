@@ -82,7 +82,7 @@ existing hand-written YAML.
   existing onboarding walkthrough available from the menu.
 - Use inline modal dialogs for setup, confirmations, remap review, and About.
 - Include the embedded logo, build version, description, and credits in About.
-  License selection and license information remain tracked in the TODO list.
+  Include the GPLv3-only license information and no-warranty notice in About.
 
 ## Explicitly deferred
 

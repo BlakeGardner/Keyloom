@@ -555,7 +555,7 @@ pub fn delete_profile_dialog(app: &App) -> Element<'_, Message> {
     modal(card, Message::DeleteCancel)
 }
 
-/// Application identity and credits, using the first-run dialog chrome.
+/// Application identity, license, and credits, using the first-run dialog chrome.
 pub fn about_dialog() -> Element<'static, Message> {
     use cosmic::iced::widget::svg;
 
@@ -566,7 +566,7 @@ pub fn about_dialog() -> Element<'static, Message> {
     .height(Length::Fixed(144.0));
 
     let card = dialog_card(
-        widget::column::with_capacity(6)
+        widget::column::with_capacity(7)
             .spacing(16)
             .align_x(Alignment::Center)
             .push(logo)
@@ -587,6 +587,19 @@ pub fn about_dialog() -> Element<'static, Message> {
             )
             .push(
                 txt("Built with Rust and libcosmic. Powered by xremap.", 12.0, muted())
+                .align_x(Alignment::Center)
+                .width(Length::Fill),
+            )
+            .push(
+                txt(
+                    concat!(
+                        "GNU General Public License version 3 only (",
+                        env!("CARGO_PKG_LICENSE"),
+                        ").\nProvided without warranty.",
+                    ),
+                    12.0,
+                    muted(),
+                )
                 .align_x(Alignment::Center)
                 .width(Length::Fill),
             )

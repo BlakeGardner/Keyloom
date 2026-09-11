@@ -28,7 +28,8 @@ yet install xremap, register the unit, or set up permissions.
   or reopened. It does not yet open automatically on first launch.
 - About Keyloom modal using the same centered card and dimmed backdrop as
   onboarding, with an embedded SVG logo, build version from Cargo, a short
-  application description, and Rust / libcosmic / xremap credits. Available
+  application description, Rust / libcosmic / xremap credits, and GPLv3-only
+  license information with a no-warranty notice. Available
   from every view; dismiss with Close, Escape, or a backdrop click. The logo
   lives in `assets/keyloom_logo.svg` and is compiled into the application.
 - Confirmation toasts for every destructive or notable change, with a working

@@ -18,4 +18,11 @@ cargo build
 
 ## License
 
-TBD.
+Keyloom is licensed under the GNU General Public License version 3 only
+(`GPL-3.0-only`). See [LICENSE](LICENSE) for the full terms.
+
+You may use, modify, and redistribute Keyloom, including commercially, under
+those terms. When distributing binaries, you must also make the corresponding
+source code available as required by GPLv3. Keyloom is provided without warranty.
+
+Third-party dependencies remain under their respective licenses.
