@@ -12,7 +12,7 @@ be small enough to pick up on its own.
 ## 1. Generated configuration (v0.1)
 
 Configuration is generated and written automatically to
-`$XDG_CONFIG_HOME/xremap/config.yml` (see `src/xremap.rs`). A copy-only YAML
+`$XDG_CONFIG_HOME/xremap/keyloom.yml` (see `src/xremap.rs`). A copy-only YAML
 workflow is not planned.
 
 - [x] **Action → xremap key-name table.** Translate the editor's friendly action
@@ -141,7 +141,7 @@ workflow is not planned.
   exists at all.)
 - [x] **Write the generated config to the user's xremap config path** with
   validation and clear failure feedback. (Written to
-  `$XDG_CONFIG_HOME/xremap/config.yml`; hand-written files are backed up
+  `$XDG_CONFIG_HOME/xremap/keyloom.yml`; hand-written files are backed up
   before the first overwrite, and write failures surface as a toast.)
 - [x] **Reload/apply on demand** so saved changes take effect. (Changes apply
   themselves: every change that actually rewrites the config schedules a
@@ -153,7 +153,7 @@ workflow is not planned.
   login, beyond the restart that Apply performs.
 - [ ] **Point the unit at the generated config.** Auto-apply restarts
   whatever `ExecStart` the unit has; verify (or help fix) that the unit
-  actually reads `$XDG_CONFIG_HOME/xremap/config.yml` instead of some other
+  actually reads `$XDG_CONFIG_HOME/xremap/keyloom.yml` instead of some other
   file. A unit running with `--watch=config` would even make restarts
   unnecessary.
 - [ ] **Permission guidance.** Detect missing `/dev/input` read access (the

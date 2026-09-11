@@ -228,7 +228,7 @@ pub enum WriteOutcome {
 }
 
 /// Where the generated configuration lives:
-/// `$XDG_CONFIG_HOME/xremap/config.yml` (usually `~/.config`).
+/// `$XDG_CONFIG_HOME/xremap/keyloom.yml` (usually `~/.config`).
 pub fn config_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| !dir.is_empty())
@@ -239,7 +239,7 @@ pub fn config_path() -> Option<PathBuf> {
                 .filter(|home| !home.is_empty())
                 .map(|home| PathBuf::from(home).join(".config"))
         })?;
-    Some(base.join("xremap").join("config.yml"))
+    Some(base.join("xremap").join("keyloom.yml"))
 }
 
 /// Write the generated document to [`config_path`].
@@ -526,10 +526,16 @@ mod tests {
     }
 
     #[test]
+    fn config_path_uses_keyloom_filename_in_xremap_directory() {
+        let path = config_path().expect("test environment has a config or home directory");
+        assert!(path.ends_with("xremap/keyloom.yml"));
+    }
+
+    #[test]
     fn write_respects_foreign_files_and_backs_them_up() {
         let dir = std::env::temp_dir().join(format!("keyloom-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.yml");
+        let path = dir.join("keyloom.yml");
         let ours = generate(&Vec::new(), no_devices);
 
         // Fresh write, then an identical write is a no-op.
@@ -555,7 +561,7 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), updated);
         assert_eq!(
-            fs::read_to_string(dir.join("config.yml.bak")).unwrap(),
+            fs::read_to_string(dir.join("keyloom.yml.bak")).unwrap(),
             "modmap: [] # hand written\n"
         );
 
@@ -564,7 +570,7 @@ mod tests {
             write_to(&path, &ours, false).unwrap(),
             WriteOutcome::Written(path.clone())
         );
-        assert!(!dir.join("config.yml.bak.1").exists());
+        assert!(!dir.join("keyloom.yml.bak.1").exists());
 
         fs::remove_dir_all(&dir).unwrap();
     }

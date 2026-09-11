@@ -8,7 +8,7 @@ target.
 **The big caveat:** shortcut groups are an in-memory preview and live only
 for the current session. Profiles and key mappings, however, are persisted
 via cosmic-config and translated into an xremap configuration file at
-`~/.config/xremap/config.yml` on every change (see "Persistence and
+`~/.config/xremap/keyloom.yml` on every change (see "Persistence and
 generated configuration" below). Keyloom applies changes by restarting an
 existing `xremap.service` systemd user unit automatically, but it does not
 yet install xremap, register the unit, or set up permissions.
@@ -182,14 +182,14 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   the starter profiles, which persist like any other from then on.
 - Every mapping or profile change regenerates a deterministic xremap
   document from the internal rule model and writes it to
-  `$XDG_CONFIG_HOME/xremap/config.yml` (usually `~/.config`), so identical
+  `$XDG_CONFIG_HOME/xremap/keyloom.yml` (usually `~/.config`), so identical
   mappings always produce byte-identical YAML.
 - The generator translates friendly action names into xremap `KEY_*` names,
   emits one `modmap` block for unscoped mappings plus one per device scope
   (`device.only`), renders tap/hold as `held`/`alone`, two-way swaps as two
   entries, and Disabled keys as an empty output (`[]`).
 - Files Keyloom generated carry a marker comment; a hand-written xremap
-  config found at that path is backed up to `config.yml.bak` before the
+  config found at that path is backed up to `keyloom.yml.bak` before the
   first overwrite, and is never touched just for launching the app.
 - Shortcut groups are not yet part of the generated output or the stored
   model.
@@ -213,6 +213,8 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   after an apply attempt finishes. An absent or broken
   service never blocks editing, and auto-apply skips restarting when there
   is no unit to restart.
+- The existing user unit must read `keyloom.yml`; Keyloom does not update
+  its `ExecStart` or migrate the previous `config.yml` file.
 - Keyloom assumes xremap is installed and the user unit plus permissions are
   already set up; installing or registering them is not handled yet (see
   [Functionality_TODO.md](Functionality_TODO.md) §6 and §9).

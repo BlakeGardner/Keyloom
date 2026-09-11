@@ -52,8 +52,8 @@ broader [Product_Plan.md](Product_Plan.md). See
 - Generate deterministic xremap YAML from the active profile's rule model using
   recognized key names, with stable ordering and no duplicate source entries
   within a generated remap block.
-- Write configuration automatically to `$XDG_CONFIG_HOME/xremap/config.yml`
-  (normally `~/.config/xremap/config.yml`). No copy or paste step is required.
+- Write configuration automatically to `$XDG_CONFIG_HOME/xremap/keyloom.yml`
+  (normally `~/.config/xremap/keyloom.yml`). No copy or paste step is required.
 - Emit unscoped and per-device `modmap` sections as needed; an empty profile
   generates `modmap: []`.
 - Mark generated files and back up a foreign configuration before replacing it.
