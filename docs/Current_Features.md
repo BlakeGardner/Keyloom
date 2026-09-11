@@ -23,12 +23,19 @@ yet install xremap, register the unit, or set up permissions.
   change is applied — generic wording that never names xremap; click to
   re-check), and an overflow menu (show first-run setup, reset all
   mappings, about).
-- Three-step onboarding flow on first launch, including a one-click
-  Caps Lock → Escape example; can be skipped or reopened from the menu.
+- Three-step onboarding flow available from "Show first-run setup" in the
+  menu, including a one-click Caps Lock → Escape example; can be skipped
+  or reopened. It does not yet open automatically on first launch.
+- About Keyloom modal using the same centered card and dimmed backdrop as
+  onboarding, with an embedded SVG logo, build version from Cargo, a short
+  application description, and Rust / libcosmic / xremap credits. Available
+  from every view; dismiss with Close, Escape, or a backdrop click. The logo
+  lives in `assets/keyloom_logo.svg` and is compiled into the application.
 - Confirmation toasts for every destructive or notable change, with a working
   Undo action and timed dismissal.
-- Escape closes the topmost surface first (popover → dialog → onboarding →
-  editor sheet), like a native app.
+- While Keyloom has focus, Escape dismisses only the topmost dialog, popover,
+  recording mode, or editor sheet. Global keyboard monitoring does not dismiss
+  these surfaces when Escape is pressed in another application.
 - Selection editors slide in as an animated bottom sheet; dialogs render as
   modal overlays.
 
@@ -187,6 +194,10 @@ language charmaps and typed-text preview were removed with it.
   (including every source key and every catalog action) are additionally
   parsed by a real xremap binary when one is on PATH — CI installs the
   pinned release (0.15.12) so this always runs there.
+  Run the full suite with `cargo test`. A restricted sandbox that hides
+  `/dev/input` can prevent the integration test from reaching its expected
+  device-selection error; rerun outside that sandbox to verify the full suite.
+  This is distinct from `/dev/uinput` setup for running remaps.
 - Store round-trip tests in `src/config.rs`.
 - Deck assembly tests in `src/ui/model.rs` (per-form clusters, ISO
   transform, overlap and identity checks) and detection tests in

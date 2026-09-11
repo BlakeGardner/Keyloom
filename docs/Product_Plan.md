@@ -518,14 +518,15 @@ Power users should still have access to deeper information.
 Optional features could include:
 
 - Show generated xremap YAML
-- Copy generated config
 - Show raw Linux keycodes
 - Show raw device names
 - View xremap logs
 - Use system xremap binary
 - Configure additional xremap options
 
-These should stay out of the normal workflow.
+These should stay out of the normal workflow. Keyloom writes generated
+configuration and applies changes automatically; a copy-only YAML workflow
+is not planned.
 
 ---
 

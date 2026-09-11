@@ -555,6 +555,53 @@ pub fn delete_profile_dialog(app: &App) -> Element<'_, Message> {
     modal(card, Message::DeleteCancel)
 }
 
+/// Application identity and credits, using the first-run dialog chrome.
+pub fn about_dialog() -> Element<'static, Message> {
+    use cosmic::iced::widget::svg;
+
+    let logo = svg(svg::Handle::from_memory(
+        include_bytes!("../../assets/keyloom_logo.svg").as_slice(),
+    ))
+    .width(Length::Fixed(144.0))
+    .height(Length::Fixed(144.0));
+
+    let card = dialog_card(
+        widget::column::with_capacity(6)
+            .spacing(16)
+            .align_x(Alignment::Center)
+            .push(logo)
+            .push(txt_semibold("About Keyloom", 26.0, fg()))
+            .push(txt(
+                concat!("Version ", env!("CARGO_PKG_VERSION")),
+                13.0,
+                muted(),
+            ))
+            .push(
+                txt(
+                    "Make your keyboard your own. Remap keys, create shortcuts, and switch profiles with a visual keyboard editor for Linux.",
+                    14.0,
+                    muted(),
+                )
+                .align_x(Alignment::Center)
+                .width(Length::Fill),
+            )
+            .push(
+                txt("Built with Rust and libcosmic. Powered by xremap.", 12.0, muted())
+                .align_x(Alignment::Center)
+                .width(Length::Fill),
+            )
+            .push(
+                widget::button::custom(txt_semibold("Close", 12.5, oklch(0.96, 0.02, 152.0)))
+                    .class(accent_button())
+                    .padding([9, 24])
+                    .on_press(Message::CloseAbout),
+            )
+            .into(),
+    );
+
+    modal(card, Message::CloseAbout)
+}
+
 /// The three-step first-run walkthrough.
 pub fn onboarding(app: &App) -> Element<'_, Message> {
     let step = app.onb_step.min(2);

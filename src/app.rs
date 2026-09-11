@@ -199,6 +199,7 @@ pub enum Message {
     MenuShowSetup,
     MenuReset,
     MenuAbout,
+    CloseAbout,
     SkipOnboarding,
     NextOnboarding,
     Monitor(monitor::Event),
@@ -213,6 +214,7 @@ pub struct App {
     pub toast: Option<Toast>,
     toast_seq: u64,
     pub remaps_open: bool,
+    pub about_open: bool,
     pub onboarding: bool,
     pub onb_step: usize,
     // Profiles and their in-memory preview state.
@@ -800,25 +802,10 @@ impl App {
         use evdev::KeyCode as K;
 
         let escape = scancode == K::KEY_ESC.0;
-        if escape && (self.capture || self.recording.is_some()) {
-            self.capture = false;
-            self.recording = None;
+        // evdev is global: never dismiss UI from this stream. Escape is
+        // handled once by the focused window's on_escape callback instead.
+        if self.about_open {
             return;
-        }
-        if escape {
-            // Close the topmost surface first, like a native app.
-            if self.popover.is_some() {
-                self.popover = None;
-            } else if self.remaps_open {
-                self.remaps_open = false;
-            } else if self.onboarding {
-                self.onboarding = false;
-                self.onb_step = 0;
-            } else if self.selected.is_some() || self.edit_rule.is_some() {
-                self.selected = None;
-                self.edit_rule = None;
-                self.recording = None;
-            }
         }
 
         let is_modifier = [
@@ -834,7 +821,8 @@ impl App {
         .contains(&scancode);
 
         // Recording a chord for the shortcut editor.
-        if self.view == View::Shortcuts
+        if !escape
+            && self.view == View::Shortcuts
             && let Some(side) = self.recording
             && self.edit_rule.is_some()
         {
@@ -864,7 +852,8 @@ impl App {
         }
 
         // Recording an output key for the key editor.
-        if self.view == View::Keyboard
+        if !escape
+            && self.view == View::Keyboard
             && self.capture
             && let Some(selected) = self.selected
         {
@@ -894,7 +883,7 @@ impl App {
                 device: format!("Input received from {name}"),
             });
         }
-        if self.onboarding && self.onb_step == 0 {
+        if !escape && self.onboarding && self.onb_step == 0 {
             self.onb_step = 1;
         }
     }
@@ -959,6 +948,7 @@ impl cosmic::Application for App {
             toast: None,
             toast_seq: 0,
             remaps_open: false,
+            about_open: false,
             onboarding: false,
             onb_step: 0,
             profiles,
@@ -1418,12 +1408,9 @@ impl cosmic::Application for App {
             }
             Message::MenuAbout => {
                 self.popover = None;
-                self.undo = None;
-                self.flash(
-                    "Keyloom",
-                    "Mappings are saved and applied automatically as you edit.",
-                );
+                self.about_open = true;
             }
+            Message::CloseAbout => self.about_open = false,
             Message::SkipOnboarding => {
                 self.onboarding = false;
                 self.onb_step = 0;
@@ -1540,6 +1527,9 @@ impl cosmic::Application for App {
 
     /// Modal dialogs render natively above the window content.
     fn dialog(&self) -> Option<Element<'_, Message>> {
+        if self.about_open {
+            return Some(ui::overlays::about_dialog());
+        }
         if self.confirm_delete.is_some() {
             return Some(ui::overlays::delete_profile_dialog(self));
         }
@@ -1557,6 +1547,33 @@ impl cosmic::Application for App {
 
     fn view(&self) -> Element<'_, Message> {
         ui::view(self)
+    }
+
+    fn on_escape(&mut self) -> Task<Message> {
+        // Only window keyboard events reach this callback, so typing Escape
+        // in another application cannot dismiss Keyloom's surfaces.
+        // Match the dialog stacking order and dismiss only the top surface.
+        if self.about_open {
+            self.about_open = false;
+        } else if self.confirm_delete.is_some() {
+            self.confirm_delete = None;
+        } else if self.capture {
+            self.capture = false;
+        } else if self.remaps_open {
+            self.remaps_open = false;
+        } else if self.onboarding {
+            self.onboarding = false;
+            self.onb_step = 0;
+        } else if self.popover.is_some() {
+            self.popover = None;
+            self.rename = None;
+        } else if self.recording.is_some() {
+            self.recording = None;
+        } else {
+            self.selected = None;
+            self.edit_rule = None;
+        }
+        Task::none()
     }
 }
 
@@ -1577,6 +1594,77 @@ mod tests {
 
     fn app() -> App {
         App::init(Core::default(), ()).0
+    }
+
+    #[test]
+    fn global_escape_does_not_dismiss_surfaces_or_record_a_mapping() {
+        let mut app = app();
+        let device = PathBuf::from("/dev/input/test-keyboard");
+        app.selected = Some("CapsLock");
+        app.about_open = true;
+        app.confirm_delete = Some("laptop".to_owned());
+        app.capture = true;
+        app.remaps_open = true;
+        app.onboarding = true;
+        app.popover = Some(Popover::Menu);
+
+        for about_open in [true, false] {
+            app.about_open = about_open;
+            app.phys_press(&device, evdev::KeyCode::KEY_ESC.0);
+            assert_eq!(app.about_open, about_open);
+            assert!(app.confirm_delete.is_some());
+            assert!(app.capture);
+            assert!(app.remaps_open);
+            assert!(app.onboarding);
+            assert_eq!(app.onb_step, 0);
+            assert!(app.popover.is_some());
+            assert_eq!(app.selected, Some("CapsLock"));
+            assert!(app.maps().is_empty());
+        }
+
+        app.view = View::Shortcuts;
+        app.edit_rule = Some(EditRule {
+            group: 0,
+            rule: None,
+        });
+        app.recording = Some(Side::From);
+        app.phys_press(&device, evdev::KeyCode::KEY_ESC.0);
+        assert_eq!(app.recording, Some(Side::From));
+    }
+
+    #[test]
+    fn escape_dismisses_only_about_in_either_event_order() {
+        for physical_first in [true, false] {
+            let mut app = app();
+            let device = PathBuf::from("/dev/input/test-keyboard");
+            app.selected = Some("CapsLock");
+            let _ = app.update(Message::MenuAbout);
+            if physical_first {
+                app.phys_press(&device, evdev::KeyCode::KEY_ESC.0);
+            }
+            let _ = app.on_escape();
+            if !physical_first {
+                app.phys_press(&device, evdev::KeyCode::KEY_ESC.0);
+            }
+            assert!(!app.about_open);
+            assert_eq!(app.selected, Some("CapsLock"));
+            let _ = app.on_escape();
+            assert!(app.selected.is_none());
+        }
+    }
+
+    #[test]
+    fn window_escape_cancels_capture_and_confirmation_before_editor() {
+        let mut app = app();
+        app.selected = Some("CapsLock");
+        app.capture = true;
+        app.confirm_delete = Some("laptop".to_owned());
+        let _ = app.on_escape();
+        assert!(app.confirm_delete.is_none());
+        assert!(app.capture);
+        let _ = app.on_escape();
+        assert!(!app.capture);
+        assert_eq!(app.selected, Some("CapsLock"));
     }
 
     #[test]

@@ -5,16 +5,15 @@ current UI and the known scope in [First_Release_Scope.md](First_Release_Scope.m
 (v0.1, takes precedence) and [Product_Plan.md](Product_Plan.md) (long-term vision).
 
 The UI shell is largely in place — see [Current_Features.md](Current_Features.md)
-for what exists today. Everything below is behavior that the UI previews but the
-program does not actually do yet. Each task is meant to be small enough to
-pick up on its own.
+for what exists today. Unchecked items track missing functionality and
+follow-up work; checked items record completed work. Each task is meant to
+be small enough to pick up on its own.
 
-## 1. YAML generation and copy (v0.1 release blockers)
+## 1. Generated configuration (v0.1)
 
-> **Direction change:** instead of a copy-paste YAML panel, the generated
-> configuration is now written automatically to
-> `$XDG_CONFIG_HOME/xremap/config.yml` on every change (see `src/xremap.rs`).
-> The preview/copy items below are superseded by that behavior.
+Configuration is generated and written automatically to
+`$XDG_CONFIG_HOME/xremap/config.yml` (see `src/xremap.rs`). A copy-only YAML
+workflow is not planned.
 
 - [x] **Action → xremap key-name table.** Translate the editor's friendly action
   names (e.g. `Escape`, `Right Control`) into recognized xremap key names
@@ -23,16 +22,6 @@ pick up on its own.
 - [x] **Deterministic YAML generator.** Produce a complete document with one
   `modmap` block from the active mappings: no duplicate source keys, stable
   ordering, identical output for identical mappings.
-- [ ] ~~**Read-only YAML preview panel.**~~ Superseded: the config is written to
-  disk automatically; an advanced inspect option may return later.
-- [ ] ~~**Copy YAML button.**~~ Superseded by automatic writing.
-- [ ] ~~**Empty state for the preview.**~~ Superseded: an empty profile writes
-  `modmap: []`.
-- [ ] ~~**Boundary messaging.**~~ Superseded: the header now shows the remap
-  service state, and changes apply themselves by restarting the service, so
-  the app itself communicates where its management currently ends.
-- [ ] ~~**Session-only notice.**~~ Superseded: mappings now persist via
-  cosmic-config.
 - [x] **Validate against a recorded xremap version.** Check representative
   generated configs (simple remap, modifier remap, two-rule swap) against a
   pinned xremap release during development. (Automated: the test suite
@@ -104,6 +93,9 @@ pick up on its own.
   generated output). Shortcut groups are not persisted yet.
 - [ ] **Remember UI state** worth keeping across launches (active profile is
   remembered; selected device scope and onboarding-completed flag are not).
+- [ ] **Open onboarding on first launch.** The walkthrough currently opens
+  only from the menu. Show it for a fresh install and use the persisted
+  completion/skipped flag to avoid reopening it on subsequent launches.
 
 ## 6. Apply and service management ("Apply" / "Manage" iterations)
 
@@ -121,7 +113,7 @@ pick up on its own.
   Remapping Enabled / Off / Failed / not set up / Unavailable, plus a
   transient Applying Remaps state while a change makes its way to the
   service — queried at startup and re-checked on click; xremap is never
-  named in the UI. It reflects the unit, not yet whether an xremap binary
+  named in the status chip. It reflects the unit, not yet whether an xremap binary
   exists at all.)
 - [x] **Write the generated config to the user's xremap config path** with
   validation and clear failure feedback. (Written to
@@ -164,9 +156,14 @@ still only previewed in memory.
 
 ## 8. App polish and distribution
 
-- [ ] **Real About dialog** with version and license info (currently a toast).
+- [x] **Real About dialog** replacing the toast, with the embedded SVG logo,
+  Cargo build version, application description, and technology credits.
+  Uses the same modal chrome as onboarding; Close, Escape, and backdrop
+  clicks dismiss it.
+- [ ] **Add license information to About** once the project license is chosen.
 - [ ] **Desktop entry and icon** in `data/` so the app installs and launches
-  from a menu.
+  from a menu. The embedded logo in `assets/keyloom_logo.svg` is available,
+  but desktop integration and an installed application icon are still missing.
 - [ ] **Choose a license** (README currently says TBD).
 
 ## 9. Installation and distribution support (long term)

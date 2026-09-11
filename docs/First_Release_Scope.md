@@ -1,129 +1,118 @@
-# First Release Scope — Visual xremap YAML Generator
+# First Release Scope — Visual Keyboard Remapping
 
 ## Release goal
 
-Let a user create simple key-to-key remappings visually and copy a valid xremap YAML configuration.
+Let a user configure keyboard remappings visually, retain them across sessions,
+and have changes apply automatically to an existing xremap setup.
 
-**Click a key → choose its replacement → add the mapping → copy YAML.**
+**Click a key → choose its replacement → changes save and apply automatically.**
 
-Version 0.1 is a configuration generator. Users manage xremap and apply the generated configuration themselves. Saving configuration files, applying changes, and managing the service belong to later releases.
+Keyloom owns the editable rule model, generated configuration, and automatic
+service restart. Users remain responsible for installing xremap, configuring
+input permissions, and registering an `xremap.service` systemd user unit that
+reads the generated configuration. A copy-only YAML workflow is not planned.
 
-This document defines the first-release scope and takes precedence over the broader MVP described in [Product_Plan.md](Product_Plan.md). That plan remains the long-term product vision.
-
-## Intended user
-
-A Linux desktop user who wants to generate a few straightforward xremap rules without learning YAML or Linux key names. For this release, the user is responsible for their own xremap installation and configuration workflow.
+This document defines the first-release scope and takes precedence over the
+broader [Product_Plan.md](Product_Plan.md). See
+[Current_Features.md](Current_Features.md) for implemented behavior and
+[Functionality_TODO.md](Functionality_TODO.md) for remaining work.
 
 ## Included in v0.1
 
-### 1. Visual source-key selection
+### 1. Visual editing and review
 
-- Reuse the existing Rust + libcosmic application and its keyboard layouts and form factors.
-- Clicking a key selects it for remapping.
-- Show the selected source key clearly, with explicit left/right labels for modifiers.
-- Use physical key identity internally; changing displayed layout or form factor must not change or delete existing mappings.
-- Keep the complete editing and copying workflow usable with a mouse, without access to input devices.
+- Use the Rust + libcosmic application with its keyboard form factors and
+  ANSI/ISO assemblies.
+- Clicking a key opens its editor with a labeled, searchable output picker,
+  including explicit left/right modifiers and keys outside the displayed deck.
+- Keep editing usable with a mouse when input devices are unreadable.
+- Use physical key identity internally so changing the displayed deck preserves
+  mappings.
+- Show configured mappings on the keyboard and in the remaps dialog; allow
+  selecting an entry to edit it and removing an entry directly.
+- Reject no-op self-maps, except when a different hold action makes the self-tap
+  meaningful. Multiple sources may share a destination.
+- Support the implemented tap/hold, two-way swap, disabled-key, and device-scoped
+  mappings in generated configuration.
 
-Existing physical-key highlighting can remain where available, but physical-key capture, device identification, and expanded hardware/layout coverage are not release requirements. The current typed-text preview is not a remapping test; it can be replaced by the mapping editor.
+### 2. Profiles and persistence
 
-### 2. Simple key-to-key rules
+- Store named profiles, their key mappings, and the active profile via
+  cosmic-config; restore them on launch.
+- Start fresh installs on an empty Default profile with editable starter
+  profiles available alongside it.
+- Support profile creation, duplication, renaming, and deletion, protecting the
+  active profile from deletion.
+- Provide undo for mapping removal, profile deletion, and resetting mappings.
+- Keep shortcut-group persistence and generated chord rules deferred; those
+  controls currently provide a session-only preview.
 
-Each rule maps exactly one input key to exactly one output key.
+### 3. Generated configuration
 
-Examples:
+- Generate deterministic xremap YAML from the active profile's rule model using
+  recognized key names, with stable ordering and no duplicate source entries
+  within a generated remap block.
+- Write configuration automatically to `$XDG_CONFIG_HOME/xremap/config.yml`
+  (normally `~/.config/xremap/config.yml`). No copy or paste step is required.
+- Emit unscoped and per-device `modmap` sections as needed; an empty profile
+  generates `modmap: []`.
+- Mark generated files and back up a foreign configuration before replacing it.
+  Do not overwrite a foreign configuration merely because the app launches.
+- Surface configuration-write failures clearly.
+- Validate generated documents against a recorded xremap release.
 
-- Caps Lock → Escape
-- Caps Lock → Left Control
-- Right Alt → Right Control
-- Left Control → Left Alt, and Left Alt → Left Control
+The internal rule model is the source of truth. Keyloom does not parse or merge
+existing hand-written YAML.
 
-Provide a labeled output-key picker covering the keyboard keys already represented by the app, including keys outside the currently displayed form factor. Users do not enter Linux keycodes or YAML.
+### 4. Automatic apply and service status
 
-Rule behavior:
+- After configuration changes, automatically restart the existing
+  `xremap.service` systemd user unit with debounce and restart pacing.
+- Show service status in the header, including Applying Remaps while a change
+  is pending; allow users to re-check status.
+- Surface restart failures and keep editing available when the service is
+  missing or unavailable.
+- Do not restart the service merely because Keyloom launches.
+- Keep installation, permissions, and service registration outside this release's
+  managed workflow. Automatic apply assumes the unit reads Keyloom's config.
 
-- Maintain one collection of mappings, with no device or application filters.
-- Allow adding, editing, and removing mappings.
-- Each source key has at most one mapping. Editing that source replaces its existing destination.
-- Multiple source keys may share a destination.
-- A swap is represented by two explicit mappings; adding one direction does not create the other.
-- Reject mapping a key to itself with a short explanation.
-- Keep left and right modifiers distinct.
+### 5. Application shell
 
-The generated rules contain no device restrictions. Which keyboards xremap handles remains controlled by the user's xremap setup.
-
-### 3. Mapping review
-
-- Show every configured mapping in a simple list, such as `Caps Lock → Escape`.
-- Allow selecting a list entry to edit it and removing an entry directly.
-- Keep mappings visible in the list even when their keys are absent from the displayed keyboard.
-- Mark configured source keys on the visual keyboard so users can see which keys have rules.
-- Use wording such as **Configured mappings**, rather than implying the rules are running.
-
-### 4. YAML preview and copy
-
-- Generate a complete YAML document containing one `modmap` block for the configured rules.
-- Update a read-only preview whenever a mapping is added, edited, or removed.
-- Provide **Copy YAML**, with success feedback only after the clipboard operation succeeds and a useful error if it fails.
-- With no mappings, show an empty-state prompt and disable copying.
-- Make the boundary clear in the UI: **Copy this configuration to use with xremap. Changes are not applied by this app.**
-
-Example output:
-
-```yaml
-modmap:
-  - name: Keyboard mappings
-    remap:
-      KEY_CAPSLOCK: KEY_ESC
-      KEY_RIGHTALT: KEY_RIGHTCTRL
-```
-
-The generator uses recognized xremap key names, emits no duplicate source keys, and produces deterministic output for the same mappings. The rule model is the source of truth; the YAML preview is generated from it.
-
-The app does not parse or merge an existing configuration. Copied YAML represents the current collection of mappings only.
-
-### 5. Session-only editing
-
-Mappings live in memory for the current session. There is no draft persistence or file saving in this release. Make that limitation visible near the editor: **Mappings are kept until you close the app. Copy YAML to keep them.**
+- Provide Keyboard, Tester, and Shortcuts views, profile switching, and the
+  existing onboarding walkthrough available from the menu.
+- Use inline modal dialogs for setup, confirmations, remap review, and About.
+- Include the embedded logo, build version, description, and credits in About.
+  License selection and license information remain tracked in the TODO list.
 
 ## Explicitly deferred
 
-- Saving or exporting YAML directly to a file, choosing an xremap config path, and persisting drafts.
-- Importing or editing existing YAML.
-- Installing, bundling, locating, or invoking xremap from the app.
-- Applying configurations, reloading xremap, or starting, stopping, and restarting its service.
-- Configuring permissions, elevated helpers, autostart, and background processes.
-- Profiles, device-specific rules, and application-specific rules.
-- Shortcuts, tap/hold behavior, layers, macros, key sequences, and disabling a key.
-- Individual rule enable/disable switches; users can remove rules in v0.1.
-- A full event viewer, observed mapped-output verification, service diagnostics, and logs.
-- New mouse, media-control, or additional HID support.
+- Importing or editing existing YAML, exporting to a user-selected file, and
+  selecting a different managed configuration path.
+- Installing or bundling xremap, permission setup, and registering a user unit.
+- Explicit start/stop controls, enable-on-login controls, and alternate service
+  managers.
+- Persisting shortcut groups and generating chord rules, application filters,
+  layers, macros, and key sequences.
+- Observed mapped-output verification, expanded diagnostics, and service logs.
+- New mouse or additional HID support.
 
 ## Acceptance criteria
 
-The release is complete when:
-
-1. From a fresh launch, a user can configure Caps Lock → Escape and copy its YAML in approximately 30 seconds without typing a keycode or editing YAML.
-2. A user can add a second mapping, change its destination, and remove it; the list, keyboard markers, and YAML preview stay consistent.
-3. Left and right modifiers remain separate, and a two-rule modifier swap generates the intended independent entries.
-4. Editing a source produces one entry for that source; mapping two sources to one destination is allowed.
-5. Changing the displayed keyboard layout or size preserves the physical identities and destinations of existing rules.
-6. The copied text matches the preview and is valid YAML using xremap's `modmap` format. Representative generated configurations are checked against a recorded xremap version during development, including a simple remap, a modifier remap, and a swap.
-7. The entire generator workflow works when xremap is absent and input devices are unreadable. Neither condition blocks editing or copying.
-8. Creating and copying mappings does not change system keyboard behavior, write an xremap configuration file, or interact with a service.
-9. An empty collection has a clear prompt, and the UI clearly communicates that mappings are session-only and have not been applied.
-
-## Suggested implementation order
-
-1. Add the minimal source/destination rule model and deterministic YAML generator.
-2. Connect visual key selection to an output picker and mapping list.
-3. Add configured-key markers, YAML preview, and clipboard copying.
-4. Verify the acceptance scenarios and refine empty states and labels.
-
-## Later iterations
-
-1. **Save:** write YAML to a user-selected file and retain editable mappings between sessions.
-2. **Apply:** connect the saved configuration to an existing xremap setup, with validation and clear failure feedback.
-3. **Manage:** add service status and explicit start, stop, reload, and restart controls.
-4. **Expand:** introduce profiles, targeted rules, and advanced remapping behaviors as separate scope decisions.
-
-These are sequencing directions, not requirements for v0.1.
+1. A user can configure Caps Lock → Escape without typing a keycode or editing
+   YAML. The mapping is saved and written to the generated configuration.
+2. Adding, editing, and removing mappings keeps the keyboard, remaps list,
+   persisted model, and generated configuration consistent.
+3. Left and right modifiers remain distinct; swaps, tap/hold, disabled keys,
+   and device scopes produce valid xremap rules.
+4. Changing form factor or ANSI/ISO assembly preserves mapping identities and
+   destinations.
+5. Profiles and mappings survive relaunch, including the active profile.
+6. With a correctly configured existing service, changes apply automatically;
+   pending state and failures are visible without an Apply button.
+7. Missing xremap service or unreadable input devices does not block mouse-driven
+   editing. The UI reports service availability without claiming changes applied.
+8. Launching does not overwrite a foreign configuration or restart the service.
+   A subsequent edit backs up a foreign configuration before replacing it.
+9. An empty profile has a clear empty state and generates a valid empty config.
+10. Representative generated documents are checked against the recorded xremap
+    version, including simple mappings, swaps, tap/hold, and device scoping.
