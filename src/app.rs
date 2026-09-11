@@ -7,7 +7,7 @@
 //! takes effect; shortcut groups are still previewed in memory only.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use cosmic::app::{Core, Task};
@@ -349,9 +349,16 @@ impl App {
         entries
     }
 
-    /// Whether a key cap is currently held on any monitored keyboard.
+    /// Whether a device contributes to the current view's live input.
+    fn shows_input_from(&self, device: &Path) -> bool {
+        self.view != View::Tester || self.device == "all" || device == Path::new(&self.device)
+    }
+
+    /// Whether a key cap is held, respecting the tester's device filter.
     pub fn is_pressed(&self, evdev: u16) -> bool {
-        self.pressed.iter().any(|(_, code)| *code == evdev)
+        self.pressed
+            .iter()
+            .any(|(device, code)| *code == evdev && self.shows_input_from(device))
     }
 
     /// The key caps of the currently displayed deck.
@@ -367,11 +374,7 @@ impl App {
     /// Held modifiers as `[Ctrl, Shift, Alt, Super]`.
     pub fn held_mods(&self) -> [bool; 4] {
         use evdev::KeyCode as K;
-        let held = |codes: &[u16]| {
-            codes
-                .iter()
-                .any(|code| self.pressed.iter().any(|(_, held)| held == code))
-        };
+        let held = |codes: &[u16]| codes.iter().any(|code| self.is_pressed(*code));
         [
             held(&[K::KEY_LEFTCTRL.0, K::KEY_RIGHTCTRL.0]),
             held(&[K::KEY_LEFTSHIFT.0, K::KEY_RIGHTSHIFT.0]),
@@ -875,7 +878,9 @@ impl App {
         }
 
         self.pressed.insert((device.clone(), scancode));
-        if let Some(cap) = key_by_evdev(scancode) {
+        if self.shows_input_from(device)
+            && let Some(cap) = key_by_evdev(scancode)
+        {
             let name = self
                 .devices
                 .iter()
@@ -1032,6 +1037,7 @@ impl cosmic::Application for App {
                 match view {
                     View::Keyboard => self.edit_rule = None,
                     View::Tester => {
+                        self.last = None;
                         self.capture = false;
                         self.selected = None;
                         self.onboarding = false;
@@ -1125,6 +1131,9 @@ impl cosmic::Application for App {
             }
             Message::RenameCommit => self.commit_rename(),
             Message::SelectDevice(id) => {
+                if self.view == View::Tester && self.device != id {
+                    self.last = None;
+                }
                 self.device = id;
                 self.popover = None;
             }
@@ -2399,6 +2408,131 @@ mod tests {
 
         let _ = app.update(Message::NextOnboarding); // closes
         assert!(!app.onboarding);
+    }
+
+    #[test]
+    fn tester_filters_physical_keys_and_modifiers_by_device() {
+        use evdev::KeyCode as K;
+        let mut app = app();
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let key = |device: &str, event| {
+            Message::Monitor(monitor::Event::Key {
+                device: PathBuf::from(device),
+                event,
+            })
+        };
+
+        let _ = app.update(key(
+            "/dev/input/event1",
+            monitor::KeyEvent::Pressed(K::KEY_A.0),
+        ));
+        let _ = app.update(key(
+            "/dev/input/event1",
+            monitor::KeyEvent::Pressed(K::KEY_LEFTSHIFT.0),
+        ));
+        assert!(app.last.is_none());
+        assert!(!app.is_pressed(K::KEY_A.0));
+        assert_eq!(app.held_mods(), [false; 4]);
+
+        let _ = app.update(key(
+            "/dev/input/event0",
+            monitor::KeyEvent::Pressed(K::KEY_A.0),
+        ));
+        let _ = app.update(key(
+            "/dev/input/event0",
+            monitor::KeyEvent::Pressed(K::KEY_RIGHTCTRL.0),
+        ));
+        assert_eq!(
+            app.last.as_ref().map(|last| last.code),
+            Some("ControlRight")
+        );
+        assert!(app.is_pressed(K::KEY_A.0));
+        assert_eq!(app.held_mods(), [true, false, false, false]);
+
+        let _ = app.update(key(
+            "/dev/input/event1",
+            monitor::KeyEvent::Released(K::KEY_A.0),
+        ));
+        assert!(
+            app.is_pressed(K::KEY_A.0),
+            "another device's release cannot clear this key"
+        );
+        let _ = app.update(key(
+            "/dev/input/event1",
+            monitor::KeyEvent::Pressed(K::KEY_B.0),
+        ));
+        assert_eq!(
+            app.last.as_ref().map(|last| last.code),
+            Some("ControlRight")
+        );
+        let _ = app.update(key(
+            "/dev/input/event0",
+            monitor::KeyEvent::Released(K::KEY_A.0),
+        ));
+        assert!(!app.is_pressed(K::KEY_A.0));
+    }
+
+    #[test]
+    fn tester_filter_switches_keep_held_state_and_clear_last_key() {
+        use evdev::KeyCode as K;
+        let mut app = app();
+        let first = PathBuf::from("/dev/input/event0");
+        let second = PathBuf::from("/dev/input/event1");
+        app.phys_press(&first, K::KEY_A.0);
+        let _ = app.update(Message::SetView(View::Tester));
+        assert!(
+            app.last.is_none(),
+            "entering Tester clears an unfiltered preview"
+        );
+        app.phys_press(&second, K::KEY_LEFTSHIFT.0);
+        assert!(app.last.is_some(), "All keyboards accepts either device");
+        assert!(app.is_pressed(K::KEY_A.0));
+        assert_eq!(app.held_mods(), [false, true, false, false]);
+
+        let _ = app.update(Message::SelectDevice(first.to_string_lossy().into_owned()));
+        assert!(app.last.is_none());
+        assert!(app.is_pressed(K::KEY_A.0));
+        assert_eq!(app.held_mods(), [false; 4]);
+        app.phys_press(&first, K::KEY_B.0);
+        let _ = app.update(Message::SelectDevice(second.to_string_lossy().into_owned()));
+        assert!(app.last.is_none());
+        assert!(!app.is_pressed(K::KEY_A.0));
+        assert_eq!(app.held_mods(), [false, true, false, false]);
+
+        let _ = app.update(Message::SelectDevice("all".to_owned()));
+        assert!(app.is_pressed(K::KEY_A.0));
+        assert_eq!(app.held_mods(), [false, true, false, false]);
+        let _ = app.update(Message::SelectDevice(first.to_string_lossy().into_owned()));
+        let _ = app.update(Message::SetView(View::Keyboard));
+        assert_eq!(
+            app.held_mods(),
+            [false, true, false, false],
+            "the editor still observes all keyboards"
+        );
+    }
+
+    #[test]
+    fn tester_filter_follows_replugged_keyboard() {
+        use evdev::KeyCode as K;
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_FULL, true));
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        app.phys_press(&PathBuf::from("/dev/input/event0"), K::KEY_LEFTSHIFT.0);
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            PathBuf::from("/dev/input/event0"),
+        )));
+        assert_eq!(app.held_mods(), [false; 4]);
+        let _ = app.update(connected(
+            "/dev/input/event7",
+            "Test Keyboard",
+            keyboard::FORM_FULL,
+            true,
+        ));
+        app.phys_press(&PathBuf::from("/dev/input/event7"), K::KEY_A.0);
+        assert!(app.is_pressed(K::KEY_A.0));
+        assert_eq!(app.last.as_ref().map(|last| last.code), Some("KeyA"));
     }
 
     #[test]

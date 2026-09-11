@@ -12,13 +12,21 @@ use crate::ui::model::{self, key_name, nav_layer, short};
 use crate::ui::theme::{ButtonStyle, accent, chip, muted, oklch, vgradient, white};
 use crate::ui::{tester, txt, txt_semibold};
 
-/// The `Applies to <device>` selector and the layer preview picker.
+/// The device scope (or tester input filter) and the layer preview picker.
 pub fn device_toolbar(app: &App) -> Element<'_, Message> {
     let device = widget::button::custom(
         widget::row::with_capacity(3)
             .spacing(9)
             .align_y(Alignment::Center)
-            .push(txt("Applies to", 11.0, muted()))
+            .push(txt(
+                if app.view == View::Tester {
+                    "Listen to"
+                } else {
+                    "Applies to"
+                },
+                11.0,
+                muted(),
+            ))
             .push(txt_semibold(
                 app.device_label(&app.device),
                 12.0,

@@ -71,6 +71,12 @@ workflow is not planned.
 
 ## 4. Real data instead of demo data
 
+- [x] **Filter tester input by the selected keyboard.** The "Listen to"
+  selector filters physical last-key updates, key highlights, and modifier
+  chips; "All keyboards" restores aggregate input. Changing the selection
+  clears the last-key preview and immediately updates held keys. The selected
+  device remains shared with the editor's mapping scope; manual key-cap
+  previews remain available.
 - [x] **Start new installs with an empty Default profile** instead of the demo
   profiles (`Laptop`, `Mac-style`, `Gaming`, `Mac + Cosmic`), or gate the demo
   content behind onboarding as an explicit example. (A fresh install starts

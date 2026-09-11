@@ -78,7 +78,7 @@ fn key_panel(app: &App) -> crate::ui::Panel<'_> {
 
     let title = last.map_or_else(|| "Press any key".to_owned(), |last| key_name(last.code));
     let code = last.map_or_else(
-        || "Listening to your keyboards".to_owned(),
+        || format!("Listening to {}", app.device_label(&app.device)),
         |last| last.code.to_owned(),
     );
     let device = last.map_or_else(

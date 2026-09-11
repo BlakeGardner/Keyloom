@@ -123,13 +123,20 @@ yet install xremap, register the unit, or set up permissions.
 
 ## Tester view
 
+- The device selector reads "Listen to" and filters the last key, deck
+  highlights, and held modifiers to that keyboard; "All keyboards" shows
+  input from every monitored keyboard. The selection is shared with the
+  editor's "Applies to" scope, but selecting a device does not alter existing
+  mappings. Switching the filter or entering Tester clears the last-key
+  preview; held keys immediately reflect the selected device.
 - Shows the last observed key: big key cap, friendly name, key code, and the
   keyboard it came from.
 - Live held-modifier chips (Shift / Control / Alt / Super).
 - "Becomes" panel showing what the key turns into under the active profile,
   or "no mapping — passes through".
-- Works before any mapping exists and never modifies state — editing messages
-  are ignored while the tester is open.
+- Works before any mapping exists and never modifies mappings — editing
+  messages are ignored while the tester is open. Clicking a key cap still
+  provides a manual preview, labeled "Clicked in this preview".
 
 ## Shortcuts view
 
