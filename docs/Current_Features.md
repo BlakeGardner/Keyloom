@@ -121,6 +121,23 @@ yet install xremap, register the unit, or set up permissions.
   used to pick the default deck (see
   [Form_Factor_Detection.md](Form_Factor_Detection.md)).
 
+### Remote input limitation
+
+On a computer receiving Deskflow input through Wayland/libei, remote
+keystrokes enter the compositor without passing through `/dev/input/event*`.
+The remote keyboard therefore does not appear in Keyloom's device list,
+its keys do not register in the tester or recording modes, and the xremap
+backend cannot remap those events on the receiving computer. This limitation
+applies to input that bypasses evdev; it is not a blanket restriction on all
+virtual keyboards or network input. See the
+[Deskflow FAQ](https://github.com/deskflow/deskflow/wiki/Project-FAQ),
+[libei architecture](https://libinput.pages.freedesktop.org/libei/), and
+[xremap architecture](https://github.com/xremap/xremap#concept).
+
+Support is only a distant-future possibility, outside the initial and
+near-term release scope, with no target release or commitment. It is tracked
+in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibilities-unscheduled).
+
 ## Tester view
 
 - The device selector reads "Listen to" and filters the last key, deck

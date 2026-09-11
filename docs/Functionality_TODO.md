@@ -212,3 +212,19 @@ today Keyloom requires a preinstalled xremap on `$PATH`, a registered
   [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md)).
   Needs privilege escalation (polkit/pkexec) for the group, udev, and module
   steps, and must explain the keylogging implication of joining `input`.
+
+## 10. Distant-future possibilities (unscheduled)
+
+These are known limitations we may revisit someday. They are outside the
+initial and near-term release scope, are not release blockers, and have no
+target release or implementation commitment.
+
+- [ ] **Investigate remote input that bypasses evdev, such as Deskflow's
+  Wayland/libei input on the receiving computer.** The remote keyboard is
+  absent from the device list, its keystrokes are unavailable to the tester
+  and recording modes, and xremap cannot remap those events. See
+  [Current_Features.md](Current_Features.md#remote-input-limitation).
+  A possible focused-window tester mode would only display received keys;
+  it would not enable remapping or identify the remote physical keyboard.
+  Actual remapping support would need investigation of a different input
+  path or backend integration. No approach has been selected or implemented.
