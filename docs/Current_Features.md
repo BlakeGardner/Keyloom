@@ -17,6 +17,8 @@ yet install xremap, register the unit, or set up permissions.
 
 - Native Rust + libcosmic application; runs on Wayland and X11.
 - Follows the system light/dark theme.
+- Uses the libcosmic application frame without its optional navigation rail;
+  the framed content therefore keeps equal left and right window insets.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
   Shortcuts), a remap status chip (Remapping Enabled / Off / Failed /
   not set up / Unavailable, plus a transient Applying Remaps state while a

@@ -180,6 +180,10 @@ still only previewed in memory.
 
 ## 8. App polish and distribution
 
+- [x] **Keep the application frame symmetric without a navigation rail.**
+  Keyloom uses its own header tabs, so the unused libcosmic navigation rail is
+  explicitly closed and the framed content receives matching left and right
+  window insets.
 - [x] **Keep custom dialogs open when clicking inside them.** The shared
   modal card captures clicks on text, padding, and unused space so they
   cannot reach the dismissal backdrop; controls and outside clicks still work.

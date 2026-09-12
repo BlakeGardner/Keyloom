@@ -917,7 +917,12 @@ impl cosmic::Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, (): Self::Flags) -> (Self, Task<Message>) {
+    fn init(mut core: Core, (): Self::Flags) -> (Self, Task<Message>) {
+        // Keyloom provides its own top-level navigation and has no COSMIC
+        // navigation rail. Mark the unused rail closed so the application
+        // template keeps equal border padding on both sides of the content.
+        core.nav_bar_set_toggled(false);
+
         // Tests drive the update loop against the demo state; never
         // read or write the real ~/.config from them.
         let settings = if cfg!(test) {
@@ -1634,6 +1639,13 @@ mod tests {
 
     fn app() -> App {
         App::init(Core::default(), ()).0
+    }
+
+    #[test]
+    fn initialization_disables_the_unused_navigation_rail() {
+        let app = app();
+
+        assert!(!app.core.nav_bar_active());
     }
 
     #[test]
