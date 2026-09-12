@@ -281,9 +281,10 @@ fn bottom_sheet(app: &App) -> Option<Element<'_, Message>> {
     .padding([0, 10])
     .into();
 
-    // Rise animation (the design's `kbRise`): reveal the sheet from the
-    // bottom edge by growing a clip window, easing out. The sheet stays
-    // top-aligned inside it, so its header climbs like a translate.
+    // Rise/fall animation (the design's `kbRise`): reveal the sheet from
+    // the bottom edge by growing a clip window, then reverse the same
+    // eased motion when closing. The sheet stays top-aligned inside it,
+    // so its header moves like a translate.
     let progress = app.sheet_progress();
     if progress >= 1.0 {
         return Some(sheet);

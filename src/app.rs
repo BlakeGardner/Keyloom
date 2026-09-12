@@ -24,8 +24,8 @@ use crate::ui;
 use crate::ui::model::{self, Chord, Group, Mapping, Maps, Profile, Rule, key_by_evdev, key_name};
 use crate::xremap;
 
-/// How long the bottom sheet takes to rise (the design's `kbRise`).
-const SHEET_RISE: Duration = Duration::from_millis(220);
+/// How long the bottom sheet takes to open or close (the design's `kbRise`).
+const SHEET_ANIMATION: Duration = Duration::from_millis(220);
 
 /// Quiet period between the last config change and the automatic
 /// service restart that applies it.
@@ -125,6 +125,13 @@ pub struct LastKey {
     pub device: String,
 }
 
+/// Reverse animation retained while a dismissed sheet slides out.
+#[derive(Clone, Copy, Debug)]
+struct SheetCloseAnimation {
+    started: Instant,
+    from_progress: f32,
+}
+
 /// Messages emitted by the UI.
 #[derive(Clone, Debug)]
 pub enum Message {
@@ -194,7 +201,7 @@ pub enum Message {
     /// Result of the restart an apply performed.
     Applied(Result<(), String>),
     ServiceStatus(service::Status),
-    /// Redraw tick while the bottom sheet rises.
+    /// Redraw tick while the bottom sheet opens or closes.
     SheetAnimate,
     MenuShowSetup,
     MenuReset,
@@ -251,8 +258,10 @@ pub struct App {
     // Shortcuts view state.
     pub edit_rule: Option<EditRule>,
     pub recording: Option<Side>,
-    /// When the bottom sheet last started opening, for its rise animation.
+    /// When the bottom sheet last started opening.
     sheet_opened: Option<Instant>,
+    /// Closing animation, retained until its final frame clears the editor.
+    sheet_closing: Option<SheetCloseAnimation>,
     // Hardware monitoring.
     pub devices: Vec<monitor::KeyboardDevice>,
     pub monitor_started: bool,
@@ -405,17 +414,59 @@ impl App {
             .collect()
     }
 
-    /// Whether the bottom editor sheet is showing.
+    /// Whether the bottom editor sheet is open for interaction.
     pub fn sheet_open(&self) -> bool {
+        self.sheet_visible() && self.sheet_closing.is_none()
+    }
+
+    /// Whether the bottom editor sheet still has content to render.
+    pub fn sheet_visible(&self) -> bool {
         (self.view == View::Keyboard && self.selected.is_some())
             || (self.view == View::Shortcuts && self.edit_rule.is_some())
     }
 
-    /// Linear progress of the sheet's rise animation (1.0 once settled).
+    /// Linear visibility of the sheet from hidden (0.0) to open (1.0).
     pub fn sheet_progress(&self) -> f32 {
+        if !self.sheet_visible() {
+            return 0.0;
+        }
+        if let Some(closing) = self.sheet_closing {
+            return (closing.from_progress
+                - closing.started.elapsed().as_secs_f32() / SHEET_ANIMATION.as_secs_f32())
+            .max(0.0);
+        }
         self.sheet_opened.map_or(1.0, |opened| {
-            (opened.elapsed().as_secs_f32() / SHEET_RISE.as_secs_f32()).min(1.0)
+            (opened.elapsed().as_secs_f32() / SHEET_ANIMATION.as_secs_f32()).min(1.0)
         })
+    }
+
+    /// Start opening from the sheet's current position, including if its
+    /// closing animation is reversed by another selection.
+    fn open_sheet(&mut self) {
+        let progress = self.sheet_progress();
+        self.sheet_closing = None;
+        self.sheet_opened = Instant::now().checked_sub(SHEET_ANIMATION.mul_f32(progress));
+    }
+
+    /// Keep the editor state alive while the sheet animates out.
+    fn close_sheet(&mut self) {
+        if self.sheet_visible() && self.sheet_closing.is_none() {
+            self.sheet_closing = Some(SheetCloseAnimation {
+                started: Instant::now(),
+                from_progress: self.sheet_progress(),
+            });
+        }
+    }
+
+    /// Clear a sheet after its closing animation, or immediately when a
+    /// larger navigation transition makes retaining it inappropriate.
+    fn clear_sheet(&mut self) {
+        self.selected = None;
+        self.edit_rule = None;
+        self.capture = false;
+        self.recording = None;
+        self.sheet_opened = None;
+        self.sheet_closing = None;
     }
 
     /// Show a confirmation toast (kept until dismissed or replaced),
@@ -749,10 +800,7 @@ impl App {
         self.confirm_remove_mapping = None;
         self.popover = None;
         self.rename = None;
-        self.selected = None;
-        self.edit_rule = None;
-        self.capture = false;
-        self.recording = None;
+        self.clear_sheet();
         self.undo = None;
         let sub = if duplicate {
             "A separate copy of your mappings and shortcuts."
@@ -996,6 +1044,7 @@ impl cosmic::Application for App {
             edit_rule: None,
             recording: None,
             sheet_opened: None,
+            sheet_closing: None,
             devices: Vec::new(),
             monitor_started: false,
             pressed: HashSet::new(),
@@ -1039,6 +1088,8 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SetView(view) => {
+                self.sheet_opened = None;
+                self.sheet_closing = None;
                 self.view = view;
                 self.popover = None;
                 self.recording = None;
@@ -1074,16 +1125,13 @@ impl cosmic::Application for App {
             }
             Message::SelectProfile(id) => {
                 self.profile = id;
-                self.capture = false;
                 self.toast = None;
                 self.undo = None;
                 self.popover = None;
                 self.rename = None;
                 self.remaps_open = false;
                 self.confirm_remove_mapping = None;
-                self.selected = None;
-                self.edit_rule = None;
-                self.recording = None;
+                self.clear_sheet();
                 let toast = self.flash(
                     format!("{} profile active", self.profile_name()),
                     "switched in place",
@@ -1168,7 +1216,7 @@ impl cosmic::Application for App {
             Message::SetLayer(layer) => {
                 self.layer = layer;
                 if layer == Layer::Nav {
-                    self.selected = None;
+                    self.close_sheet();
                 }
             }
             Message::ToggleLayers => self.layers_open = !self.layers_open,
@@ -1182,9 +1230,10 @@ impl cosmic::Application for App {
                     if self.selected != Some(code) {
                         self.toast = None;
                     }
-                    if self.selected.is_none() {
-                        // Opening (not switching keys) starts the rise.
-                        self.sheet_opened = Some(Instant::now());
+                    if self.selected.is_none() || self.sheet_closing.is_some() {
+                        // Opening (not switching keys) starts the rise; a
+                        // selection during closing reverses it in place.
+                        self.open_sheet();
                     }
                     self.selected = Some(code);
                     self.advanced = false;
@@ -1281,9 +1330,9 @@ impl cosmic::Application for App {
             }
             Message::RemoveMappingCancel => self.confirm_remove_mapping = None,
             Message::ClosePanel => {
-                self.selected = None;
                 self.capture = false;
                 self.toast = None;
+                self.close_sheet();
             }
             Message::SetCapture(capture) => {
                 if !capture || (self.view == View::Keyboard && self.selected.is_some()) {
@@ -1320,8 +1369,8 @@ impl cosmic::Application for App {
                 }
             }
             Message::EditRule { group, rule } => {
-                if self.edit_rule.is_none() {
-                    self.sheet_opened = Some(Instant::now());
+                if self.edit_rule.is_none() || self.sheet_closing.is_some() {
+                    self.open_sheet();
                 }
                 self.edit_rule = Some(EditRule { group, rule });
                 self.selected = None;
@@ -1353,13 +1402,13 @@ impl cosmic::Application for App {
                         }
                     });
                     self.flash("Shortcut removed", "applied instantly");
-                    self.edit_rule = None;
                     self.recording = None;
+                    self.close_sheet();
                 }
             }
             Message::CloseEdit => {
-                self.edit_rule = None;
                 self.recording = None;
+                self.close_sheet();
             }
             Message::Undo => {
                 if self.view == View::Tester {
@@ -1375,6 +1424,8 @@ impl cosmic::Application for App {
                         self.profile_groups = groups;
                         self.edit_rule = None;
                         self.recording = None;
+                        self.sheet_opened = None;
+                        self.sheet_closing = None;
                         self.toast = None;
                     }
                     Some(Undo::Profile {
@@ -1429,19 +1480,24 @@ impl cosmic::Application for App {
                 return service_status_task();
             }
             Message::ServiceStatus(status) => self.service = Some(status),
-            // The redraw itself re-reads the animation clock.
-            Message::SheetAnimate => {}
+            // The redraw itself re-reads the animation clock. Once a close
+            // reaches zero, the retained editor state can be discarded.
+            Message::SheetAnimate => {
+                if self.sheet_closing.is_some() && self.sheet_progress() <= f32::EPSILON {
+                    self.clear_sheet();
+                }
+            }
             Message::MenuShowSetup => {
                 self.popover = None;
                 self.onboarding = true;
                 self.onb_step = 0;
-                self.selected = None;
+                self.clear_sheet();
             }
             Message::MenuReset => {
                 self.undo = Some(Undo::Maps(self.profile_maps.clone()));
                 self.profile_maps.insert(self.profile.clone(), Vec::new());
                 self.popover = None;
-                self.selected = None;
+                self.clear_sheet();
                 self.flash("Profile cleared", "nothing is remapped");
                 self.persist();
             }
@@ -1557,8 +1613,9 @@ impl cosmic::Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![Subscription::run(monitor_stream)];
-        // Drive redraws only while the sheet is actively rising.
-        if self.sheet_open() && self.sheet_progress() < 1.0 {
+        // Drive redraws only while the sheet is actively moving.
+        let sheet_progress = self.sheet_progress();
+        if self.sheet_visible() && (!self.sheet_open() || sheet_progress < 1.0) {
             subscriptions.push(cosmic::iced::window::frames().map(|_| Message::SheetAnimate));
         }
         Subscription::batch(subscriptions)
@@ -1615,8 +1672,7 @@ impl cosmic::Application for App {
         } else if self.recording.is_some() {
             self.recording = None;
         } else {
-            self.selected = None;
-            self.edit_rule = None;
+            self.close_sheet();
         }
         Task::none()
     }
@@ -1703,6 +1759,14 @@ mod tests {
             assert!(!app.about_open);
             assert_eq!(app.selected, Some("CapsLock"));
             let _ = app.on_escape();
+            assert!(app.sheet_closing.is_some());
+            app.sheet_closing
+                .as_mut()
+                .expect("closing animation")
+                .started = Instant::now()
+                .checked_sub(SHEET_ANIMATION)
+                .expect("animation duration fits before now");
+            let _ = app.update(Message::SheetAnimate);
             assert!(app.selected.is_none());
         }
     }
@@ -1919,7 +1983,17 @@ mod tests {
         assert_eq!(app.selected, Some("CapsLock"), "selecting opens the sheet");
 
         let _ = app.update(Message::ClosePanel);
-        assert!(app.selected.is_none(), "done closes the sheet");
+        assert!(!app.sheet_open(), "done starts closing the sheet");
+        assert!(app.sheet_visible(), "content remains during the animation");
+
+        app.sheet_closing
+            .as_mut()
+            .expect("closing animation")
+            .started = Instant::now()
+            .checked_sub(SHEET_ANIMATION)
+            .expect("animation duration fits before now");
+        let _ = app.update(Message::SheetAnimate);
+        assert!(app.selected.is_none(), "the final frame clears the sheet");
 
         let _ = app.update(Message::SetView(View::Shortcuts));
         let _ = app.update(Message::EditRule {
@@ -1936,8 +2010,8 @@ mod tests {
     fn opening_the_sheet_starts_the_rise_animation() {
         let mut app = app();
         assert!(
-            (app.sheet_progress() - 1.0).abs() < f32::EPSILON,
-            "closed sheet reports settled progress"
+            app.sheet_progress().abs() < f32::EPSILON,
+            "closed sheet reports hidden progress"
         );
 
         let _ = app.update(Message::SelectKey("CapsLock"));
@@ -1952,6 +2026,31 @@ mod tests {
         let _ = app.update(Message::ClosePanel);
         let _ = app.update(Message::SelectKey("KeyB"));
         assert!(app.sheet_opened.expect("reopened") >= started);
+    }
+
+    #[test]
+    fn closing_the_sheet_reverses_its_animation_before_clearing_state() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        app.sheet_opened = Instant::now().checked_sub(SHEET_ANIMATION);
+        assert!((app.sheet_progress() - 1.0).abs() < f32::EPSILON);
+
+        let _ = app.update(Message::ClosePanel);
+        assert!(app.sheet_closing.is_some());
+        assert!(app.sheet_progress() > 0.0);
+        assert_eq!(app.selected, Some("CapsLock"));
+
+        app.sheet_closing
+            .as_mut()
+            .expect("closing animation")
+            .started = Instant::now()
+            .checked_sub(SHEET_ANIMATION)
+            .expect("animation duration fits before now");
+        let _ = app.update(Message::SheetAnimate);
+
+        assert!(!app.sheet_visible());
+        assert!(app.sheet_closing.is_none());
+        assert!(app.selected.is_none());
     }
 
     #[test]
