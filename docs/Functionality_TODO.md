@@ -52,10 +52,6 @@ workflow is not planned.
   Cancel, Escape, and backdrop clicks preserve the mapping and return to
   the list; confirmed removal is undoable, with an empty state after the
   last mapping is removed.
-- [x] **Animate the editor sheet in both directions.** Key and shortcut
-  editors now keep their content mounted during dismissal so the opening
-  rise animation plays smoothly in reverse before the sheet is removed.
-
 ## 3. Layouts and form factors
 
 - [x] **Re-expose form-factor selection** in the new UI. (The keyboard

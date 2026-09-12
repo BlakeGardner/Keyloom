@@ -39,8 +39,8 @@ yet install xremap, register the unit, or set up permissions.
 - While Keyloom has focus, Escape dismisses only the topmost dialog, popover,
   recording mode, or editor sheet. Global keyboard monitoring does not dismiss
   these surfaces when Escape is pressed in another application.
-- Selection editors slide in and out as an animated bottom sheet; dialogs
-  render as modal overlays.
+- Selection editors slide in as an animated bottom sheet; dialogs render as
+  modal overlays.
 - Clicking text, padding, or unused space inside a custom dialog keeps it
   open. Dialog controls remain interactive, and clicking outside the card
   dismisses it. This applies to remaps, key capture, deletion confirmation,

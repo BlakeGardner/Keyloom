@@ -3,20 +3,31 @@
 Keyloom is a Rust desktop application built with libcosmic. Follow the
 existing code patterns and keep changes focused on the requested work.
 
-## Keep documentation current
+## Keep product documentation current
 
-For every change, review both:
+Treat the product docs as a durable description of Keyloom, not a changelog
+for every implementation detail. Update them when a change adds, removes, or
+materially changes a real user-facing capability, workflow, supported setup,
+data or persistence behavior, backend integration, important limitation, or
+roadmap commitment.
 
-- `docs/Functionality_TODO.md`: mark completed work, record remaining work,
-  and update any affected limitations or follow-up tasks.
-- `docs/Current_Features.md`: describe the behavior that is actually
-  implemented, including relevant limitations. Do not present planned or
-  partially implemented behavior as complete.
+- `docs/Functionality_TODO.md`: track substantive feature work, limitations,
+  and meaningful follow-up tasks. Do not add entries for routine polish.
+- `docs/Current_Features.md`: describe implemented capabilities and relevant
+  limitations at the product level. Keep it accurate, but do not catalog every
+  control behavior or presentation detail.
 
-Update affected documentation alongside the implementation and include it
-in the same commit. Keep the two documents consistent. If neither document
-needs an update, explain why in the final response rather than making
-unnecessary edits.
+Documentation updates are generally unnecessary for animations, spacing,
+styling, copy edits, small usability refinements, internal refactors,
+test-only changes, or bug fixes that merely restore already documented
+behavior. Update the docs only when one of those changes materially alters a
+documented workflow or limitation.
+
+When a documentation update is warranted, update the affected document(s)
+alongside the implementation and keep them consistent. Do not edit both files
+mechanically when only one is relevant. If no product documentation is needed,
+no documentation-only change or routine justification in the final response
+is required.
 
 ## Format and validate
 
