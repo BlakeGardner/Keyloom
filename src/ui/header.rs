@@ -13,18 +13,9 @@ use crate::ui::overlays;
 use crate::ui::theme::{accent, black, header_chip, muted, oklch, tab, white};
 use crate::ui::{txt, txt_semibold};
 
-/// Brand dot, product name, and the profile picker.
+/// Brand icon, product name, and the profile picker.
 pub fn start(app: &App) -> Vec<Element<'_, Message>> {
-    let dot = container(widget::Space::new().width(9.0).height(9.0)).class(
-        ctheme::Container::custom(|_| container::Style {
-            background: Some(accent().into()),
-            border: Border {
-                radius: 3.0.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        }),
-    );
+    let icon = txt("⌨️", 17.0, oklch(0.95, 0.01, 152.0));
 
     let brand = txt_semibold("Keyloom", 17.0, oklch(0.95, 0.01, 152.0));
 
@@ -93,7 +84,7 @@ pub fn start(app: &App) -> Vec<Element<'_, Message>> {
         widget::row::with_capacity(3)
             .spacing(10)
             .align_y(Alignment::Center)
-            .push(dot)
+            .push(icon)
             .push(brand)
             .push(profile)
             .into(),
