@@ -106,7 +106,7 @@ pub fn bg() -> Color {
     oklch(0.145, 0.006, 152.0)
 }
 pub fn surface() -> Color {
-    oklch(0.205, 0.007, 152.0)
+    oklch(0.205, 0.0, 152.0)
 }
 pub fn fg() -> Color {
     oklch(0.93, 0.01, 152.0)
