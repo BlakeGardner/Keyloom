@@ -5,13 +5,11 @@
 //! * A [`FormFactor`] (physical size, 100% down to 60%). [`form_for_keys`]
 //!   guesses it from the keys a device reports and [`form_for_name`] from
 //!   size hints in the device's marketing name.
-//! * A variant (ANSI or ISO). [`detect_iso`] guesses it from the system's
-//!   configured XKB layout.
+//! * A variant (ANSI or ISO), detected per device from its evdev capabilities
+//!   by the keyboard monitor.
 //!
 //! Detection only picks defaults — the size and layout pickers in the UI
 //! always win. See `docs/Form_Factor_Detection.md` for the full story.
-
-use std::path::PathBuf;
 
 /// A physical keyboard size, from full-size (100%) down to 60%.
 pub struct FormFactor {
@@ -78,116 +76,6 @@ pub fn form_for_name(name: &str) -> Option<usize> {
         })
 }
 
-/// XKB layout names that use the ISO physical assembly (102nd key, tall
-/// Enter, AltGr) rather than ANSI. `us` and its variants stay ANSI.
-static ISO_XKB_LAYOUTS: &[&str] = &[
-    "gb", "ie", "de", "fr", "es", "pt", "it", "nl", "be", "dk", "no", "se", "fi", "is", "ch", "at",
-    "pl", "cz", "sk", "hu", "ro", "hr", "si", "ee", "lv", "lt", "gr", "tr",
-];
-
-/// Best-effort detection of the physical layout variant (ANSI vs ISO)
-/// from the system's configured XKB layout.
-///
-/// Sources, in order: the COSMIC compositor configuration, the
-/// `XKB_DEFAULT_LAYOUT` environment, and `/etc/default/keyboard`.
-/// Returns `None` when nothing is configured.
-pub fn detect_iso() -> Option<bool> {
-    let (layout, _) = cosmic_config_xkb()
-        .or_else(env_xkb)
-        .or_else(etc_default_xkb)?;
-    Some(layout_is_iso(&layout))
-}
-
-/// Whether an XKB layout string (possibly a comma-separated list, as
-/// configured) names an ISO-assembly layout. The first entry wins.
-fn layout_is_iso(layout: &str) -> bool {
-    let layout = layout.split(',').next().unwrap_or_default().trim();
-    ISO_XKB_LAYOUTS.contains(&layout)
-}
-
-/// The layout configured for the COSMIC compositor, if any.
-fn cosmic_config_xkb() -> Option<(String, String)> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-
-    let path = base.join("cosmic/com.system76.CosmicComp/v1/xkb_config");
-    parse_cosmic_xkb(&std::fs::read_to_string(path).ok()?)
-}
-
-fn parse_cosmic_xkb(text: &str) -> Option<(String, String)> {
-    let layout = ron_str_field(text, "layout").filter(|layout| !layout.trim().is_empty())?;
-    let variant = ron_str_field(text, "variant").unwrap_or_default();
-    Some((layout, variant))
-}
-
-/// Extract a `name: "value"` string field from a RON document, without
-/// pulling in a full RON parser.
-fn ron_str_field(text: &str, name: &str) -> Option<String> {
-    let mut rest = text;
-
-    while let Some(pos) = rest.find(name) {
-        let preceded = rest[..pos].chars().next_back();
-        let candidate = &rest[pos + name.len()..];
-        rest = candidate;
-
-        // Reject matches inside longer identifiers (e.g. `my_layout`).
-        if preceded.is_some_and(|c| c.is_alphanumeric() || c == '_') {
-            continue;
-        }
-
-        let Some(after_colon) = candidate.trim_start().strip_prefix(':') else {
-            continue;
-        };
-
-        // Non-string values (e.g. `options: None`) are not ours to parse.
-        let Some(value) = after_colon.trim_start().strip_prefix('"') else {
-            continue;
-        };
-
-        return value.find('"').map(|end| value[..end].to_owned());
-    }
-
-    None
-}
-
-/// The layout from the `XKB_DEFAULT_*` environment (honored by wlroots
-/// compositors and others), if set.
-fn env_xkb() -> Option<(String, String)> {
-    let layout = std::env::var("XKB_DEFAULT_LAYOUT")
-        .ok()
-        .filter(|layout| !layout.trim().is_empty())?;
-    let variant = std::env::var("XKB_DEFAULT_VARIANT").unwrap_or_default();
-    Some((layout, variant))
-}
-
-/// The system-wide layout from `/etc/default/keyboard`, if present.
-fn etc_default_xkb() -> Option<(String, String)> {
-    parse_etc_default(&std::fs::read_to_string("/etc/default/keyboard").ok()?)
-}
-
-fn parse_etc_default(text: &str) -> Option<(String, String)> {
-    let field = |name: &str| {
-        text.lines().find_map(|line| {
-            let value = line
-                .trim()
-                .strip_prefix(name)?
-                .trim_start()
-                .strip_prefix('=')?;
-            Some(
-                value
-                    .trim()
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_owned(),
-            )
-        })
-    };
-
-    let layout = field("XKBLAYOUT").filter(|layout| !layout.trim().is_empty())?;
-    Some((layout, field("XKBVARIANT").unwrap_or_default()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,50 +113,5 @@ mod tests {
         assert_eq!(form_for_name("TESmart DKS202-P24"), None);
         assert_eq!(form_for_name("Logitech MX Keys"), None);
         assert_eq!(form_for_name(""), None);
-    }
-
-    /// XKB layout names map to the right physical assembly.
-    #[test]
-    fn matches_xkb_names() {
-        assert!(!layout_is_iso("us"));
-        assert!(layout_is_iso("gb"));
-        assert!(layout_is_iso("de"));
-        // Multiple configured layouts: the first wins.
-        assert!(layout_is_iso("fr,us"));
-        assert!(!layout_is_iso("us,de"));
-        // Unknown layouts default to ANSI.
-        assert!(!layout_is_iso("xx"));
-        assert!(!layout_is_iso(""));
-    }
-
-    #[test]
-    fn parses_cosmic_config() {
-        let text = r#"(
-    rules: "",
-    model: "",
-    layout: "de,us",
-    variant: "nodeadkeys",
-    options: None,
-    repeat_delay: 400,
-    repeat_rate: 45,
-)"#;
-
-        assert_eq!(
-            parse_cosmic_xkb(text),
-            Some(("de,us".to_owned(), "nodeadkeys".to_owned()))
-        );
-
-        // An unset layout is no detection at all.
-        assert_eq!(parse_cosmic_xkb(r#"(layout: "", variant: "")"#), None);
-    }
-
-    #[test]
-    fn parses_etc_default_keyboard() {
-        let text = "# KEYBOARD CONFIGURATION FILE\nXKBMODEL=\"pc105\"\nXKBLAYOUT=\"gb\"\nXKBVARIANT=\"\"\nXKBOPTIONS=\"\"\n";
-        assert_eq!(
-            parse_etc_default(text),
-            Some(("gb".to_owned(), String::new()))
-        );
-        assert_eq!(parse_etc_default("XKBMODEL=pc105\n"), None);
     }
 }

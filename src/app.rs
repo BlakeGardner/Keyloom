@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use cosmic::app::{Core, Task};
-use cosmic::cosmic_config::{self, CosmicConfigEntry};
+use cosmic::cosmic_config::{self, ConfigSet, CosmicConfigEntry};
 use cosmic::iced::Subscription;
 use cosmic::iced::futures::{Stream, StreamExt};
 use cosmic::prelude::*;
 
-use crate::config::{self, KeyloomConfig};
+use crate::config::{self, KeyboardLayouts, KeyloomConfig, LayoutOverride};
 use crate::keyboard;
 use crate::monitor;
 use crate::service;
@@ -156,8 +156,12 @@ pub enum Message {
     SelectDevice(String),
     /// Show a specific form factor (size picker; marks it user-chosen).
     SetForm(usize),
+    /// Restore automatic size detection for the selected keyboard scope.
+    AutomaticForm,
     /// Switch between the ANSI and ISO assemblies.
     SetVariant(bool),
+    /// Restore automatic ANSI/ISO detection for this keyboard scope.
+    AutomaticVariant,
     OpenRemaps,
     CloseRemaps,
     SetLayer(Layer),
@@ -243,8 +247,7 @@ pub struct App {
     pub form: usize,
     /// Whether the deck uses the ISO assembly instead of ANSI.
     pub iso: bool,
-    /// Once the user picks a size, detection stops changing it.
-    form_overridden: bool,
+    keyboard_layouts: KeyboardLayouts,
     pub layer: Layer,
     pub layers_open: bool,
     pub selected: Option<&'static str>,
@@ -380,9 +383,78 @@ impl App {
         model::deck(self.form, self.iso)
     }
 
-    /// The form factor detection would pick for the connected keyboards.
+    fn selected_device(&self) -> Option<&monitor::KeyboardDevice> {
+        self.devices
+            .iter()
+            .find(|device| device.path == Path::new(&self.device))
+    }
+
+    /// The selected keyboard's guess, or the aggregate for All keyboards.
+    /// A disconnected selection keeps its last known guess.
     pub fn detected_form(&self) -> Option<usize> {
-        monitor::detected_form(self.devices.iter())
+        if self.device == "all" {
+            monitor::detected_form(self.devices.iter())
+        } else {
+            self.selected_device().map(|device| device.form)
+        }
+    }
+
+    /// The selected keyboard's physical variant, or the aggregate for All.
+    pub fn detected_iso(&self) -> Option<bool> {
+        if self.device == "all" {
+            monitor::detected_iso(self.devices.iter())
+        } else {
+            self.selected_device().map(|device| device.iso)
+        }
+    }
+
+    /// Manual choices for the active scope; automatic axes remain absent.
+    pub fn layout_override(&self) -> LayoutOverride {
+        let mut choice = if self.device == "all" {
+            self.keyboard_layouts.all
+        } else {
+            self.selected_device()
+                .and_then(|device| self.keyboard_layouts.devices.get(&device.id))
+                .copied()
+                .unwrap_or_default()
+        };
+        choice.form = choice
+            .form
+            .filter(|form| *form < keyboard::FORM_FACTORS.len());
+        choice
+    }
+
+    fn refresh_layout(&mut self) {
+        let choice = self.layout_override();
+        self.form = choice
+            .form
+            .or_else(|| self.detected_form())
+            .unwrap_or(keyboard::FORM_FULL);
+        self.iso = choice.iso.or_else(|| self.detected_iso()).unwrap_or(false);
+    }
+
+    /// Save display settings without rewriting remaps or restarting xremap.
+    fn set_layout_override(&mut self, choice: LayoutOverride) {
+        if self.device == "all" {
+            self.keyboard_layouts.all = choice;
+        } else if let Some(device) = self.selected_device() {
+            let id = device.id.clone();
+            if choice == LayoutOverride::default() {
+                self.keyboard_layouts.devices.remove(&id);
+            } else {
+                self.keyboard_layouts.devices.insert(id, choice);
+            }
+        }
+        self.refresh_layout();
+        self.popover = None;
+        // Tests may supply an isolated store; init never opens real settings
+        // in a test, and display preferences have no external side effects.
+        if let Some(settings) = &self.settings
+            && let Err(err) = settings.set("keyboard_layouts", &self.keyboard_layouts)
+        {
+            eprintln!("keyloom: failed to save keyboard layouts: {err}");
+            self.flash("Could not save keyboard layout", err.to_string());
+        }
     }
 
     /// Held modifiers as `[Ctrl, Shift, Alt, Super]`.
@@ -498,6 +570,7 @@ impl App {
                 &self.profile_maps,
                 &self.profile,
                 u32::try_from(self.custom_profiles).unwrap_or(u32::MAX),
+                &self.keyboard_layouts,
             );
             if let Err(err) = snapshot.write_entry(settings) {
                 eprintln!("keyloom: failed to save settings: {err}");
@@ -978,10 +1051,12 @@ impl cosmic::Application for App {
         } else {
             KeyloomConfig::handle()
         };
-        let stored = settings
-            .as_ref()
-            .map(KeyloomConfig::load)
-            .filter(|stored| !stored.profiles.is_empty());
+        let mut stored = settings.as_ref().map(KeyloomConfig::load);
+        let keyboard_layouts = stored
+            .as_mut()
+            .map(|stored| std::mem::take(&mut stored.keyboard_layouts))
+            .unwrap_or_default();
+        let stored = stored.filter(|stored| !stored.profiles.is_empty());
 
         let (profiles, profile_maps, profile, custom_profiles) = match stored {
             Some(stored) => {
@@ -1028,9 +1103,8 @@ impl cosmic::Application for App {
             undo: None,
             device: "all".to_owned(),
             form: keyboard::FORM_FULL,
-            // Tests must not depend on the machine's xkb configuration.
-            iso: !cfg!(test) && keyboard::detect_iso().unwrap_or(false),
-            form_overridden: false,
+            iso: false,
+            keyboard_layouts,
             layer: Layer::Base,
             layers_open: false,
             selected: None,
@@ -1058,6 +1132,7 @@ impl cosmic::Application for App {
             settings,
         };
 
+        app.refresh_layout();
         app.set_header_title(String::new());
         // Bring the generated file in line with the loaded state, but
         // never displace a hand-written config just for launching.
@@ -1193,16 +1268,32 @@ impl cosmic::Application for App {
                     self.last = None;
                 }
                 self.device = id;
+                self.refresh_layout();
                 self.popover = None;
             }
             Message::SetForm(form) => {
-                self.form = form.min(keyboard::FORM_FACTORS.len() - 1);
-                self.form_overridden = true;
-                self.popover = None;
+                self.set_layout_override(LayoutOverride {
+                    form: Some(form.min(keyboard::FORM_FACTORS.len() - 1)),
+                    ..self.layout_override()
+                });
+            }
+            Message::AutomaticForm => {
+                self.set_layout_override(LayoutOverride {
+                    form: None,
+                    ..self.layout_override()
+                });
             }
             Message::SetVariant(iso) => {
-                self.iso = iso;
-                self.popover = None;
+                self.set_layout_override(LayoutOverride {
+                    iso: Some(iso),
+                    ..self.layout_override()
+                });
+            }
+            Message::AutomaticVariant => {
+                self.set_layout_override(LayoutOverride {
+                    iso: None,
+                    ..self.layout_override()
+                });
             }
             Message::OpenRemaps => {
                 if self.view == View::Keyboard {
@@ -1545,13 +1636,7 @@ impl cosmic::Application for App {
                     self.devices = devices;
                     self.monitor_started = true;
                     self.pressed.clear();
-                    // Default the deck to the detected size until the
-                    // user picks one; the picker always wins.
-                    if !self.form_overridden
-                        && let Some(form) = monitor::detected_form(self.devices.iter())
-                    {
-                        self.form = form;
-                    }
+                    self.refresh_layout();
                 }
                 monitor::Event::Connected(device) => {
                     let id = device.path.to_string_lossy().into_owned();
@@ -1560,26 +1645,30 @@ impl cosmic::Application for App {
                     // selected mapping scope.
                     if self.devices.iter().any(|old| {
                         !old.connected
-                            && old.name == device.name
+                            && old.id == device.id
                             && old.path.to_string_lossy() == self.device
                     }) {
                         self.device = id;
+                    } else if self
+                        .selected_device()
+                        .is_some_and(|old| old.path == device.path && old.id != device.id)
+                    {
+                        // An unrelated keyboard reused the selected event
+                        // node. Do not silently adopt it as the selected scope.
+                        self.device = "all".to_owned();
+                        self.last = None;
                     }
                     // Drop the node being reused plus any stale entry
                     // for the same keyboard.
                     self.devices.retain(|old| {
-                        old.path != device.path && (old.connected || old.name != device.name)
+                        old.path != device.path && (old.connected || old.id != device.id)
                     });
                     self.pressed.retain(|(path, _)| *path != device.path);
                     let name = device.name.clone();
                     self.devices.push(device);
                     self.devices
                         .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
-                    if !self.form_overridden
-                        && let Some(form) = monitor::detected_form(self.devices.iter())
-                    {
-                        self.form = form;
-                    }
+                    self.refresh_layout();
                     let toast = self.flash(
                         format!("{name} connected"),
                         "Keys light up as you type; mappings can target it.",
@@ -1602,6 +1691,7 @@ impl cosmic::Application for App {
                         device.connected = false;
                     }
                     self.pressed.retain(|(device, _)| *device != path);
+                    self.refresh_layout();
                 }
             },
         }
@@ -2248,9 +2338,17 @@ mod tests {
     #[test]
     fn switching_decks_preserves_mappings_and_yaml() {
         let mut app = app();
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        let _ = app.update(connected(
+            "/dev/input/event1",
+            "Laptop",
+            keyboard::FORM_SIXTY_FIVE,
+            false,
+        ));
         let _ = app.update(Message::SelectKey("Numpad7"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
         let yaml = crate::xremap::generate(app.maps(), |id| id.to_owned());
+        let apply_seq = app.apply_seq;
 
         // Numpad7 is absent from the 60% deck; the rule must survive
         // switching there and back, and the generated YAML must not
@@ -2271,16 +2369,51 @@ mod tests {
             app.mapping("Numpad7").and_then(|m| m.tap.as_deref()),
             Some("Escape")
         );
+        for scope in ["/dev/input/event0", "/dev/input/event1", "all"] {
+            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            let _ = app.update(Message::AutomaticForm);
+            let _ = app.update(Message::AutomaticVariant);
+            assert_eq!(
+                crate::xremap::generate(app.maps(), |id| id.to_owned()),
+                yaml
+            );
+        }
+        assert_eq!(
+            app.apply_seq, apply_seq,
+            "layout changes do not restart the backend"
+        );
     }
 
-    fn started(form: usize, form_hinted: bool) -> Message {
-        Message::Monitor(monitor::Event::Started(vec![monitor::KeyboardDevice {
-            path: PathBuf::from("/dev/input/event0"),
-            name: "Test Keyboard".to_owned(),
+    fn test_device(
+        path: &str,
+        name: &str,
+        form: usize,
+        form_hinted: bool,
+    ) -> monitor::KeyboardDevice {
+        monitor::KeyboardDevice {
+            path: PathBuf::from(path),
+            id: monitor::KeyboardId::new(
+                evdev::InputId::new(evdev::BusType::BUS_USB, 1, 1, 1),
+                Some(name),
+                None,
+                name,
+            ),
+            name: name.to_owned(),
             connected: true,
             form,
             form_hinted,
-        }]))
+            iso: false,
+            virtual_device: false,
+        }
+    }
+
+    fn started(form: usize, form_hinted: bool) -> Message {
+        Message::Monitor(monitor::Event::Started(vec![test_device(
+            "/dev/input/event0",
+            "Test Keyboard",
+            form,
+            form_hinted,
+        )]))
     }
 
     #[test]
@@ -2307,13 +2440,312 @@ mod tests {
     }
 
     fn connected(path: &str, name: &str, form: usize, form_hinted: bool) -> Message {
-        Message::Monitor(monitor::Event::Connected(monitor::KeyboardDevice {
-            path: PathBuf::from(path),
-            name: name.to_owned(),
-            connected: true,
+        Message::Monitor(monitor::Event::Connected(test_device(
+            path,
+            name,
             form,
             form_hinted,
-        }))
+        )))
+    }
+
+    #[test]
+    fn selected_keyboard_uses_its_own_detection_in_keyboard_and_tester_views() {
+        for view in [View::Keyboard, View::Tester] {
+            let mut app = app();
+            let _ = app.update(Message::SetView(view));
+            let mut iso_keyboard = test_device(
+                "/dev/input/event0",
+                "Test Keyboard",
+                keyboard::FORM_TKL,
+                true,
+            );
+            iso_keyboard.iso = true;
+            let _ = app.update(Message::Monitor(monitor::Event::Started(vec![
+                iso_keyboard,
+            ])));
+            let _ = app.update(connected(
+                "/dev/input/event1",
+                "Laptop",
+                keyboard::FORM_FULL,
+                false,
+            ));
+            assert_eq!(
+                app.form,
+                keyboard::FORM_TKL,
+                "All keyboards prefers the name hint"
+            );
+            assert!(app.iso, "All keyboards includes the connected ISO key");
+
+            let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+            assert_eq!(app.detected_form(), Some(keyboard::FORM_FULL));
+            assert_eq!((app.form, app.iso), (keyboard::FORM_FULL, false));
+            let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+            assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, true));
+            let _ = app.update(connected(
+                "/dev/input/event2",
+                "New keyboard",
+                keyboard::FORM_FULL,
+                true,
+            ));
+            assert_eq!(
+                app.form,
+                keyboard::FORM_TKL,
+                "unrelated hotplug leaves the selected deck alone"
+            );
+        }
+    }
+
+    #[test]
+    fn size_and_variant_overrides_are_independent_per_keyboard_and_all_scope() {
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        let _ = app.update(connected(
+            "/dev/input/event1",
+            "Laptop",
+            keyboard::FORM_FULL,
+            false,
+        ));
+        let _ = app.update(Message::SetForm(keyboard::FORM_SEVENTY_FIVE));
+        let _ = app.update(Message::SetVariant(true));
+
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, false));
+        let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY_FIVE));
+        let _ = app.update(Message::SetVariant(true));
+        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        assert_eq!((app.form, app.iso), (keyboard::FORM_FULL, false));
+        let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
+
+        for (scope, form, iso) in [
+            ("/dev/input/event0", keyboard::FORM_SIXTY_FIVE, true),
+            ("all", keyboard::FORM_SEVENTY_FIVE, true),
+            ("/dev/input/event1", keyboard::FORM_SIXTY, false),
+        ] {
+            let _ = app.update(Message::SetView(View::Tester));
+            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            assert_eq!((app.form, app.iso), (form, iso));
+            let _ = app.update(Message::SetView(View::Keyboard));
+            assert_eq!((app.form, app.iso), (form, iso));
+        }
+        assert_eq!(
+            app.apply_seq, 0,
+            "display settings do not schedule remap applies"
+        );
+    }
+
+    #[test]
+    fn automatic_resets_only_the_selected_scope_and_axis() {
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        app.devices[0].iso = true;
+        app.refresh_layout();
+        let _ = app.update(Message::SetForm(keyboard::FORM_FULL));
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
+        let _ = app.update(Message::SetVariant(false));
+
+        let _ = app.update(Message::AutomaticForm);
+        assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, false));
+        assert_eq!(app.layout_override().form, None);
+        assert_eq!(app.layout_override().iso, Some(false));
+        let _ = app.update(Message::AutomaticVariant);
+        assert!(app.iso);
+        assert!(app.keyboard_layouts.devices.is_empty());
+        let _ = app.update(Message::SelectDevice("all".to_owned()));
+        assert_eq!(
+            app.form,
+            keyboard::FORM_FULL,
+            "All keyboards keeps its override"
+        );
+        let _ = app.update(Message::AutomaticForm);
+        assert_eq!(app.form, keyboard::FORM_TKL);
+        let _ = app.update(connected(
+            "/dev/input/event1",
+            "Full board",
+            keyboard::FORM_FULL,
+            true,
+        ));
+        assert_eq!(
+            app.form,
+            keyboard::FORM_FULL,
+            "Automatic resumes following detection"
+        );
+    }
+
+    #[test]
+    fn disconnected_selection_keeps_its_layout_while_all_scope_recalculates() {
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_SIXTY, true));
+        let _ = app.update(connected(
+            "/dev/input/event1",
+            "Full board",
+            keyboard::FORM_FULL,
+            true,
+        ));
+        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            PathBuf::from("/dev/input/event1"),
+        )));
+        assert_eq!(app.form, keyboard::FORM_FULL);
+        let _ = app.update(Message::SelectDevice("all".to_owned()));
+        assert_eq!(app.form, keyboard::FORM_SIXTY);
+        let _ = app.update(connected(
+            "/dev/input/event1",
+            "Full board",
+            keyboard::FORM_FULL,
+            true,
+        ));
+        assert_eq!(app.form, keyboard::FORM_FULL);
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            PathBuf::from("/dev/input/event1"),
+        )));
+        assert_eq!(
+            app.form,
+            keyboard::FORM_SIXTY,
+            "All keyboards follows disconnections"
+        );
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            PathBuf::from("/dev/input/event0"),
+        )));
+        assert_eq!(app.detected_form(), None);
+        assert_eq!(
+            app.form,
+            keyboard::FORM_FULL,
+            "no connected keyboards uses the default"
+        );
+    }
+
+    #[test]
+    fn reconnect_restores_overrides_without_confusing_same_named_keyboards() {
+        let mut app = app();
+        let mut first = test_device("/dev/input/event0", "serial-a", keyboard::FORM_TKL, true);
+        let mut second = test_device("/dev/input/event1", "serial-b", keyboard::FORM_TKL, true);
+        first.name = "Same model".to_owned();
+        second.name = first.name.clone();
+        let _ = app.update(Message::Monitor(monitor::Event::Started(vec![
+            first.clone(),
+            second.clone(),
+        ])));
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
+        let _ = app.update(Message::SetVariant(true));
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            first.path.clone(),
+        )));
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            second.path.clone(),
+        )));
+        second.path = PathBuf::from("/dev/input/event7");
+        let _ = app.update(Message::Monitor(monitor::Event::Connected(second)));
+        assert_eq!(
+            app.device, "/dev/input/event0",
+            "same name does not steal the selection"
+        );
+        assert_eq!((app.form, app.iso), (keyboard::FORM_SIXTY, true));
+        first.path = PathBuf::from("/dev/input/event8");
+        let _ = app.update(Message::Monitor(monitor::Event::Connected(first)));
+        assert_eq!(app.device, "/dev/input/event8");
+        assert_eq!((app.form, app.iso), (keyboard::FORM_SIXTY, true));
+        assert_eq!(app.devices.len(), 2);
+        let _ = app.update(Message::SelectDevice("/dev/input/event7".to_owned()));
+        assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, false));
+    }
+
+    #[test]
+    fn unrelated_keyboard_reusing_event_node_does_not_inherit_override_or_selection() {
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
+        let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+            PathBuf::from("/dev/input/event0"),
+        )));
+        let _ = app.update(connected(
+            "/dev/input/event0",
+            "Different board",
+            keyboard::FORM_FULL,
+            true,
+        ));
+        assert_eq!(app.device, "all");
+        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        assert_eq!(app.form, keyboard::FORM_FULL);
+        assert_eq!(app.layout_override().form, None);
+    }
+
+    #[test]
+    fn invalid_saved_size_falls_back_to_detection() {
+        let mut app = app();
+        app.keyboard_layouts.all.form = Some(usize::MAX);
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        assert_eq!(app.form, keyboard::FORM_TKL);
+        assert_eq!(app.layout_override().form, None);
+        assert!(!app.deck().is_empty());
+    }
+
+    #[test]
+    fn saved_layouts_restore_on_new_event_nodes_without_changing_profile_storage() {
+        let dir = std::env::temp_dir().join(format!("keyloom-layouts-test-{}", std::process::id()));
+        let handle = cosmic_config::Config::with_custom_path(
+            config::APP_ID,
+            KeyloomConfig::VERSION,
+            dir.clone(),
+        )
+        .unwrap();
+        let mut original = app();
+        let snapshot = KeyloomConfig::snapshot(
+            &original.profiles,
+            &original.profile_maps,
+            &original.profile,
+            0,
+            &original.keyboard_layouts,
+        );
+        snapshot.write_entry(&handle).unwrap();
+        original.settings = Some(handle);
+        let _ = original.update(started(keyboard::FORM_TKL, true));
+        let _ = original.update(Message::SetForm(keyboard::FORM_SEVENTY_FIVE));
+        let _ = original.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = original.update(Message::SetForm(keyboard::FORM_SIXTY_FIVE));
+        let _ = original.update(Message::SetVariant(true));
+        assert_eq!(original.apply_seq, 0);
+
+        let stored = KeyloomConfig::load(original.settings.as_ref().unwrap());
+        assert_eq!(stored.profiles, snapshot.profiles);
+        assert_eq!(stored.active_profile, snapshot.active_profile);
+        let mut restored = app();
+        restored.keyboard_layouts = stored.keyboard_layouts;
+        let _ = restored.update(Message::Monitor(monitor::Event::Started(vec![
+            test_device(
+                "/dev/input/event9",
+                "Test Keyboard",
+                keyboard::FORM_TKL,
+                true,
+            ),
+        ])));
+        assert_eq!(
+            restored.form,
+            keyboard::FORM_SEVENTY_FIVE,
+            "All keyboards override survives reload"
+        );
+        let _ = restored.update(Message::SelectDevice("/dev/input/event9".to_owned()));
+        assert_eq!(
+            (restored.form, restored.iso),
+            (keyboard::FORM_SIXTY_FIVE, true)
+        );
+
+        restored.settings = original.settings.take();
+        let _ = restored.update(Message::AutomaticForm);
+        let _ = restored.update(Message::AutomaticVariant);
+        let stored = KeyloomConfig::load(restored.settings.as_ref().unwrap());
+        assert!(
+            stored.keyboard_layouts.devices.is_empty(),
+            "reset to Automatic is persisted"
+        );
+        assert_eq!(
+            stored.keyboard_layouts.all.form,
+            Some(keyboard::FORM_SEVENTY_FIVE)
+        );
+        assert_eq!(stored.profiles, snapshot.profiles);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

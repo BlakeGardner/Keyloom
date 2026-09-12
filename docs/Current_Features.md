@@ -30,9 +30,11 @@ yet install xremap, register the unit, or set up permissions.
 
 - Renders every form factor (100%, 80% TKL, 75%, 65%, 60%) in ANSI and ISO
   assemblies.
-- The deck defaults to the detected form factor and ANSI/ISO variant (see
-  [Form_Factor_Detection.md](Form_Factor_Detection.md)); users can override
-  the displayed layout without changing their mappings.
+- The deck follows the selected keyboard's detected form factor. Manual size
+  and ANSI/ISO choices are remembered per keyboard, with independent choices
+  for "All keyboards". Automatic size and hardware-detected ANSI/ISO defaults
+  can be restored separately, without changing mappings (see
+  [Form_Factor_Detection.md](Form_Factor_Detection.md)).
 - Physical key presses do not light up the remap deck; live key highlights
   are reserved for Tester. "Record a key" capture still accepts physical input.
 - Clicking a key opens the key editor, and the deck displays configured tap
@@ -85,9 +87,17 @@ yet install xremap, register the unit, or set up permissions.
   keyboard. Input during the reconnection gap is not captured, and unreadable
   devices are retried later.
 - Per-mapping device scope: "All keyboards" or one specific detected keyboard.
-- Best-effort form-factor guess per device from its name and reported keys,
-  used to pick the default deck (see
+- Best-effort form-factor and ANSI/ISO guesses per device from its name and
+  reported keys, used for the selected keyboard's deck in both Keyboard and Tester.
+  "All keyboards" uses an aggregate guess from connected keyboards (see
   [Form_Factor_Detection.md](Form_Factor_Detection.md)).
+- A disconnected selection retains its last known layout. Reconnecting the
+  same device restores its selection and saved display choices when its
+  identity can be matched. If another keyboard reuses the selected event
+  node, the selection returns to "All keyboards".
+- Software-created evdev keyboards, such as Solaar and xremap devices, remain
+  available for explicit testing and targeting. When physical keyboards are
+  connected, virtual devices do not influence "All keyboards" layout detection.
 
 ### Remote input limitation
 
@@ -134,6 +144,13 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   cosmic-config under `~/.config/cosmic/io.github.blakegardner.Keyloom/`
   and restored on launch; a fresh install seeds the Default profile and
   the starter profiles, which persist like any other from then on.
+- Keyboard size and ANSI/ISO overrides also persist across launches,
+  independently of profiles. Identity uses the device's model identifiers
+  plus its unique identifier, falling back to connection path or name.
+  Without a unique identifier, moving ports can require selecting the size
+  again; identical devices with matching names and no unique identifier or
+  connection information share overrides.
+  Display changes do not rewrite the remap configuration or restart xremap.
 - Every mapping or profile change regenerates the xremap document from the
   internal rule model and writes it to `$XDG_CONFIG_HOME/xremap/keyloom.yml`
   (usually `~/.config`).

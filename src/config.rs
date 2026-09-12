@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use cosmic::cosmic_config::{self, CosmicConfigEntry, cosmic_config_derive::CosmicConfigEntry};
 use serde::{Deserialize, Serialize};
 
+use crate::monitor::KeyboardId;
 use crate::ui::model::{Maps, Profile};
 
 /// The application id, shared with the `cosmic::Application` impl.
@@ -23,6 +24,22 @@ pub struct StoredProfile {
     pub mappings: Maps,
 }
 
+/// Manual display choices; each absent value follows automatic detection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LayoutOverride {
+    pub form: Option<usize>,
+    pub iso: Option<bool>,
+}
+
+/// Display preferences belong to keyboards, independently of remap profiles.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeyboardLayouts {
+    pub all: LayoutOverride,
+    pub devices: HashMap<KeyboardId, LayoutOverride>,
+}
+
 /// Everything Keyloom persists between sessions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, CosmicConfigEntry)]
 #[version = 1]
@@ -33,6 +50,7 @@ pub struct KeyloomConfig {
     pub profiles: Vec<StoredProfile>,
     /// Counter used to mint unique ids for user-created profiles.
     pub custom_profiles: u32,
+    pub keyboard_layouts: KeyboardLayouts,
 }
 
 impl KeyloomConfig {
@@ -62,6 +80,7 @@ impl KeyloomConfig {
         profile_maps: &HashMap<String, Maps>,
         active_profile: &str,
         custom_profiles: u32,
+        keyboard_layouts: &KeyboardLayouts,
     ) -> Self {
         Self {
             active_profile: active_profile.to_owned(),
@@ -74,6 +93,7 @@ impl KeyloomConfig {
                 })
                 .collect(),
             custom_profiles,
+            keyboard_layouts: keyboard_layouts.clone(),
         }
     }
 
@@ -132,7 +152,18 @@ mod tests {
             )],
         );
 
-        let snapshot = KeyloomConfig::snapshot(&profiles, &maps, "custom-1", 1);
+        let layouts = KeyboardLayouts {
+            all: LayoutOverride {
+                form: Some(3),
+                iso: Some(true),
+            },
+            ..KeyboardLayouts::default()
+        };
+        let snapshot = KeyloomConfig::snapshot(&profiles, &maps, "custom-1", 1, &layouts);
+        assert_eq!(
+            snapshot.keyboard_layouts, layouts,
+            "profile saves preserve display preferences"
+        );
         let (restored, restored_maps, active, custom) = snapshot.into_state();
 
         assert_eq!(restored, profiles);
@@ -152,6 +183,7 @@ mod tests {
                 mappings: Vec::new(),
             }],
             custom_profiles: 0,
+            ..KeyloomConfig::default()
         };
         let (_, _, active, _) = config.into_state();
         assert_eq!(active, "default");
@@ -181,10 +213,53 @@ mod tests {
                 )],
             }],
             custom_profiles: 3,
+            keyboard_layouts: KeyboardLayouts {
+                all: LayoutOverride {
+                    form: Some(1),
+                    iso: None,
+                },
+                devices: HashMap::from([(
+                    KeyboardId::new(
+                        evdev::InputId::new(evdev::BusType::BUS_USB, 1, 2, 1),
+                        Some("serial-1"),
+                        None,
+                        "Keyboard",
+                    ),
+                    LayoutOverride {
+                        form: Some(3),
+                        iso: Some(true),
+                    },
+                )]),
+            },
         };
         config.write_entry(&handle).unwrap();
         assert_eq!(KeyloomConfig::load(&handle), config);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn existing_store_without_keyboard_layouts_preserves_profiles() {
+        use cosmic_config::ConfigSet;
+        let dir =
+            std::env::temp_dir().join(format!("keyloom-legacy-config-test-{}", std::process::id()));
+        let handle =
+            cosmic_config::Config::with_custom_path(APP_ID, KeyloomConfig::VERSION, dir.clone())
+                .unwrap();
+        let profiles = vec![StoredProfile {
+            id: "existing".to_owned(),
+            name: "Existing profile".to_owned(),
+            mappings: Vec::new(),
+        }];
+        handle.set("profiles", &profiles).unwrap();
+        handle.set("active_profile", "existing").unwrap();
+        handle.set("custom_profiles", 5_u32).unwrap();
+
+        let loaded = KeyloomConfig::load(&handle);
+        assert_eq!(loaded.profiles, profiles);
+        assert_eq!(loaded.active_profile, "existing");
+        assert_eq!(loaded.custom_profiles, 5);
+        assert_eq!(loaded.keyboard_layouts, KeyboardLayouts::default());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

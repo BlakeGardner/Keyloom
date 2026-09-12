@@ -7,7 +7,8 @@
 
 use cosmic::iced::futures::channel::mpsc;
 use cosmic::iced::futures::{Stream, StreamExt, stream};
-use evdev::{Device, EventSummary, KeyCode};
+use evdev::{Device, EventSummary, InputId, KeyCode};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -30,24 +31,96 @@ pub enum KeyEvent {
 #[derive(Clone, Debug)]
 pub struct KeyboardDevice {
     pub path: PathBuf,
+    /// Identity used to restore display preferences across event-node changes.
+    pub id: KeyboardId,
     pub name: String,
     pub connected: bool,
     /// Best-effort form factor index and whether the name contributed.
     pub form: usize,
     pub form_hinted: bool,
+    /// Whether the device reports the physical ISO 102nd key.
+    pub iso: bool,
+    /// Whether Linux exposes this as a software-created input device.
+    pub virtual_device: bool,
+}
+
+/// Best available persistent identity, independent of `/dev/input/eventN`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct KeyboardId {
+    bus: u16,
+    vendor: u16,
+    product: u16,
+    location: KeyboardLocation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum KeyboardLocation {
+    Unique(String),
+    Physical(String),
+    Name(String),
+}
+
+impl KeyboardId {
+    /// Prefer a serial/unique identifier, then a connection path. Devices
+    /// lacking both can only be distinguished by their model and name.
+    pub fn new(input: InputId, unique: Option<&str>, physical: Option<&str>, name: &str) -> Self {
+        let location = if let Some(unique) = unique.filter(|value| !value.is_empty()) {
+            KeyboardLocation::Unique(unique.to_owned())
+        } else if let Some(physical) = physical.filter(|value| !value.is_empty()) {
+            KeyboardLocation::Physical(physical.to_owned())
+        } else {
+            KeyboardLocation::Name(name.to_owned())
+        };
+        Self {
+            bus: input.bus_type().0,
+            vendor: input.vendor(),
+            product: input.product(),
+            location,
+        }
+    }
 }
 
 /// Prefer size hints in device names over potentially inflated capabilities.
 pub fn detected_form<'a>(devices: impl Iterator<Item = &'a KeyboardDevice>) -> Option<usize> {
-    let mut hinted = None;
-    let mut fallback = None;
+    let mut physical_hinted = None;
+    let mut physical_fallback = None;
+    let mut virtual_hinted = None;
+    let mut virtual_fallback = None;
     for device in devices.filter(|device| device.connected) {
-        fallback = Some(fallback.map_or(device.form, |form: usize| form.min(device.form)));
+        let (hinted, fallback) = if device.virtual_device {
+            (&mut virtual_hinted, &mut virtual_fallback)
+        } else {
+            (&mut physical_hinted, &mut physical_fallback)
+        };
+        *fallback = Some(fallback.map_or(device.form, |form: usize| form.min(device.form)));
         if device.form_hinted {
-            hinted = Some(hinted.map_or(device.form, |form: usize| form.min(device.form)));
+            *hinted = Some(hinted.map_or(device.form, |form: usize| form.min(device.form)));
         }
     }
-    hinted.or(fallback)
+    physical_hinted
+        .or(physical_fallback)
+        .or(virtual_hinted)
+        .or(virtual_fallback)
+}
+
+/// Use the ISO assembly when any connected keyboard reports its extra key.
+pub fn detected_iso<'a>(devices: impl Iterator<Item = &'a KeyboardDevice>) -> Option<bool> {
+    let mut physical_connected = false;
+    let mut physical_iso = false;
+    let mut virtual_connected = false;
+    let mut virtual_iso = false;
+    for device in devices.filter(|device| device.connected) {
+        if device.virtual_device {
+            virtual_connected = true;
+            virtual_iso |= device.iso;
+        } else {
+            physical_connected = true;
+            physical_iso |= device.iso;
+        }
+    }
+    physical_connected
+        .then_some(physical_iso)
+        .or_else(|| virtual_connected.then_some(virtual_iso))
 }
 
 /// What the monitor reports to the application.
@@ -68,6 +141,16 @@ fn is_keyboard(device: &Device) -> bool {
     device
         .supported_keys()
         .is_some_and(|keys| keys.contains(KeyCode::KEY_A) && keys.contains(KeyCode::KEY_SPACE))
+}
+
+/// Linux places uinput and other software-created devices under this sysfs
+/// subtree, regardless of the desktop environment running above it.
+fn is_virtual_device(path: &Path) -> bool {
+    let Some(event) = path.file_name() else {
+        return false;
+    };
+    std::fs::canonicalize(Path::new("/sys/class/input").join(event).join("device"))
+        .is_ok_and(|path| path.starts_with("/sys/devices/virtual/input"))
 }
 
 /// Guess a device's form factor from its name and reported keys (see
@@ -98,16 +181,26 @@ fn form_guess(device: &Device) -> (bool, usize) {
 /// Describe one opened device for the application.
 fn device_entry(path: &Path, device: &Device) -> KeyboardDevice {
     let (form_hinted, form) = form_guess(device);
+    let name = device
+        .name()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Unnamed keyboard");
     KeyboardDevice {
         path: path.to_owned(),
-        name: device
-            .name()
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Unnamed keyboard")
-            .to_owned(),
+        id: KeyboardId::new(
+            device.input_id(),
+            device.unique_name(),
+            device.physical_path(),
+            name,
+        ),
+        name: name.to_owned(),
         connected: true,
         form,
         form_hinted,
+        iso: device
+            .supported_keys()
+            .is_some_and(|keys| keys.contains(KeyCode::KEY_102ND)),
+        virtual_device: is_virtual_device(path),
     }
 }
 
@@ -283,6 +376,111 @@ mod tests {
     use super::*;
     use std::sync::mpsc as sync_mpsc;
     use std::time::Instant;
+
+    fn layout_device(connected: bool, iso: bool, virtual_device: bool) -> KeyboardDevice {
+        KeyboardDevice {
+            path: PathBuf::from("/dev/input/event0"),
+            id: KeyboardId::new(
+                InputId::new(evdev::BusType::BUS_USB, 1, 2, 1),
+                Some("serial"),
+                None,
+                "Keyboard",
+            ),
+            name: "Keyboard".to_owned(),
+            connected,
+            form: keyboard::FORM_TKL,
+            form_hinted: true,
+            iso,
+            virtual_device,
+        }
+    }
+
+    #[test]
+    fn aggregate_variant_uses_connected_keyboard_capabilities() {
+        assert_eq!(detected_iso(std::iter::empty()), None);
+        let ansi = layout_device(true, false, false);
+        let iso = layout_device(true, true, false);
+        let disconnected_iso = layout_device(false, true, false);
+        assert_eq!(detected_iso([&ansi].into_iter()), Some(false));
+        assert_eq!(detected_iso([&ansi, &iso].into_iter()), Some(true));
+        assert_eq!(
+            detected_iso([&ansi, &disconnected_iso].into_iter()),
+            Some(false)
+        );
+        let broad_virtual = layout_device(true, true, true);
+        assert_eq!(
+            detected_iso([&ansi, &broad_virtual].into_iter()),
+            Some(false),
+            "a virtual keyboard does not distort a physical keyboard's variant"
+        );
+        assert_eq!(
+            detected_iso([&broad_virtual].into_iter()),
+            Some(true),
+            "virtual keyboards remain a fallback when no physical keyboard is visible"
+        );
+    }
+
+    #[test]
+    fn aggregate_form_prefers_physical_keyboards_over_virtual_capabilities() {
+        let physical = layout_device(true, false, false);
+        let mut broad_virtual = layout_device(true, true, true);
+        broad_virtual.form = keyboard::FORM_FULL;
+        assert_eq!(
+            detected_form([&physical, &broad_virtual].into_iter()),
+            Some(keyboard::FORM_TKL)
+        );
+        assert_eq!(
+            detected_form([&broad_virtual].into_iter()),
+            Some(keyboard::FORM_FULL)
+        );
+    }
+
+    #[test]
+    fn unique_identity_survives_port_and_firmware_changes_and_distinguishes_units() {
+        let input = InputId::new(evdev::BusType::BUS_USB, 1, 2, 1);
+        let original = KeyboardId::new(input.clone(), Some("serial-a"), Some("usb-1"), "Keyboard");
+        let moved = KeyboardId::new(
+            InputId::new(evdev::BusType::BUS_USB, 1, 2, 2),
+            Some("serial-a"),
+            Some("usb-2"),
+            "Keyboard",
+        );
+        let other = KeyboardId::new(input, Some("serial-b"), Some("usb-1"), "Keyboard");
+        assert_eq!(original, moved);
+        assert_ne!(original, other);
+    }
+
+    #[test]
+    fn fallback_identity_uses_connection_then_model_and_name() {
+        let input = InputId::new(evdev::BusType::BUS_USB, 1, 2, 1);
+        let first = KeyboardId::new(input.clone(), None, Some("usb-1"), "Keyboard");
+        assert_eq!(
+            first,
+            KeyboardId::new(input.clone(), Some(""), Some("usb-1"), "Keyboard")
+        );
+        assert_ne!(
+            first,
+            KeyboardId::new(input.clone(), None, Some("usb-2"), "Keyboard")
+        );
+        let fallback = KeyboardId::new(input.clone(), None, None, "Keyboard");
+        assert_eq!(
+            fallback,
+            KeyboardId::new(input.clone(), Some(""), Some(""), "Keyboard")
+        );
+        assert_ne!(
+            fallback,
+            KeyboardId::new(input, None, None, "Other keyboard")
+        );
+        assert_ne!(
+            fallback,
+            KeyboardId::new(
+                InputId::new(evdev::BusType::BUS_USB, 1, 3, 1),
+                None,
+                None,
+                "Keyboard"
+            )
+        );
+    }
 
     /// Stand in for a reader blocked waiting for device events.
     fn running_reader() -> (WatchedNode, sync_mpsc::Sender<()>) {

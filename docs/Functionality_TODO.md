@@ -57,15 +57,17 @@ workflow is not planned.
 - [x] **Re-expose form-factor selection** in the new UI. (The keyboard
   toolbar's Size picker offers 100% / TKL / 75% / 65% / 60%.)
 - [x] **Re-expose layout variants.** (ANSI and ISO assemblies for every
-  size; the ISO variant is auto-detected from the configured XKB layout.
+  size; the ISO variant is auto-detected per keyboard from evdev capabilities.
   The pre-redesign language charmaps and typed-text preview were dropped
   with the old layout engine.)
 - [x] **Preserve mappings across layout/form-factor changes.** Mappings key off
   physical identity, so switching the displayed deck must not change or delete
   rules; verified with a regression test (including unchanged generated YAML).
-- [x] **Default the deck to the detected form factor.** The monitor's
-  per-device guess (`detected_form`) picks the initial deck; a manual size
-  choice always wins. See
+- [x] **Follow the selected keyboard's form factor.** Keyboard and Tester
+  use the selected device's guess, with persistent size and ANSI/ISO overrides
+  per keyboard and separately for "All keyboards". Automatic size and the
+  hardware-detected variant default can be restored independently. Reconnects
+  restore choices using the best available device identity. See
   [Form_Factor_Detection.md](Form_Factor_Detection.md).
 
 ## 4. Real data instead of demo data
