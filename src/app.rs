@@ -157,12 +157,8 @@ pub enum Message {
     SelectDevice(String),
     /// Show a specific form factor (size picker; marks it user-chosen).
     SetForm(usize),
-    /// Restore automatic size detection for the selected keyboard scope.
-    AutomaticForm,
     /// Switch between the ANSI and ISO assemblies.
     SetVariant(bool),
-    /// Restore automatic ANSI/ISO detection for this keyboard scope.
-    AutomaticVariant,
     OpenRemaps,
     CloseRemaps,
     SetLayer(Layer),
@@ -474,7 +470,7 @@ impl App {
     }
 
     /// Manual choices for the active scope; automatic axes remain absent.
-    pub fn layout_override(&self) -> LayoutOverride {
+    fn layout_override(&self) -> LayoutOverride {
         let mut choice = if self.device == "all" {
             self.keyboard_layouts.all
         } else {
@@ -1354,21 +1350,9 @@ impl cosmic::Application for App {
                     ..self.layout_override()
                 });
             }
-            Message::AutomaticForm => {
-                self.set_layout_override(LayoutOverride {
-                    form: None,
-                    ..self.layout_override()
-                });
-            }
             Message::SetVariant(iso) => {
                 self.set_layout_override(LayoutOverride {
                     iso: Some(iso),
-                    ..self.layout_override()
-                });
-            }
-            Message::AutomaticVariant => {
-                self.set_layout_override(LayoutOverride {
-                    iso: None,
                     ..self.layout_override()
                 });
             }
@@ -2595,8 +2579,8 @@ mod tests {
         );
         for scope in ["/dev/input/event0", "/dev/input/event1", "all"] {
             let _ = app.update(Message::SelectDevice(scope.to_owned()));
-            let _ = app.update(Message::AutomaticForm);
-            let _ = app.update(Message::AutomaticVariant);
+            let _ = app.update(Message::SetForm(app.detected_form().unwrap()));
+            let _ = app.update(Message::SetVariant(app.detected_iso().unwrap()));
             assert_eq!(
                 crate::xremap::generate(app.maps(), |id| id.to_owned()),
                 yaml
@@ -2641,12 +2625,20 @@ mod tests {
     }
 
     #[test]
-    fn detected_form_defaults_the_deck() {
+    fn detected_size_and_variant_default_the_deck_without_saving_overrides() {
         let mut app = app();
-        assert_eq!(app.form, keyboard::FORM_FULL);
+        assert_eq!((app.form, app.iso), (keyboard::FORM_FULL, false));
 
-        let _ = app.update(started(keyboard::FORM_TKL, true));
-        assert_eq!(app.form, keyboard::FORM_TKL, "detection picks the deck");
+        let mut device = test_device("/dev/input/event0", "ISO board", keyboard::FORM_TKL, true);
+        device.iso = true;
+        let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
+        for scope in ["all", "/dev/input/event0"] {
+            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, true));
+            let _ = app.update(Message::TogglePopover(Popover::Size));
+            assert_eq!(app.layout_override(), LayoutOverride::default());
+        }
+        assert_eq!(app.keyboard_layouts, KeyboardLayouts::default());
     }
 
     #[test]
@@ -2758,7 +2750,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_resets_only_the_selected_scope_and_axis() {
+    fn choosing_detected_values_changes_only_the_selected_scope_and_axis() {
         let mut app = app();
         let _ = app.update(started(keyboard::FORM_TKL, true));
         app.devices[0].iso = true;
@@ -2768,20 +2760,20 @@ mod tests {
         let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
         let _ = app.update(Message::SetVariant(false));
 
-        let _ = app.update(Message::AutomaticForm);
+        let _ = app.update(Message::SetForm(keyboard::FORM_TKL));
         assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, false));
-        assert_eq!(app.layout_override().form, None);
+        assert_eq!(app.layout_override().form, Some(keyboard::FORM_TKL));
         assert_eq!(app.layout_override().iso, Some(false));
-        let _ = app.update(Message::AutomaticVariant);
+        let _ = app.update(Message::SetVariant(true));
         assert!(app.iso);
-        assert!(app.keyboard_layouts.devices.is_empty());
+        assert_eq!(app.layout_override().iso, Some(true));
         let _ = app.update(Message::SelectDevice("all".to_owned()));
         assert_eq!(
             app.form,
             keyboard::FORM_FULL,
             "All keyboards keeps its override"
         );
-        let _ = app.update(Message::AutomaticForm);
+        let _ = app.update(Message::SetForm(keyboard::FORM_TKL));
         assert_eq!(app.form, keyboard::FORM_TKL);
         let _ = app.update(connected(
             "/dev/input/event1",
@@ -2791,8 +2783,8 @@ mod tests {
         ));
         assert_eq!(
             app.form,
-            keyboard::FORM_FULL,
-            "Automatic resumes following detection"
+            keyboard::FORM_TKL,
+            "an explicit choice remains selected even when detection changes"
         );
     }
 
@@ -2957,12 +2949,16 @@ mod tests {
         );
 
         restored.settings = original.settings.take();
-        let _ = restored.update(Message::AutomaticForm);
-        let _ = restored.update(Message::AutomaticVariant);
+        let _ = restored.update(Message::SetForm(keyboard::FORM_TKL));
+        let _ = restored.update(Message::SetVariant(false));
         let stored = KeyloomConfig::load(restored.settings.as_ref().unwrap());
-        assert!(
-            stored.keyboard_layouts.devices.is_empty(),
-            "reset to Automatic is persisted"
+        assert_eq!(
+            stored.keyboard_layouts.devices.get(&restored.devices[0].id),
+            Some(&LayoutOverride {
+                form: Some(keyboard::FORM_TKL),
+                iso: Some(false),
+            }),
+            "choosing the detected values persists them like any manual choice"
         );
         assert_eq!(
             stored.keyboard_layouts.all.form,

@@ -186,67 +186,40 @@ pub fn devices_popup(app: &App) -> Element<'_, Message> {
 /// size) plus the ANSI/ISO assembly toggle.
 pub fn size_popup(app: &App) -> Element<'_, Message> {
     let detected = app.detected_form();
-    let choice = app.layout_override();
-    let automatic = detected.map_or_else(
-        || "No detection available · defaults to 100%".to_owned(),
-        |form| format!("Detected {}", keyboard::FORM_FACTORS[form].name),
-    );
-    let mut column = widget::column::with_capacity(keyboard::FORM_FACTORS.len() + 5)
-        .spacing(2)
-        .push(popup_row(
-            "Automatic".to_owned(),
-            Some(txt(automatic, 10.5, muted()).into()),
-            choice.form.is_none(),
-            Message::AutomaticForm,
-        ));
+    let detected_iso = app.detected_iso();
+    let detected_note = if app.device == "all" {
+        "Detected from connected keyboards"
+    } else {
+        "Detected from this keyboard"
+    };
+    let mut column = widget::column::with_capacity(keyboard::FORM_FACTORS.len() + 3).spacing(2);
 
     for (index, form) in keyboard::FORM_FACTORS.iter().enumerate() {
-        let sub = (detected == Some(index)).then(|| {
-            txt(
-                if app.device == "all" {
-                    "Detected from connected keyboards"
-                } else {
-                    "Detected from this keyboard"
-                },
-                10.5,
-                oklch(0.75, 0.09, 152.0),
-            )
-            .into()
-        });
+        let sub = (detected == Some(index))
+            .then(|| txt(detected_note, 10.5, oklch(0.75, 0.09, 152.0)).into());
         column = column.push(popup_row(
             form.name.to_owned(),
             sub,
-            choice.form == Some(index),
+            app.form == index,
             Message::SetForm(index),
         ));
     }
 
     column = column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
-    column = column.push(popup_row(
-        "Automatic".to_owned(),
-        Some(
-            txt(
-                match app.detected_iso() {
-                    Some(true) => "Detected ISO",
-                    Some(false) => "Detected ANSI",
-                    None => "No detection available · defaults to ANSI",
-                },
-                10.5,
-                muted(),
-            )
-            .into(),
-        ),
-        choice.iso.is_none(),
-        Message::AutomaticVariant,
-    ));
     for (iso, name, sub) in [
         (false, "ANSI", "US-style: bar Enter, wide left Shift"),
         (true, "ISO", "European: tall Enter, 102nd key, AltGr"),
     ] {
+        let mut details = widget::column::with_capacity(2)
+            .spacing(2)
+            .push(txt(sub, 10.5, muted()));
+        if detected_iso == Some(iso) {
+            details = details.push(txt(detected_note, 10.5, oklch(0.75, 0.09, 152.0)));
+        }
         column = column.push(popup_row(
             name.to_owned(),
-            Some(txt(sub, 10.5, muted()).into()),
-            choice.iso == Some(iso),
+            Some(details.into()),
+            app.iso == iso,
             Message::SetVariant(iso),
         ));
     }

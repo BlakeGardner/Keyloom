@@ -65,8 +65,8 @@ workflow is not planned.
   rules; verified with a regression test (including unchanged generated YAML).
 - [x] **Follow the selected keyboard's form factor.** Keyboard and Tester
   use the selected device's guess, with persistent size and ANSI/ISO overrides
-  per keyboard and separately for "All keyboards". Automatic size and the
-  hardware-detected variant default can be restored independently. Reconnects
+  per keyboard and separately for "All keyboards". The detected size and
+  variant are selected by default in the Size picker. Reconnects
   restore choices using the best available device identity. See
   [Form_Factor_Detection.md](Form_Factor_Detection.md).
 

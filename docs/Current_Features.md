@@ -32,8 +32,8 @@ yet install xremap, register the unit, or set up permissions.
   assemblies.
 - The deck follows the selected keyboard's detected form factor. Manual size
   and ANSI/ISO choices are remembered per keyboard, with independent choices
-  for "All keyboards". Automatic size and hardware-detected ANSI/ISO defaults
-  can be restored separately, without changing mappings (see
+  for "All keyboards". The Size picker selects the detected size and ANSI/ISO
+  variant by default; manual selections change only the display (see
   [Form_Factor_Detection.md](Form_Factor_Detection.md)).
 - Physical key presses do not light up the remap deck; live key highlights
   are reserved for Tester. "Record a key" capture still accepts physical input.

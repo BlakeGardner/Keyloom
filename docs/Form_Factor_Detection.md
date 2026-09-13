@@ -12,11 +12,13 @@ and aggregation), and [`src/app.rs`](../src/app.rs) (selection and overrides).
 
 ## Selecting and overriding a keyboard
 
-- Selecting one keyboard shows its saved size override, or its own detected
-  size when automatic. Other connected keyboards do not affect that deck.
-- **Automatic** in the size list clears only that scope's size override.
-  **Automatic** in the ANSI/ISO list independently clears its variant
-  override. The picker shows both hardware-detected values.
+- Selecting one keyboard shows its saved choices, or its own detected size
+  and ANSI/ISO variant by default. Other connected keyboards do not affect
+  that deck.
+- **Size** lists concrete sizes and ANSI/ISO variants, with the displayed
+  values already selected and the detected values annotated. Selecting a
+  value saves it for that scope independently of the other axis, even when
+  it matches detection. There is no separate **Automatic** option.
 - **All keyboards** has its own overrides. Its automatic size uses the
   aggregate described below; individual keyboard overrides do not change it.
 - A disconnected selection keeps its last known guess and manual choices.
