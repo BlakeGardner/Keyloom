@@ -74,7 +74,9 @@ yet install xremap, register the unit, or set up permissions.
 - A fresh install seeds an empty Default profile plus editable starter
   profiles (Laptop, Mac-style, Gaming, Media F-row). They are ordinary
   profiles from then on: renamed, edited, and stored like any other.
-- "Reset all mappings" clears the active profile (undoable).
+- "Reset all mappings" asks for confirmation before clearing the active
+  profile's mappings. Confirmed resets cannot be undone. Cancel, Escape, or
+  clicking outside the dialog keeps the mappings.
 
 ## Devices
 

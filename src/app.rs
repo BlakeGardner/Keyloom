@@ -217,6 +217,8 @@ pub enum Message {
     SheetAnimate,
     MenuShowSetup,
     MenuReset,
+    ResetMappingsConfirm,
+    ResetMappingsCancel,
     MenuAbout,
     CloseAbout,
     SkipOnboarding,
@@ -248,6 +250,8 @@ pub struct App {
     pub rename: Option<String>,
     /// Profile id awaiting delete confirmation in the modal dialog.
     pub confirm_delete: Option<String>,
+    /// Active profile id awaiting confirmation before all its mappings are reset.
+    pub confirm_reset_mappings: Option<String>,
     pub undo: Option<Undo>,
     // Keyboard view state.
     pub device: String,
@@ -938,6 +942,7 @@ impl App {
         self.profile_groups.insert(id.clone(), groups);
         self.profile = id;
         self.confirm_remove_mapping = None;
+        self.confirm_reset_mappings = None;
         self.popover = None;
         self.rename = None;
         self.clear_sheet();
@@ -1003,7 +1008,7 @@ impl App {
         let escape = scancode == K::KEY_ESC.0;
         // evdev is global: never dismiss UI from this stream. Escape is
         // handled once by the focused window's on_escape callback instead.
-        if self.about_open {
+        if self.about_open || self.confirm_reset_mappings.is_some() {
             return;
         }
 
@@ -1167,6 +1172,7 @@ impl cosmic::Application for App {
             custom_profiles,
             rename: None,
             confirm_delete: None,
+            confirm_reset_mappings: None,
             undo: None,
             device: "all".to_owned(),
             form: keyboard::FORM_FULL,
@@ -1235,6 +1241,7 @@ impl cosmic::Application for App {
                 self.sheet_opened = None;
                 self.sheet_closing = None;
                 self.view = view;
+                self.confirm_reset_mappings = None;
                 self.popover = None;
                 self.recording = None;
                 self.remaps_open = false;
@@ -1268,6 +1275,7 @@ impl cosmic::Application for App {
                 self.rename = None;
             }
             Message::SelectProfile(id) => {
+                self.confirm_reset_mappings = None;
                 self.profile = id;
                 self.toast = None;
                 self.undo = None;
@@ -1681,13 +1689,24 @@ impl cosmic::Application for App {
                 self.clear_sheet();
             }
             Message::MenuReset => {
-                self.undo = Some(Undo::Maps(self.profile_maps.clone()));
-                self.profile_maps.insert(self.profile.clone(), Vec::new());
                 self.popover = None;
-                self.clear_sheet();
-                self.flash("Profile cleared", "nothing is remapped");
-                self.persist();
+                if self.view != View::Tester {
+                    self.confirm_reset_mappings = Some(self.profile.clone());
+                }
             }
+            Message::ResetMappingsConfirm => {
+                if let Some(id) = self.confirm_reset_mappings.take()
+                    && id == self.profile
+                    && self.view != View::Tester
+                {
+                    self.undo = None;
+                    self.profile_maps.insert(id, Vec::new());
+                    self.clear_sheet();
+                    self.flash("Profile cleared", "nothing is remapped");
+                    self.persist();
+                }
+            }
+            Message::ResetMappingsCancel => self.confirm_reset_mappings = None,
             Message::MenuAbout => {
                 self.popover = None;
                 self.about_open = true;
@@ -1816,6 +1835,9 @@ impl cosmic::Application for App {
         if self.confirm_delete.is_some() {
             return Some(ui::overlays::delete_profile_dialog(self));
         }
+        if self.confirm_reset_mappings.is_some() {
+            return Some(ui::overlays::reset_mappings_dialog(self));
+        }
         if self.confirm_remove_mapping.is_some() {
             return Some(ui::overlays::remove_mapping_dialog(self));
         }
@@ -1843,6 +1865,8 @@ impl cosmic::Application for App {
             self.about_open = false;
         } else if self.confirm_delete.is_some() {
             self.confirm_delete = None;
+        } else if self.confirm_reset_mappings.is_some() {
+            self.confirm_reset_mappings = None;
         } else if self.confirm_remove_mapping.is_some() {
             self.confirm_remove_mapping = None;
         } else if self.capture {
@@ -1995,6 +2019,107 @@ mod tests {
 
         let _ = app.update(Message::Undo);
         assert!(app.mapping("KeyA").is_none());
+    }
+
+    #[test]
+    fn reset_requires_confirmation_and_cannot_be_undone() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        assert!(app.undo.is_some(), "an earlier edit has an undo snapshot");
+        let before = app.profile_maps.clone();
+        let apply_seq = app.apply_seq;
+        app.popover = Some(Popover::Menu);
+
+        let _ = app.update(Message::ResetMappingsConfirm);
+        assert_eq!(
+            app.profile_maps, before,
+            "unsolicited confirmation is ignored"
+        );
+        let _ = app.update(Message::MenuReset);
+        assert_eq!(app.confirm_reset_mappings.as_deref(), Some("laptop"));
+        assert!(app.dialog().is_some());
+        assert!(app.popover.is_none());
+        assert_eq!(app.profile_maps, before);
+        assert_eq!(app.apply_seq, apply_seq, "request does not apply changes");
+
+        let _ = app.update(Message::ResetMappingsConfirm);
+        assert!(app.confirm_reset_mappings.is_none());
+        assert!(app.maps().is_empty());
+        assert_eq!(app.apply_seq, apply_seq + 1);
+        for (id, maps) in &before {
+            if id != "laptop" {
+                assert_eq!(app.profile_maps.get(id), Some(maps));
+            }
+        }
+        assert!(app.undo.is_none(), "reset discards previous undo snapshots");
+        let cleared = app.profile_maps.clone();
+        let _ = app.update(Message::Undo);
+        assert_eq!(
+            app.profile_maps, cleared,
+            "undo cannot restore reset mappings"
+        );
+    }
+
+    #[test]
+    fn cancelling_reset_preserves_mappings_editor_toast_and_undo() {
+        for escape in [false, true] {
+            let mut app = app();
+            let _ = app.update(Message::SelectKey("CapsLock"));
+            let _ = app.update(Message::PickAction("Escape".to_owned()));
+            app.capture = true;
+            let before = app.profile_maps.clone();
+            let apply_seq = app.apply_seq;
+            let toast_id = app.toast.as_ref().unwrap().id;
+            let _ = app.update(Message::MenuReset);
+            app.phys_press(
+                &PathBuf::from("/dev/input/test-keyboard"),
+                evdev::KeyCode::KEY_A.0,
+            );
+            if escape {
+                let _ = app.on_escape();
+            } else {
+                // Cancel and the dialog backdrop send the same message.
+                let _ = app.update(Message::ResetMappingsCancel);
+            }
+            assert!(app.confirm_reset_mappings.is_none());
+            assert!(app.capture);
+            assert_eq!(app.selected, Some("CapsLock"));
+            let _ = app.update(Message::ResetMappingsConfirm);
+            assert_eq!(app.profile_maps, before);
+            assert_eq!(app.apply_seq, apply_seq);
+            assert_eq!(app.toast.as_ref().unwrap().id, toast_id);
+            let _ = app.update(Message::Undo);
+            assert!(app.maps().is_empty(), "previous undo is preserved");
+        }
+    }
+
+    #[test]
+    fn changing_profile_or_view_cancels_pending_reset() {
+        for message in [
+            Message::SelectProfile("mac".to_owned()),
+            Message::NewProfile { duplicate: true },
+            Message::SetView(View::Tester),
+            Message::SetView(View::Shortcuts),
+        ] {
+            let mut app = app();
+            let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+            let _ = app.update(Message::MenuReset);
+            let _ = app.update(message);
+            assert!(app.confirm_reset_mappings.is_none());
+            let before = app.profile_maps.clone();
+            let _ = app.update(Message::ResetMappingsConfirm);
+            assert_eq!(app.profile_maps, before);
+        }
+    }
+
+    #[test]
+    fn tester_cannot_request_a_reset() {
+        let mut app = app();
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::MenuReset);
+        assert!(app.confirm_reset_mappings.is_none());
     }
 
     #[test]

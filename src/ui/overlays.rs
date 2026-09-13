@@ -290,43 +290,43 @@ pub fn toast<'a>(app: &'a App, toast: &'a Toast) -> Element<'a, Message> {
         ..container::Style::default()
     }));
 
-    let mut undo = widget::button::custom(txt_semibold("Undo", 11.5, oklch(0.92, 0.01, 152.0)))
-        .class(ghost_button())
-        .padding([4, 10]);
+    let mut content = widget::row::with_capacity(5)
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .push(check)
+        .push(txt_semibold(
+            toast.text.clone(),
+            12.5,
+            oklch(0.95, 0.01, 152.0),
+        ))
+        .push(txt(toast.sub.clone(), 11.5, muted()))
+        .push(crate::ui::hspace());
     if app.undo.is_some() && app.view != View::Tester {
-        undo = undo.on_press(Message::Undo);
+        content = content.push(
+            widget::button::custom(txt_semibold("Undo", 11.5, oklch(0.92, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([4, 10])
+                .on_press(Message::Undo),
+        );
     }
 
-    let bar = container(
-        widget::row::with_capacity(4)
-            .spacing(12)
-            .align_y(Alignment::Center)
-            .push(check)
-            .push(txt_semibold(
-                toast.text.clone(),
-                12.5,
-                oklch(0.95, 0.01, 152.0),
-            ))
-            .push(txt(toast.sub.clone(), 11.5, muted()))
-            .push(crate::ui::hspace())
-            .push(undo),
-    )
-    .width(Length::Fill)
-    .padding(Padding {
-        top: 11.0,
-        right: 14.0,
-        bottom: 11.0,
-        left: 16.0,
-    })
-    .class(ctheme::Container::custom(|_| container::Style {
-        background: Some(oklch(0.3, 0.01, 152.0).into()),
-        border: Border {
-            color: white(0.13),
-            width: 1.0,
-            radius: 11.0.into(),
-        },
-        ..container::Style::default()
-    }));
+    let bar = container(content)
+        .width(Length::Fill)
+        .padding(Padding {
+            top: 11.0,
+            right: 14.0,
+            bottom: 11.0,
+            left: 16.0,
+        })
+        .class(ctheme::Container::custom(|_| container::Style {
+            background: Some(oklch(0.3, 0.01, 152.0).into()),
+            border: Border {
+                color: white(0.13),
+                width: 1.0,
+                radius: 11.0.into(),
+            },
+            ..container::Style::default()
+        }));
 
     container(bar)
         .width(Length::Fill)
@@ -583,6 +583,46 @@ pub fn remove_mapping_dialog(app: &App) -> Element<'_, Message> {
             .into(),
     );
     modal(card, Message::RemoveMappingCancel)
+}
+
+/// Confirm clearing all mappings in the active profile.
+pub fn reset_mappings_dialog(app: &App) -> Element<'_, Message> {
+    let buttons = widget::row::with_capacity(3)
+        .spacing(10)
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(txt_semibold("Cancel", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::ResetMappingsCancel),
+        )
+        .push(
+            widget::button::custom(txt_semibold(
+                "Reset all mappings",
+                12.5,
+                oklch(0.85, 0.06, 16.0),
+            ))
+            .class(quiet(false))
+            .padding([9, 18])
+            .on_press(Message::ResetMappingsConfirm),
+        );
+    let card = dialog_card(
+        widget::column::with_capacity(4)
+            .spacing(16)
+            .push(eyebrow("Reset mappings"))
+            .push(txt_semibold("Reset all mappings?", 24.0, fg()))
+            .push(txt(
+                format!(
+                    "This removes all mappings from {} and restores the keys' original behavior.",
+                    app.profile_name()
+                ),
+                15.0,
+                muted(),
+            ))
+            .push(buttons)
+            .into(),
+    );
+    modal(card, Message::ResetMappingsCancel)
 }
 
 /// The delete-profile confirmation dialog.
