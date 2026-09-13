@@ -7,10 +7,51 @@
 //! generated file. The header's status chip stops and starts the unit,
 //! which is how a keyboard the remapper holds exclusively is released.
 
+use std::fmt;
+use std::io;
+use std::sync::Arc;
 use tokio::process::Command;
 
 /// The systemd user unit Keyloom manages.
 pub const UNIT: &str = "xremap.service";
+
+/// Whether remapping should be running: the status chip's two
+/// positions, and what a switch still in flight is heading for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remapping {
+    On,
+    Off,
+}
+
+/// Why a `systemctl` command did not do what Keyloom asked.
+///
+/// Held in a [`crate::app::Message`], which must be `Clone`, so the
+/// underlying [`io::Error`] is shared rather than copied.
+#[derive(Clone, Debug)]
+pub enum Error {
+    /// `systemctl` could not be run at all.
+    Unavailable(Arc<io::Error>),
+    /// It ran and refused; the text is systemd's own explanation.
+    Refused(String),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable(err) => write!(f, "could not run systemctl: {err}"),
+            Self::Refused(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Unavailable(err) => Some(&**err),
+            Self::Refused(_) => None,
+        }
+    }
+}
 
 /// State of the xremap user service, as far as systemd knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,37 +114,46 @@ pub async fn status() -> Status {
 }
 
 /// Restart the unit so xremap picks up the generated configuration.
-pub async fn restart() -> Result<(), String> {
+///
+/// # Errors
+///
+/// Fails when `systemctl` cannot be run, or when systemd refuses the
+/// restart (a missing unit, a start rate limit, a failing `ExecStart`).
+pub async fn restart() -> Result<(), Error> {
     run("restart").await
 }
 
-/// Stop the unit, releasing the keyboards xremap grabbed so they can
-/// be observed directly. Only the status chip asks for this.
-pub async fn stop() -> Result<(), String> {
-    run("stop").await
+/// Put remapping in the requested state: stopping the unit releases the
+/// keyboards xremap grabbed, so they can be observed directly. Only the
+/// status chip asks for this.
+///
+/// # Errors
+///
+/// As [`restart`]. Starting an already-running unit, or stopping an
+/// already-stopped one, succeeds without doing anything.
+pub async fn set(remapping: Remapping) -> Result<(), Error> {
+    run(match remapping {
+        Remapping::On => "start",
+        Remapping::Off => "stop",
+    })
+    .await
 }
 
-/// Start the unit, whether or not this session is what stopped it.
-pub async fn start() -> Result<(), String> {
-    run("start").await
-}
-
-/// Run one `systemctl --user` verb against the unit. The error string
-/// is meant for the failure toast.
-async fn run(verb: &str) -> Result<(), String> {
+/// Run one `systemctl --user` verb against the unit.
+async fn run(verb: &str) -> Result<(), Error> {
     let output = Command::new("systemctl")
         .args(["--user", verb, UNIT])
         .output()
         .await
-        .map_err(|err| format!("could not run systemctl: {err}"))?;
+        .map_err(|err| Error::Unavailable(Arc::new(err)))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr = stderr.trim();
-    if stderr.is_empty() {
-        Err(format!("systemctl exited with {}", output.status))
+    Err(Error::Refused(if stderr.is_empty() {
+        format!("systemctl exited with {}", output.status)
     } else {
-        Err(stderr.to_owned())
-    }
+        stderr.to_owned()
+    }))
 }

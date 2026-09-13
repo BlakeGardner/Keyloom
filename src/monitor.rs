@@ -245,11 +245,16 @@ fn input_nodes() -> HashSet<PathBuf> {
 /// xremap names it `xremap` or `xremap pid=<pid>` unless its
 /// `--output-device-name` option renames it.
 pub fn is_remapper_output(device: &KeyboardDevice) -> bool {
-    device.virtual_device && device.name.to_ascii_lowercase().starts_with(REMAPPER)
+    device.virtual_device
+        && device
+            .name
+            .get(..REMAPPER.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(REMAPPER))
 }
 
 /// The input nodes a running remapper holds open, which are exactly the
-/// ones it grabbed.
+/// ones it grabbed. `None` when `/proc` itself cannot be read, which
+/// leaves the grabbed set unknown rather than reporting it as empty.
 ///
 /// Reading its descriptors is the side-effect-free way to learn this: a
 /// grab is not reported anywhere in sysfs, and probing with a grab of
@@ -257,14 +262,17 @@ pub fn is_remapper_output(device: &KeyboardDevice) -> bool {
 /// as the probe lasts. A remapper running as another user (a system
 /// service rather than the user unit Keyloom drives) hides its
 /// descriptors, and its devices simply stay unaccounted for.
-fn grabbed_nodes() -> HashSet<PathBuf> {
+fn grabbed_nodes() -> Option<HashSet<PathBuf>> {
     grabbed_nodes_in(Path::new("/proc"))
 }
 
 /// [`grabbed_nodes`] against an explicit `/proc`, so tests can supply one.
-fn grabbed_nodes_in(proc: &Path) -> HashSet<PathBuf> {
+fn grabbed_nodes_in(proc: &Path) -> Option<HashSet<PathBuf>> {
     let mut nodes = HashSet::new();
-    for entry in std::fs::read_dir(proc).into_iter().flatten().flatten() {
+    // Per-process failures below are ordinary: processes exit mid-scan,
+    // and another user's descriptors are not ours to read. Failing to
+    // read /proc at all is not, and must not read as "nothing grabbed".
+    for entry in std::fs::read_dir(proc).ok()?.flatten() {
         let process = entry.path();
         // Only the numeric entries of /proc are processes.
         let is_process = process
@@ -295,7 +303,7 @@ fn grabbed_nodes_in(proc: &Path) -> HashSet<PathBuf> {
             }
         }
     }
-    nodes
+    Some(nodes)
 }
 
 /// Keep a keyboard's path reserved until its reader has sent its final
@@ -406,7 +414,10 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
         .map(|(path, device)| device_entry(path, device))
         .collect();
     let started = Event::Started(devices);
-    let grabbed = grabbed_nodes();
+    let grabbed = grabbed_nodes().unwrap_or_else(|| {
+        eprintln!("cannot read /proc: keyboards held by remapping will not be explained");
+        HashSet::new()
+    });
 
     for (path, device) in keyboards {
         let reader = spawn_reader(path.clone(), device, tx.clone());
@@ -426,8 +437,12 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
                 return;
             }
 
-            let grabbed = grabbed_nodes();
-            if grabbed != scanned_grabs {
+            // An unreadable /proc leaves the last known set standing:
+            // announcing an empty one would claim the remapper let every
+            // keyboard go.
+            if let Some(grabbed) = grabbed_nodes()
+                && grabbed != scanned_grabs
+            {
                 scanned_grabs.clone_from(&grabbed);
                 if scan_tx.unbounded_send(Event::Grabbed(grabbed)).is_err() {
                     return;
@@ -465,6 +480,7 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
     use std::sync::mpsc as sync_mpsc;
     use std::time::Instant;
 
@@ -528,9 +544,9 @@ mod tests {
 
     /// Build a `/proc` with one remapper process holding `grabbed`,
     /// plus decoys the scan has to ignore.
-    fn fake_proc(name: &str, grabbed: &[&str]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("keyloom-proc-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn fake_proc(label: &str, grabbed: &[&str]) -> TempDir {
+        let temp = TempDir::new(label);
+        let dir = temp.path().to_owned();
         let process = |pid: &str, comm: &str, fds: &[&str]| {
             let process = dir.join(pid);
             std::fs::create_dir_all(process.join("fd")).unwrap();
@@ -552,37 +568,36 @@ mod tests {
         // /proc holds more than processes; only numeric entries count.
         std::fs::create_dir_all(dir.join("sys")).unwrap();
         std::fs::write(dir.join("uptime"), "1 1\n").unwrap();
-        dir
+        temp
     }
 
     #[test]
     fn grabbed_nodes_are_the_keyboards_the_remapper_holds() {
-        let dir = fake_proc("held", &["/dev/input/event5", "/dev/input/event9"]);
+        let proc = fake_proc("proc-held", &["/dev/input/event5", "/dev/input/event9"]);
 
         assert_eq!(
-            grabbed_nodes_in(&dir),
-            HashSet::from([
+            grabbed_nodes_in(proc.path()),
+            Some(HashSet::from([
                 PathBuf::from("/dev/input/event5"),
                 PathBuf::from("/dev/input/event9"),
-            ]),
+            ])),
             "only the remapper's own input nodes count as grabbed"
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn nothing_is_grabbed_without_a_running_remapper() {
-        let dir = fake_proc("free", &[]);
-        std::fs::remove_dir_all(dir.join("2")).unwrap();
+        let proc = fake_proc("proc-free", &[]);
+        std::fs::remove_dir_all(proc.path().join("2")).unwrap();
 
-        assert!(grabbed_nodes_in(&dir).is_empty());
-        assert!(
-            grabbed_nodes_in(Path::new("/keyloom-no-such-proc")).is_empty(),
-            "an unreadable /proc reports no grabs rather than failing"
-        );
+        assert_eq!(grabbed_nodes_in(proc.path()), Some(HashSet::new()));
+    }
 
-        std::fs::remove_dir_all(&dir).unwrap();
+    #[test]
+    fn an_unreadable_proc_leaves_the_grabbed_set_unknown() {
+        // Reporting an empty set here would claim every keyboard is
+        // free, which is a different thing from not being able to look.
+        assert_eq!(grabbed_nodes_in(Path::new("/keyloom-no-such-proc")), None);
     }
 
     #[test]

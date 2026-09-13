@@ -6,6 +6,8 @@ mod config;
 mod keyboard;
 mod monitor;
 mod service;
+#[cfg(test)]
+mod testing;
 mod ui;
 mod xremap;
 

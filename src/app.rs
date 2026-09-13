@@ -204,14 +204,14 @@ pub enum Message {
     /// re-reads the written config.
     Apply(u64),
     /// Result of the restart an apply performed.
-    Applied(Result<(), String>),
+    Applied(Result<(), service::Error>),
     ServiceStatus(service::Status),
-    /// Turn remapping on or off from the status chip.
-    SetRemapping(bool),
-    /// Result of the start or stop behind [`Message::SetRemapping`].
+    /// Put remapping in this state, from the status chip.
+    SetRemapping(service::Remapping),
+    /// Result of the switch behind [`Message::SetRemapping`].
     RemappingSwitched {
-        on: bool,
-        result: Result<(), String>,
+        target: service::Remapping,
+        result: Result<(), service::Error>,
     },
     /// Redraw tick while the bottom sheet opens or closes.
     SheetAnimate,
@@ -284,12 +284,11 @@ pub struct App {
     /// [`monitor::Event::Grabbed`]). Those keyboards report nothing
     /// here until it lets them go.
     pub grabbed: HashSet<PathBuf>,
-    /// A start or stop on its way to the service: `Some(true)` while
-    /// remapping is being turned on, `Some(false)` while it is being
-    /// turned off. Whether remapping runs is [`Self::service`] alone —
-    /// a unit Keyloom stopped is not a different state from one that
-    /// was already stopped.
-    pub switching: Option<bool>,
+    /// The state a switch still on its way to the service is heading
+    /// for. Whether remapping runs is [`Self::service`] alone — a unit
+    /// Keyloom stopped is not a different state from one that was
+    /// already stopped.
+    pub switching: Option<service::Remapping>,
     /// Generation of the latest scheduled apply; a due apply carrying
     /// an older id has been superseded and is dropped.
     apply_seq: u64,
@@ -418,37 +417,36 @@ impl App {
             .filter(|device| self.grabbed.contains(&device.path))
     }
 
-    /// What pressing the status chip would leave remapping as:
-    /// `Some(true)` starts it, `Some(false)` stops it. `None` leaves
-    /// the chip passive — there is no unit to control, or a switch or
-    /// restart is already on its way and would fight the request.
-    pub fn remapping_toggle(&self) -> Option<bool> {
+    /// The state pressing the status chip would leave remapping in.
+    /// `None` leaves the chip passive — there is no unit to control, or
+    /// a switch or restart is already on its way and would fight the
+    /// request.
+    pub fn remapping_toggle(&self) -> Option<service::Remapping> {
         if self.switching.is_some() || self.applying.is_some() {
             return None;
         }
         match self.service? {
-            service::Status::Active => Some(false),
-            service::Status::Inactive | service::Status::Failed => Some(true),
+            service::Status::Active => Some(service::Remapping::Off),
+            service::Status::Inactive | service::Status::Failed => Some(service::Remapping::On),
             service::Status::NotFound | service::Status::Unavailable => None,
         }
     }
 
-    /// Turn remapping on or off. The service call runs in the
-    /// background; [`Message::RemappingSwitched`] reports what happened.
+    /// Put remapping in the requested state. The service call runs in
+    /// the background; [`Message::RemappingSwitched`] reports what
+    /// happened.
     ///
     /// The request is never filtered against the state Keyloom last
     /// saw: a unit can be stopped without this session having stopped
     /// it (a previous run, or a `systemctl` in a terminal), and
     /// pressing the chip has to start it just the same.
-    fn set_remapping(&mut self, on: bool) -> Task<Message> {
-        self.switching = Some(on);
+    fn set_remapping(&mut self, target: service::Remapping) -> Task<Message> {
+        self.switching = Some(target);
         cosmic::task::future(async move {
-            let result = if on {
-                service::start().await
-            } else {
-                service::stop().await
-            };
-            Message::RemappingSwitched { on, result }
+            Message::RemappingSwitched {
+                target,
+                result: service::set(target).await,
+            }
         })
     }
 
@@ -1637,35 +1635,33 @@ impl cosmic::Application for App {
                 // Success is silent — the change's own toast already
                 // confirmed it. Either way, reflect the service state.
                 if let Err(err) = result {
-                    self.flash("Could not apply remaps", err);
+                    self.flash("Could not apply remaps", err.to_string());
                 }
                 return service_status_task();
             }
             Message::ServiceStatus(status) => self.service = Some(status),
-            Message::SetRemapping(on) => return self.set_remapping(on),
-            Message::RemappingSwitched { on, result } => {
+            Message::SetRemapping(target) => return self.set_remapping(target),
+            Message::RemappingSwitched { target, result } => {
                 self.switching = None;
                 match result {
                     // systemctl only reports success once the unit is
                     // in the requested state, so the chip can settle on
                     // it instead of flickering until the query lands.
                     Ok(()) => {
-                        self.service = Some(if on {
-                            service::Status::Active
-                        } else {
-                            service::Status::Inactive
+                        self.service = Some(match target {
+                            service::Remapping::On => service::Status::Active,
+                            service::Remapping::Off => service::Status::Inactive,
                         });
                     }
                     // It did not follow; the status query that comes
                     // next describes where it actually stands.
                     Err(err) => {
                         self.flash(
-                            if on {
-                                "Could not resume remapping"
-                            } else {
-                                "Could not pause remapping"
+                            match target {
+                                service::Remapping::On => "Could not resume remapping",
+                                service::Remapping::Off => "Could not pause remapping",
                             },
-                            err,
+                            err.to_string(),
                         );
                     }
                 }
@@ -2148,7 +2144,9 @@ mod tests {
     #[test]
     fn failed_apply_surfaces_the_error() {
         let mut app = app();
-        let _ = app.update(Message::Applied(Err("unit not loaded".to_owned())));
+        let _ = app.update(Message::Applied(Err(service::Error::Refused(
+            "unit not loaded".to_owned(),
+        ))));
 
         assert!(app.applying.is_none());
         let toast = app.toast.as_ref().expect("failure is explained");
@@ -3335,9 +3333,9 @@ mod tests {
             "an unknown service state controls nothing"
         );
         for (status, expected) in [
-            (service::Status::Active, Some(false)),
-            (service::Status::Inactive, Some(true)),
-            (service::Status::Failed, Some(true)),
+            (service::Status::Active, Some(service::Remapping::Off)),
+            (service::Status::Inactive, Some(service::Remapping::On)),
+            (service::Status::Failed, Some(service::Remapping::On)),
             (service::Status::NotFound, None),
             (service::Status::Unavailable, None),
         ] {
@@ -3346,19 +3344,19 @@ mod tests {
         }
 
         let _ = app.update(Message::ServiceStatus(service::Status::Active));
-        let _ = app.update(Message::SetRemapping(false));
+        let _ = app.update(Message::SetRemapping(service::Remapping::Off));
         assert_eq!(
             app.remapping_toggle(),
             None,
             "the stop is still on its way to the service"
         );
         let _ = app.update(Message::RemappingSwitched {
-            on: false,
+            target: service::Remapping::Off,
             result: Ok(()),
         });
         assert_eq!(
             app.remapping_toggle(),
-            Some(true),
+            Some(service::Remapping::On),
             "a stopped service reads the same however it was stopped"
         );
 
@@ -3374,12 +3372,16 @@ mod tests {
         for status in [service::Status::Inactive, service::Status::Failed] {
             let mut app = app();
             let _ = app.update(Message::ServiceStatus(status));
-            assert_eq!(app.remapping_toggle(), Some(true), "{status:?}");
+            assert_eq!(
+                app.remapping_toggle(),
+                Some(service::Remapping::On),
+                "{status:?}"
+            );
 
-            let _ = app.update(Message::SetRemapping(true));
+            let _ = app.update(Message::SetRemapping(service::Remapping::On));
             assert_eq!(
                 app.switching,
-                Some(true),
+                Some(service::Remapping::On),
                 "{status:?}: pressing the chip must actually start the service"
             );
         }
@@ -3405,10 +3407,14 @@ mod tests {
         let _ = app.update(Message::ServiceStatus(service::Status::Active));
         let _ = app.update(Message::SetView(View::Tester));
 
-        let _ = app.update(Message::SetRemapping(false));
-        assert_eq!(app.switching, Some(false), "the stop is still on its way");
+        let _ = app.update(Message::SetRemapping(service::Remapping::Off));
+        assert_eq!(
+            app.switching,
+            Some(service::Remapping::Off),
+            "the stop is still on its way"
+        );
         let _ = app.update(Message::RemappingSwitched {
-            on: false,
+            target: service::Remapping::Off,
             result: Ok(()),
         });
         assert_eq!(app.service, Some(service::Status::Inactive));
@@ -3429,10 +3435,10 @@ mod tests {
         assert_eq!(app.service, Some(service::Status::Inactive));
 
         // Pressing the chip is the only way back.
-        let _ = app.update(Message::SetRemapping(true));
-        assert_eq!(app.switching, Some(true));
+        let _ = app.update(Message::SetRemapping(service::Remapping::On));
+        assert_eq!(app.switching, Some(service::Remapping::On));
         let _ = app.update(Message::RemappingSwitched {
-            on: true,
+            target: service::Remapping::On,
             result: Ok(()),
         });
         assert_eq!(app.service, Some(service::Status::Active));
@@ -3445,10 +3451,10 @@ mod tests {
         let _ = app.update(Message::ServiceStatus(service::Status::Active));
         let _ = app.update(Message::SetView(View::Tester));
 
-        let _ = app.update(Message::SetRemapping(false));
+        let _ = app.update(Message::SetRemapping(service::Remapping::Off));
         let _ = app.update(Message::RemappingSwitched {
-            on: false,
-            result: Err("unit not loaded".to_owned()),
+            target: service::Remapping::Off,
+            result: Err(service::Error::Refused("unit not loaded".to_owned())),
         });
         assert_eq!(
             app.service,
@@ -3461,20 +3467,20 @@ mod tests {
         assert_eq!(toast.sub, "unit not loaded");
         assert_eq!(
             app.remapping_toggle(),
-            Some(false),
+            Some(service::Remapping::Off),
             "the chip still offers the stop it could not make"
         );
 
         // A refused start leaves remapping stopped, and offers a retry.
-        let _ = app.update(Message::SetRemapping(false));
+        let _ = app.update(Message::SetRemapping(service::Remapping::Off));
         let _ = app.update(Message::RemappingSwitched {
-            on: false,
+            target: service::Remapping::Off,
             result: Ok(()),
         });
-        let _ = app.update(Message::SetRemapping(true));
+        let _ = app.update(Message::SetRemapping(service::Remapping::On));
         let _ = app.update(Message::RemappingSwitched {
-            on: true,
-            result: Err("job failed".to_owned()),
+            target: service::Remapping::On,
+            result: Err(service::Error::Refused("job failed".to_owned())),
         });
         assert_eq!(
             app.toast.as_ref().map(|toast| toast.text.as_str()),
@@ -3482,7 +3488,7 @@ mod tests {
         );
         assert_eq!(
             app.remapping_toggle(),
-            Some(true),
+            Some(service::Remapping::On),
             "the chip still offers the start it could not make"
         );
     }
@@ -3491,9 +3497,9 @@ mod tests {
     fn changes_made_while_remapping_is_off_never_restart_it() {
         let mut app = app();
         let _ = app.update(Message::ServiceStatus(service::Status::Active));
-        let _ = app.update(Message::SetRemapping(false));
+        let _ = app.update(Message::SetRemapping(service::Remapping::Off));
         let _ = app.update(Message::RemappingSwitched {
-            on: false,
+            target: service::Remapping::Off,
             result: Ok(()),
         });
 
@@ -3508,9 +3514,9 @@ mod tests {
         assert!(app.applying.is_none(), "no restart went out");
 
         // Changes made once remapping is back apply as usual.
-        let _ = app.update(Message::SetRemapping(true));
+        let _ = app.update(Message::SetRemapping(service::Remapping::On));
         let _ = app.update(Message::RemappingSwitched {
-            on: true,
+            target: service::Remapping::On,
             result: Ok(()),
         });
         let _ = app.update(Message::SelectProfile("laptop".to_owned()));

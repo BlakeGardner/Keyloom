@@ -146,13 +146,12 @@ const HOLDING: (f32, f32, f32) = (0.78, 0.13, 85.0);
 pub fn end(app: &App) -> Vec<Element<'_, Message>> {
     // Dot + state label. xremap and systemd are implementation details
     // the wording deliberately avoids.
-    let (dot_color, label) = if let Some(on) = app.switching {
+    let (dot_color, label) = if let Some(target) = app.switching {
         (
             oklch(HOLDING.0, HOLDING.1, HOLDING.2),
-            if on {
-                "Resuming Remapping"
-            } else {
-                "Pausing Remapping"
+            match target {
+                service::Remapping::On => "Resuming Remapping",
+                service::Remapping::Off => "Pausing Remapping",
             },
         )
     } else if app.apply_in_progress() {
@@ -192,16 +191,15 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
     // Pressing the chip stops or starts remapping; it stays passive
     // when there is no unit to control or a restart is already running.
     let status: Element<'_, Message> = match app.remapping_toggle() {
-        Some(on) => hint(
+        Some(target) => hint(
             widget::button::custom(status_row)
                 .class(header_chip())
                 .padding([7, 10])
-                .on_press(Message::SetRemapping(on))
+                .on_press(Message::SetRemapping(target))
                 .into(),
-            if on {
-                "Start remapping again."
-            } else {
-                "Pause remapping."
+            match target {
+                service::Remapping::On => "Start remapping again.",
+                service::Remapping::Off => "Pause remapping.",
             },
         ),
         None => container(status_row)

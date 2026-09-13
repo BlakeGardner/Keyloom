@@ -303,6 +303,7 @@ fn backup(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     fn map(
         code: &str,
@@ -533,8 +534,8 @@ mod tests {
 
     #[test]
     fn write_respects_foreign_files_and_backs_them_up() {
-        let dir = std::env::temp_dir().join(format!("keyloom-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let temp = TempDir::new("write");
+        let dir = temp.path();
         let path = dir.join("keyloom.yml");
         let ours = generate(&Vec::new(), no_devices);
 
@@ -571,8 +572,6 @@ mod tests {
             WriteOutcome::Written(path.clone())
         );
         assert!(!dir.join("keyloom.yml.bak.1").exists());
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// End-to-end oracle against a real xremap binary: the pinned CLI
@@ -634,8 +633,8 @@ mod tests {
             documents.push((format!("all-actions-{i}"), generate(chunk, no_devices)));
         }
 
-        let dir = std::env::temp_dir().join(format!("keyloom-xremap-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let temp = TempDir::new("validate");
+        let dir = temp.path();
         for (name, yaml) in &documents {
             let path = dir.join(format!("{name}.yml"));
             fs::write(&path, yaml).unwrap();
@@ -655,6 +654,5 @@ mod tests {
                 "{name}: xremap did not reach device selection:\n{stderr}"
             );
         }
-        fs::remove_dir_all(&dir).unwrap();
     }
 }
