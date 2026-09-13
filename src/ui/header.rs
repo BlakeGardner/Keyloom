@@ -54,30 +54,11 @@ pub fn start(app: &App) -> Vec<Element<'_, Message>> {
             .into()
     } else {
         // A quick explanation of profiles while the picker is closed.
-        widget::tooltip(
-            profile,
-            txt(
-                "Each profile is its own set of remaps and shortcuts. \
-                 Click to switch or manage profiles.",
-                11.5,
-                oklch(0.88, 0.01, 152.0),
-            )
-            .width(Length::Fixed(220.0)),
-            widget::tooltip::Position::Bottom,
+        hint(
+            profile.into(),
+            "Each profile is its own set of remaps and shortcuts. \
+             Click to switch or manage profiles.",
         )
-        .delay(Duration::from_millis(500))
-        .gap(6)
-        .padding(10)
-        .class(ctheme::Container::custom(|_| container::Style {
-            background: Some(oklch(0.26, 0.008, 152.0).into()),
-            border: Border {
-                color: white(0.12),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        }))
-        .into()
     };
 
     vec![
@@ -89,6 +70,28 @@ pub fn start(app: &App) -> Vec<Element<'_, Message>> {
             .push(profile)
             .into(),
     ]
+}
+
+/// Delayed explanation hanging under a header chip.
+fn hint<'a>(target: Element<'a, Message>, text: &str) -> Element<'a, Message> {
+    widget::tooltip(
+        target,
+        txt(text.to_owned(), 11.5, oklch(0.88, 0.01, 152.0)).width(Length::Fixed(220.0)),
+        widget::tooltip::Position::Bottom,
+    )
+    .delay(Duration::from_millis(500))
+    .gap(6)
+    .padding(10)
+    .class(ctheme::Container::custom(|_| container::Style {
+        background: Some(oklch(0.26, 0.008, 152.0).into()),
+        border: Border {
+            color: white(0.12),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..container::Style::default()
+    }))
+    .into()
 }
 
 /// The Keyboard / Tester / Shortcuts navigation pill.
@@ -133,21 +136,37 @@ pub fn center(app: &App) -> Vec<Element<'_, Message>> {
     vec![nav.into()]
 }
 
+/// Amber: remapping is not carrying keys right now — paused, being
+/// paused or resumed, or waiting on a change heading for the service.
+const HOLDING: (f32, f32, f32) = (0.78, 0.13, 85.0);
+
 /// The remap status chip and `⋯` overflow menu. Changes apply on
-/// their own, so there is no Apply control here.
+/// their own, so there is no Apply control here; the chip itself
+/// pauses and starts remapping.
 pub fn end(app: &App) -> Vec<Element<'_, Message>> {
-    // Passive dot + state label. xremap and systemd
-    // are implementation details the wording deliberately avoids.
-    let (dot_color, label) = if app.apply_in_progress() {
+    // Dot + state label. xremap and systemd are implementation details
+    // the wording deliberately avoids.
+    let (dot_color, label) = if let Some(on) = app.switching {
+        (
+            oklch(HOLDING.0, HOLDING.1, HOLDING.2),
+            if on {
+                "Resuming Remapping"
+            } else {
+                "Pausing Remapping"
+            },
+        )
+    } else if app.apply_in_progress() {
         // A change is on its way to the running service.
-        (oklch(0.78, 0.13, 85.0), "Applying Remaps")
+        (oklch(HOLDING.0, HOLDING.1, HOLDING.2), "Applying Remaps")
     } else {
         match app.service {
             Some(status) => (
                 match status {
                     service::Status::Active => accent(),
+                    service::Status::Inactive => oklch(HOLDING.0, HOLDING.1, HOLDING.2),
                     service::Status::Failed => oklch(0.62, 0.19, 25.0),
-                    _ => muted(),
+                    // Nothing to act on: no unit, or no systemd to ask.
+                    service::Status::NotFound | service::Status::Unavailable => muted(),
                 },
                 status.label(),
             ),
@@ -164,23 +183,40 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
             ..container::Style::default()
         }),
     );
-    let status = container(
-        widget::row::with_capacity(2)
-            .spacing(6)
-            .align_y(Alignment::Center)
-            .push(status_dot)
-            .push(txt(label, 11.0, oklch(0.85, 0.01, 152.0))),
-    )
-    .padding([7, 10])
-    .class(ctheme::Container::custom(|_| container::Style {
-        background: Some(white(0.05).into()),
-        border: Border {
-            color: white(0.10),
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..container::Style::default()
-    }));
+    let status_row = widget::row::with_capacity(2)
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .push(status_dot)
+        .push(txt(label, 11.0, oklch(0.85, 0.01, 152.0)));
+
+    // Pressing the chip stops or starts remapping; it stays passive
+    // when there is no unit to control or a restart is already running.
+    let status: Element<'_, Message> = match app.remapping_toggle() {
+        Some(on) => hint(
+            widget::button::custom(status_row)
+                .class(header_chip())
+                .padding([7, 10])
+                .on_press(Message::SetRemapping(on))
+                .into(),
+            if on {
+                "Start remapping again."
+            } else {
+                "Pause remapping."
+            },
+        ),
+        None => container(status_row)
+            .padding([7, 10])
+            .class(ctheme::Container::custom(|_| container::Style {
+                background: Some(white(0.05).into()),
+                border: Border {
+                    color: white(0.10),
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }))
+            .into(),
+    };
 
     let menu = widget::button::custom(
         txt("⋯", 14.0, oklch(0.85, 0.01, 152.0))

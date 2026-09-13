@@ -184,10 +184,10 @@ pub fn rule(color: Color) -> Element<'static, Message> {
         .into()
 }
 
-/// The keyboard area: tester panels (in the tester), the deck, and the
-/// empty state or mapping summary.
+/// The keyboard area: the tester's notice and panels (in the tester),
+/// the deck, and the empty state or mapping summary.
 pub fn area(app: &App) -> Element<'_, Message> {
-    let mut column = widget::column::with_capacity(3)
+    let mut column = widget::column::with_capacity(4)
         .spacing(20)
         .padding(Padding {
             top: 26.0,
@@ -197,6 +197,9 @@ pub fn area(app: &App) -> Element<'_, Message> {
         });
 
     if app.view == View::Tester {
+        if let Some(notice) = tester::notice(app) {
+            column = column.push(notice);
+        }
         column = column.push(tester::panels(app));
     }
 

@@ -102,7 +102,8 @@ pub enum Undo {
 enum ApplyStep {
     /// Superseded by a newer change whose own apply is still coming.
     Stale,
-    /// There is no unit to restart; nothing will apply.
+    /// Nothing to restart: there is no unit, or remapping is not
+    /// running and will pick the file up when it is started.
     Skip,
     /// Busy or too soon after the last restart; retry after the delay.
     Wait(Duration),
@@ -205,6 +206,13 @@ pub enum Message {
     /// Result of the restart an apply performed.
     Applied(Result<(), String>),
     ServiceStatus(service::Status),
+    /// Turn remapping on or off from the status chip.
+    SetRemapping(bool),
+    /// Result of the start or stop behind [`Message::SetRemapping`].
+    RemappingSwitched {
+        on: bool,
+        result: Result<(), String>,
+    },
     /// Redraw tick while the bottom sheet opens or closes.
     SheetAnimate,
     MenuShowSetup,
@@ -272,6 +280,16 @@ pub struct App {
     pub last: Option<LastKey>,
     /// Last known state of the xremap service (None until queried).
     pub service: Option<service::Status>,
+    /// Input nodes the remapper holds exclusively (see
+    /// [`monitor::Event::Grabbed`]). Those keyboards report nothing
+    /// here until it lets them go.
+    pub grabbed: HashSet<PathBuf>,
+    /// A start or stop on its way to the service: `Some(true)` while
+    /// remapping is being turned on, `Some(false)` while it is being
+    /// turned off. Whether remapping runs is [`Self::service`] alone —
+    /// a unit Keyloom stopped is not a different state from one that
+    /// was already stopped.
+    pub switching: Option<bool>,
     /// Generation of the latest scheduled apply; a due apply carrying
     /// an older id has been superseded and is dropped.
     apply_seq: u64,
@@ -348,14 +366,18 @@ impl App {
             },
         )];
         for device in &self.devices {
+            let path = device.path.display();
+            let sub = if !device.connected {
+                format!("{path} (disconnected)")
+            } else if monitor::is_remapper_output(device) {
+                format!("{path} · remapped output")
+            } else {
+                path.to_string()
+            };
             entries.push((
                 device.path.to_string_lossy().into_owned(),
                 device.name.clone(),
-                if device.connected {
-                    device.path.display().to_string()
-                } else {
-                    format!("{} (disconnected)", device.path.display())
-                },
+                sub,
             ));
         }
         entries
@@ -387,6 +409,47 @@ impl App {
         self.devices
             .iter()
             .find(|device| device.path == Path::new(&self.device))
+    }
+
+    /// The selected keyboard when the remapper is holding it, which is
+    /// why the tester sees nothing from it.
+    pub fn grabbed_selection(&self) -> Option<&monitor::KeyboardDevice> {
+        self.selected_device()
+            .filter(|device| self.grabbed.contains(&device.path))
+    }
+
+    /// What pressing the status chip would leave remapping as:
+    /// `Some(true)` starts it, `Some(false)` stops it. `None` leaves
+    /// the chip passive — there is no unit to control, or a switch or
+    /// restart is already on its way and would fight the request.
+    pub fn remapping_toggle(&self) -> Option<bool> {
+        if self.switching.is_some() || self.applying.is_some() {
+            return None;
+        }
+        match self.service? {
+            service::Status::Active => Some(false),
+            service::Status::Inactive | service::Status::Failed => Some(true),
+            service::Status::NotFound | service::Status::Unavailable => None,
+        }
+    }
+
+    /// Turn remapping on or off. The service call runs in the
+    /// background; [`Message::RemappingSwitched`] reports what happened.
+    ///
+    /// The request is never filtered against the state Keyloom last
+    /// saw: a unit can be stopped without this session having stopped
+    /// it (a previous run, or a `systemctl` in a terminal), and
+    /// pressing the chip has to start it just the same.
+    fn set_remapping(&mut self, on: bool) -> Task<Message> {
+        self.switching = Some(on);
+        cosmic::task::future(async move {
+            let result = if on {
+                service::start().await
+            } else {
+                service::stop().await
+            };
+            Message::RemappingSwitched { on, result }
+        })
     }
 
     /// The selected keyboard's guess, or the aggregate for All keyboards.
@@ -637,9 +700,15 @@ impl App {
         if seq != self.apply_seq {
             return ApplyStep::Stale;
         }
-        // Without a manageable unit a restart cannot help (the
-        // status chip tells why).
-        if !self.service.is_none_or(service::Status::manageable) {
+        // Only a running service has anything to re-read, and only the
+        // status chip starts a stopped one. A service started later
+        // reads the file as it stands, so nothing is lost by skipping
+        // the restart.
+        if self.switching.is_some()
+            || self
+                .service
+                .is_some_and(|status| status != service::Status::Active)
+        {
             return ApplyStep::Skip;
         }
         if self.applying.is_some() {
@@ -1124,6 +1193,8 @@ impl cosmic::Application for App {
             pressed: HashSet::new(),
             last: None,
             service: None,
+            grabbed: HashSet::new(),
+            switching: None,
             apply_seq: 0,
             apply_pending: false,
             apply_outstanding: false,
@@ -1571,6 +1642,35 @@ impl cosmic::Application for App {
                 return service_status_task();
             }
             Message::ServiceStatus(status) => self.service = Some(status),
+            Message::SetRemapping(on) => return self.set_remapping(on),
+            Message::RemappingSwitched { on, result } => {
+                self.switching = None;
+                match result {
+                    // systemctl only reports success once the unit is
+                    // in the requested state, so the chip can settle on
+                    // it instead of flickering until the query lands.
+                    Ok(()) => {
+                        self.service = Some(if on {
+                            service::Status::Active
+                        } else {
+                            service::Status::Inactive
+                        });
+                    }
+                    // It did not follow; the status query that comes
+                    // next describes where it actually stands.
+                    Err(err) => {
+                        self.flash(
+                            if on {
+                                "Could not resume remapping"
+                            } else {
+                                "Could not pause remapping"
+                            },
+                            err,
+                        );
+                    }
+                }
+                return service_status_task();
+            }
             // The redraw itself re-reads the animation clock. Once a close
             // reaches zero, the retained editor state can be discarded.
             Message::SheetAnimate => {
@@ -1685,6 +1785,7 @@ impl cosmic::Application for App {
                         self.pressed.remove(&(device, code));
                     }
                 },
+                monitor::Event::Grabbed(nodes) => self.grabbed = nodes,
                 monitor::Event::Disconnected(path) => {
                     if let Some(device) = self.devices.iter_mut().find(|device| device.path == path)
                     {
@@ -3156,5 +3257,263 @@ mod tests {
         assert_eq!(combos.len(), 1);
         assert_eq!(combos[0].2.from.mods, vec!["Ctrl".to_owned()]);
         assert_eq!(combos[0].2.to.key, "Copy");
+    }
+
+    /// A keyboard the remapper holds, plus the keyboard it re-emits on.
+    fn remapped_pair() -> Message {
+        let mut physical = test_device(
+            "/dev/input/event5",
+            "Test Keyboard",
+            keyboard::FORM_TKL,
+            true,
+        );
+        physical.name = "@HFD NEO80".to_owned();
+        let mut output = test_device(
+            "/dev/input/event19",
+            "xremap pid=42",
+            keyboard::FORM_TKL,
+            false,
+        );
+        output.name = "xremap pid=42".to_owned();
+        output.virtual_device = true;
+        Message::Monitor(monitor::Event::Started(vec![physical, output]))
+    }
+
+    fn grabbed(paths: &[&str]) -> Message {
+        Message::Monitor(monitor::Event::Grabbed(
+            paths.iter().map(PathBuf::from).collect(),
+        ))
+    }
+
+    #[test]
+    fn a_grabbed_keyboard_is_named_in_the_tester_and_the_picker() {
+        let mut app = app();
+        let _ = app.update(remapped_pair());
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::SelectDevice("/dev/input/event5".to_owned()));
+        assert!(
+            app.grabbed_selection().is_none(),
+            "nothing is held before the monitor reports a grab"
+        );
+
+        let _ = app.update(grabbed(&["/dev/input/event5"]));
+        assert_eq!(
+            app.grabbed_selection().map(|device| device.name.as_str()),
+            Some("@HFD NEO80")
+        );
+        // The picker points at the keyboard the keys reappear on; which
+        // keyboards are held is the tester's story to tell.
+        let subs: Vec<String> = app
+            .device_entries()
+            .into_iter()
+            .map(|(_, _, sub)| sub)
+            .collect();
+        assert!(subs.iter().any(|sub| sub.ends_with("· remapped output")));
+        assert!(!subs.iter().any(|sub| sub.contains("held by remapping")));
+
+        // Selecting a keyboard the remapper leaves alone is unaffected.
+        let _ = app.update(Message::SelectDevice("/dev/input/event19".to_owned()));
+        assert!(app.grabbed_selection().is_none());
+        let _ = app.update(Message::SelectDevice("all".to_owned()));
+        assert!(
+            app.grabbed_selection().is_none(),
+            "All keyboards still hears every readable keyboard"
+        );
+
+        // Releasing the keyboards clears the notice.
+        let _ = app.update(Message::SelectDevice("/dev/input/event5".to_owned()));
+        let _ = app.update(grabbed(&[]));
+        assert!(app.grabbed_selection().is_none());
+    }
+
+    #[test]
+    fn the_status_chip_offers_the_step_that_makes_sense() {
+        let mut app = app();
+        assert_eq!(
+            app.remapping_toggle(),
+            None,
+            "an unknown service state controls nothing"
+        );
+        for (status, expected) in [
+            (service::Status::Active, Some(false)),
+            (service::Status::Inactive, Some(true)),
+            (service::Status::Failed, Some(true)),
+            (service::Status::NotFound, None),
+            (service::Status::Unavailable, None),
+        ] {
+            let _ = app.update(Message::ServiceStatus(status));
+            assert_eq!(app.remapping_toggle(), expected, "{status:?}");
+        }
+
+        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(Message::SetRemapping(false));
+        assert_eq!(
+            app.remapping_toggle(),
+            None,
+            "the stop is still on its way to the service"
+        );
+        let _ = app.update(Message::RemappingSwitched {
+            on: false,
+            result: Ok(()),
+        });
+        assert_eq!(
+            app.remapping_toggle(),
+            Some(true),
+            "a stopped service reads the same however it was stopped"
+        );
+
+        // A restart in flight would fight the request.
+        app.applying = Some(app.apply_seq);
+        assert_eq!(app.remapping_toggle(), None);
+    }
+
+    #[test]
+    fn the_chip_starts_a_service_keyloom_did_not_stop_itself() {
+        // Reopening after a pause finds the unit stopped, with nothing
+        // in this session's state saying Keyloom is what stopped it.
+        for status in [service::Status::Inactive, service::Status::Failed] {
+            let mut app = app();
+            let _ = app.update(Message::ServiceStatus(status));
+            assert_eq!(app.remapping_toggle(), Some(true), "{status:?}");
+
+            let _ = app.update(Message::SetRemapping(true));
+            assert_eq!(
+                app.switching,
+                Some(true),
+                "{status:?}: pressing the chip must actually start the service"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mapping_change_never_starts_a_service_that_is_not_running() {
+        for status in [service::Status::Inactive, service::Status::Failed] {
+            let mut app = app();
+            let _ = app.update(Message::ServiceStatus(status));
+            let _ = app.update(Message::SelectProfile("mac".to_owned()));
+            assert_eq!(
+                app.apply_step(app.apply_seq),
+                ApplyStep::Skip,
+                "{status:?}: only the chip starts remapping"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_chip_puts_remapping_back() {
+        let mut app = app();
+        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(Message::SetView(View::Tester));
+
+        let _ = app.update(Message::SetRemapping(false));
+        assert_eq!(app.switching, Some(false), "the stop is still on its way");
+        let _ = app.update(Message::RemappingSwitched {
+            on: false,
+            result: Ok(()),
+        });
+        assert_eq!(app.service, Some(service::Status::Inactive));
+        assert_eq!(app.switching, None);
+
+        // Nothing else starts remapping again: not leaving the tester,
+        // not moving between views, not closing the window.
+        for view in [View::Keyboard, View::Shortcuts, View::Tester] {
+            let _ = app.update(Message::SetView(view));
+            assert_eq!(
+                app.service,
+                Some(service::Status::Inactive),
+                "leaving for {view:?} must not start remapping"
+            );
+            assert_eq!(app.switching, None);
+        }
+        assert!(app.on_app_exit().is_none(), "nothing delays the close");
+        assert_eq!(app.service, Some(service::Status::Inactive));
+
+        // Pressing the chip is the only way back.
+        let _ = app.update(Message::SetRemapping(true));
+        assert_eq!(app.switching, Some(true));
+        let _ = app.update(Message::RemappingSwitched {
+            on: true,
+            result: Ok(()),
+        });
+        assert_eq!(app.service, Some(service::Status::Active));
+        assert!(app.toast.is_none(), "a clean stop and start says nothing");
+    }
+
+    #[test]
+    fn a_refused_switch_reports_the_state_the_service_is_left_in() {
+        let mut app = app();
+        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(Message::SetView(View::Tester));
+
+        let _ = app.update(Message::SetRemapping(false));
+        let _ = app.update(Message::RemappingSwitched {
+            on: false,
+            result: Err("unit not loaded".to_owned()),
+        });
+        assert_eq!(
+            app.service,
+            Some(service::Status::Active),
+            "a refused stop leaves remapping running"
+        );
+        assert_eq!(app.switching, None);
+        let toast = app.toast.as_ref().expect("the failure is reported");
+        assert_eq!(toast.text, "Could not pause remapping");
+        assert_eq!(toast.sub, "unit not loaded");
+        assert_eq!(
+            app.remapping_toggle(),
+            Some(false),
+            "the chip still offers the stop it could not make"
+        );
+
+        // A refused start leaves remapping stopped, and offers a retry.
+        let _ = app.update(Message::SetRemapping(false));
+        let _ = app.update(Message::RemappingSwitched {
+            on: false,
+            result: Ok(()),
+        });
+        let _ = app.update(Message::SetRemapping(true));
+        let _ = app.update(Message::RemappingSwitched {
+            on: true,
+            result: Err("job failed".to_owned()),
+        });
+        assert_eq!(
+            app.toast.as_ref().map(|toast| toast.text.as_str()),
+            Some("Could not resume remapping")
+        );
+        assert_eq!(
+            app.remapping_toggle(),
+            Some(true),
+            "the chip still offers the start it could not make"
+        );
+    }
+
+    #[test]
+    fn changes_made_while_remapping_is_off_never_restart_it() {
+        let mut app = app();
+        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(Message::SetRemapping(false));
+        let _ = app.update(Message::RemappingSwitched {
+            on: false,
+            result: Ok(()),
+        });
+
+        // A profile switch still rewrites the config, but restarting
+        // would both turn remapping back on and be pointless: the
+        // service reads the file when the chip starts it.
+        let _ = app.update(Message::SelectProfile("mac".to_owned()));
+        let seq = app.apply_seq;
+        assert_eq!(app.apply_step(seq), ApplyStep::Skip);
+        let _ = app.update(Message::Apply(seq));
+        assert!(!app.apply_in_progress());
+        assert!(app.applying.is_none(), "no restart went out");
+
+        // Changes made once remapping is back apply as usual.
+        let _ = app.update(Message::SetRemapping(true));
+        let _ = app.update(Message::RemappingSwitched {
+            on: true,
+            result: Ok(()),
+        });
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        assert_eq!(app.apply_step(app.apply_seq), ApplyStep::Restart);
     }
 }

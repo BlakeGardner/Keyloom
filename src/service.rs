@@ -4,7 +4,8 @@
 //! as a user unit (see `docs/Functionality_TODO.md` §6 for the plan to
 //! relax this): status comes from `systemctl --user show` and applying
 //! a configuration means restarting the unit so xremap re-reads the
-//! generated file.
+//! generated file. The header's status chip stops and starts the unit,
+//! which is how a keyboard the remapper holds exclusively is released.
 
 use tokio::process::Command;
 
@@ -27,17 +28,14 @@ pub enum Status {
 }
 
 impl Status {
-    /// Whether restarting the unit can possibly work.
-    pub fn manageable(self) -> bool {
-        matches!(self, Self::Active | Self::Inactive | Self::Failed)
-    }
-
     /// User-facing state label. xremap and systemd are implementation
     /// details, so the wording stays generic.
     pub fn label(self) -> &'static str {
         match self {
             Self::Active => "Remapping Enabled",
-            Self::Inactive => "Remapping Off",
+            // A stopped unit is a paused one, however it came to be
+            // stopped: the distinction is Keyloom's, not the user's.
+            Self::Inactive => "Remapping Paused",
             Self::Failed => "Remapping Failed",
             Self::NotFound => "Remapping not set up",
             Self::Unavailable => "Remapping Unavailable",
@@ -75,10 +73,26 @@ pub async fn status() -> Status {
 }
 
 /// Restart the unit so xremap picks up the generated configuration.
-/// The error string is meant for the failure toast.
 pub async fn restart() -> Result<(), String> {
+    run("restart").await
+}
+
+/// Stop the unit, releasing the keyboards xremap grabbed so they can
+/// be observed directly. Only the status chip asks for this.
+pub async fn stop() -> Result<(), String> {
+    run("stop").await
+}
+
+/// Start the unit, whether or not this session is what stopped it.
+pub async fn start() -> Result<(), String> {
+    run("start").await
+}
+
+/// Run one `systemctl --user` verb against the unit. The error string
+/// is meant for the failure toast.
+async fn run(verb: &str) -> Result<(), String> {
     let output = Command::new("systemctl")
-        .args(["--user", "restart", UNIT])
+        .args(["--user", verb, UNIT])
         .output()
         .await
         .map_err(|err| format!("could not run systemctl: {err}"))?;

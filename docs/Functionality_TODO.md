@@ -109,6 +109,22 @@ workflow is not planned.
   not captured. Regression tests cover repeated reader exits and tester
   recovery with reused or changed paths.
 
+- [x] **Explain keyboards that remapping holds.** A running remapper grabs the
+  keyboards it manages, and their keys then reach it alone: the selected
+  keyboard looked connected but registered nothing in the tester, with no way
+  to tell that apart from a broken device. The monitor now reports which input
+  nodes the remapper holds (read from its open descriptors, so no keyboard is
+  ever grabbed to find out), the device picker marks them along with the
+  remapper's own output keyboard, and the tester names the situation and points
+  at the pause control. Not covered: a remapper running as another user, whose
+  descriptors are unreadable, and remappers other than xremap.
+- [x] **Let the tester see a held keyboard's own keys.** The header's status
+  chip stops and starts remapping, and is the only thing that does: a pause
+  survives view switches and closing the app, so nothing silently takes the
+  keyboard back mid-test, and the chip starts the unit again whether or not
+  this session is what stopped it. Mapping changes never start a paused
+  service, because starting it reads the config as it stands anyway.
+
 ## 5. Persistence ("Save" iteration)
 
 - [ ] **Save YAML to a user-selected file** via a native file dialog.
@@ -134,12 +150,14 @@ workflow is not planned.
 
 - [x] **Show the service status** without blocking any editing when it is
   absent. (A header chip shows the state in deliberately generic wording —
-  Remapping Enabled / Off / Failed / not set up / Unavailable, plus a
+  Remapping Enabled / Paused / Failed / not set up / Unavailable, plus a
   transient Applying Remaps state while a change makes its way to the
-  service — queried at startup and after an apply attempt finishes. The chip
-  is passive, with a standard arrow cursor and no click action; xremap is never
-  named in the status chip. It reflects the unit, not yet whether an xremap binary
-  exists at all.)
+  service — queried at startup and after an apply or a switch finishes.
+  xremap is never named in the status chip. It reflects the unit, not yet
+  whether an xremap binary exists at all. A stopped unit is simply Paused,
+  however it came to be stopped; the chip doubles as the control for that,
+  and stays passive only when there is no unit to act on or a restart is in
+  flight.)
 - [x] **Write the generated config to the user's xremap config path** with
   validation and clear failure feedback. (Written to
   `$XDG_CONFIG_HOME/xremap/keyloom.yml`; hand-written files are backed up
@@ -150,8 +168,9 @@ workflow is not planned.
   systemd's start rate limit. Success is silent — the change's own toast is
   the confirmation — and failures surface the systemctl error as a toast.
   There is deliberately no Apply button.)
-- [ ] **Full service controls:** explicit start, stop, and enable/disable on
-  login, beyond the restart that Apply performs.
+- [ ] **Enable or disable the unit on login**, the one service control the
+  status chip does not cover now that it starts and stops the unit
+  (`src/service.rs`).
 - [ ] **Point the unit at the generated config.** Auto-apply restarts
   whatever `ExecStart` the unit has; verify (or help fix) that the unit
   actually reads `$XDG_CONFIG_HOME/xremap/keyloom.yml` instead of some other

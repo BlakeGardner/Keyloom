@@ -1,4 +1,5 @@
-//! The tester view's three panels: last key, held modifiers, output.
+//! The tester view's three panels: last key, held modifiers, output,
+//! and the notice shown when remapping is holding a keyboard.
 
 use cosmic::iced::{Alignment, Border, Length, Shadow, Vector};
 use cosmic::widget::{self, container};
@@ -8,6 +9,41 @@ use crate::app::{App, Message};
 use crate::ui::model::{self, key_name};
 use crate::ui::theme::{accent, muted, oklch, oklcha, vgradient};
 use crate::ui::{eyebrow, mono, panel, txt, txt_semibold};
+
+/// Why the selected keyboard is silent.
+///
+/// A remapper grabs the keyboards it takes over, so their keys reach it
+/// alone and the tester would otherwise sit there looking broken. The
+/// way through is the header's remapping chip, which releases the
+/// keyboard until it is pressed again. Nothing is shown once remapping
+/// is off: no keyboard is held, and the chip already says so.
+pub fn notice(app: &App) -> Option<Element<'_, Message>> {
+    let held = app.grabbed_selection()?;
+    let title = format!("{} is being remapped", held.name);
+    let detail = "pause remapping in the header to see its real key presses";
+
+    Some(
+        container(
+            widget::row::with_capacity(2)
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .push(txt_semibold(title, 12.5, oklch(0.95, 0.02, 152.0)))
+                .push(txt(detail, 12.0, muted())),
+        )
+        .width(Length::Fill)
+        .padding([10, 16])
+        .class(ctheme::Container::custom(|_| container::Style {
+            background: Some(oklch(0.25, 0.02, 152.0).into()),
+            border: Border {
+                color: oklch(0.45, 0.07, 152.0),
+                width: 1.0,
+                radius: 11.0.into(),
+            },
+            ..container::Style::default()
+        }))
+        .into(),
+    )
+}
 
 /// The row of tester panels above the keyboard.
 pub fn panels(app: &App) -> Element<'_, Message> {
@@ -78,7 +114,13 @@ fn key_panel(app: &App) -> crate::ui::Panel<'_> {
 
     let title = last.map_or_else(|| "Press any key".to_owned(), |last| key_name(last.code));
     let code = last.map_or_else(
-        || format!("Listening to {}", app.device_label(&app.device)),
+        || {
+            if app.grabbed_selection().is_some() {
+                "This keyboard is being remapped".to_owned()
+            } else {
+                format!("Listening to {}", app.device_label(&app.device))
+            }
+        },
         |last| last.code.to_owned(),
     );
     let device = last.map_or_else(

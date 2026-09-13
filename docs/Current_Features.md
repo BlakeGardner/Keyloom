@@ -99,6 +99,23 @@ yet install xremap, register the unit, or set up permissions.
   available for explicit testing and targeting. When physical keyboards are
   connected, virtual devices do not influence "All keyboards" layout detection.
 
+### Keyboards held by remapping
+
+While remapping runs, xremap takes exclusive control (`EVIOCGRAB`) of every
+keyboard it is configured for and re-emits their keys on a virtual keyboard of
+its own. Those keyboards still appear connected and readable, but the kernel
+routes their events to xremap alone, so they light up nothing in the tester and
+record nothing in the shortcut editor. Keyloom detects which keyboards are held
+— by reading which input nodes the running remapper has open, which is
+side-effect free — and labels the remapper's own keyboard as the remapped
+output in the device picker. Keys observed there have already passed through
+remapping, so they report its output rather than the key that was pressed.
+
+Pausing remapping from the header's status chip is the only way to watch a held
+keyboard's own keys (see "Tester view" and "Applying"). A remapper running as
+another user (a system service rather than the user unit Keyloom manages) hides
+which devices it holds; its keyboards stay silent with no explanation.
+
 ### Remote input limitation
 
 On a computer receiving Deskflow input through Wayland/libei, remote
@@ -126,6 +143,11 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 - Shows held modifiers and what the last key becomes under the active profile.
 - Works before any mapping exists and never modifies mappings — editing
   messages are ignored while the tester is open.
+- A keyboard held by remapping is called out instead of leaving the tester
+  waiting for keys that cannot arrive, pointing at the header's status chip as
+  the way to see its key presses.
+- The notice is only about a held keyboard: once remapping is paused, nothing
+  is holding anything and the header already says so.
 
 ## Shortcuts view
 
@@ -174,7 +196,21 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 - The unit's state is queried at startup (`systemctl --user show`) and shown
   in the header, including active, inactive, failed, missing, unavailable, and
   applying states. An absent or broken service never blocks editing, and
-  auto-apply skips restarting when there is no unit to restart.
+  auto-apply restarts only a unit that is actually running.
+- The header's status chip is also the pause control: pressing it stops a
+  running unit (`systemctl --user stop`) and starts a stopped or failed one,
+  whether or not this session is what stopped it. Remapping is either running
+  or paused — a unit Keyloom stopped reads exactly like one that was already
+  stopped ("Remapping Paused", amber) — and amber also covers the moments
+  between: being paused or resumed, or a change on its way to the service.
+  The chip stays passive only while a restart is in flight, and when there is
+  no unit to control.
+- The chip has the final say: remapping stopped from it stays stopped —
+  switching views, closing Keyloom, and quitting it all leave it alone. Only
+  the chip starts it again (or the unit's own start on the next login).
+- A mapping change made while remapping is paused is written to the config
+  but starts nothing, since a service reads the file when it does start.
+- Enabling or disabling the unit on login is still left to the user.
 - The existing user unit must read `keyloom.yml`; Keyloom does not update
   its `ExecStart` or migrate the previous `config.yml` file.
 - Keyloom assumes xremap is installed and the user unit plus permissions are

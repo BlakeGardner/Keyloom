@@ -4,6 +4,13 @@
 //! every event, we merely observe them. This is the standard way to watch
 //! keyboard input system-wide on Linux, and it requires read access to
 //! `/dev/input` (i.e. membership in the `input` group).
+//!
+//! One process can opt out of that sharing: a remapper grabs the
+//! keyboards it takes over (`EVIOCGRAB`), after which the kernel routes
+//! their events to it alone and re-emits the result on a virtual
+//! keyboard of its own. A grabbed device still opens and reads here, it
+//! simply never reports another key, so the grabbed set is tracked
+//! separately (see [`Event::Grabbed`]).
 
 use cosmic::iced::futures::channel::mpsc;
 use cosmic::iced::futures::{Stream, StreamExt, stream};
@@ -18,6 +25,10 @@ use crate::keyboard;
 
 /// How often to look for newly attached keyboards.
 const HOTPLUG_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Process name of the remapping backend Keyloom drives. Its grabs are
+/// what make an otherwise healthy keyboard silent here.
+const REMAPPER: &str = "xremap";
 
 /// A physical key event observed from an input device.
 #[derive(Clone, Copy, Debug)]
@@ -132,6 +143,10 @@ pub enum Event {
     Connected(KeyboardDevice),
     /// A key event and the keyboard that produced it.
     Key { device: PathBuf, event: KeyEvent },
+    /// The input nodes the remapper currently holds exclusively,
+    /// reported at startup and whenever the set changes. Keyboards in
+    /// it cannot produce events for us until it releases them.
+    Grabbed(HashSet<PathBuf>),
     /// A keyboard could no longer be read.
     Disconnected(PathBuf),
 }
@@ -204,6 +219,15 @@ fn device_entry(path: &Path, device: &Device) -> KeyboardDevice {
     }
 }
 
+/// Whether a path names one of the `/dev/input/event*` nodes.
+fn is_event_node(path: &Path) -> bool {
+    path.parent() == Some(Path::new("/dev/input"))
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("event"))
+}
+
 /// The `/dev/input/event*` nodes currently present, whether readable
 /// or not.
 fn input_nodes() -> HashSet<PathBuf> {
@@ -212,12 +236,66 @@ fn input_nodes() -> HashSet<PathBuf> {
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("event"))
-        })
+        .filter(|path| is_event_node(path))
         .collect()
+}
+
+/// Whether a device is the remapper's own output keyboard, where the
+/// keys of every keyboard it grabbed reappear (already remapped).
+/// xremap names it `xremap` or `xremap pid=<pid>` unless its
+/// `--output-device-name` option renames it.
+pub fn is_remapper_output(device: &KeyboardDevice) -> bool {
+    device.virtual_device && device.name.to_ascii_lowercase().starts_with(REMAPPER)
+}
+
+/// The input nodes a running remapper holds open, which are exactly the
+/// ones it grabbed.
+///
+/// Reading its descriptors is the side-effect-free way to learn this: a
+/// grab is not reported anywhere in sysfs, and probing with a grab of
+/// our own would take the keyboard away from the compositor for as long
+/// as the probe lasts. A remapper running as another user (a system
+/// service rather than the user unit Keyloom drives) hides its
+/// descriptors, and its devices simply stay unaccounted for.
+fn grabbed_nodes() -> HashSet<PathBuf> {
+    grabbed_nodes_in(Path::new("/proc"))
+}
+
+/// [`grabbed_nodes`] against an explicit `/proc`, so tests can supply one.
+fn grabbed_nodes_in(proc: &Path) -> HashSet<PathBuf> {
+    let mut nodes = HashSet::new();
+    for entry in std::fs::read_dir(proc).into_iter().flatten().flatten() {
+        let process = entry.path();
+        // Only the numeric entries of /proc are processes.
+        let is_process = process
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.bytes().all(|byte| byte.is_ascii_digit()));
+        if !is_process {
+            continue;
+        }
+        // `comm` holds the (15-character) process name, which is long
+        // enough to recognize the remapper. A process that vanished
+        // mid-scan, or one we may not inspect, is not one of ours.
+        let Ok(comm) = std::fs::read_to_string(process.join("comm")) else {
+            continue;
+        };
+        if comm.trim() != REMAPPER {
+            continue;
+        }
+        for fd in std::fs::read_dir(process.join("fd"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            if let Ok(target) = std::fs::read_link(fd.path())
+                && is_event_node(&target)
+            {
+                nodes.insert(target);
+            }
+        }
+    }
+    nodes
 }
 
 /// Keep a keyboard's path reserved until its reader has sent its final
@@ -328,6 +406,7 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
         .map(|(path, device)| device_entry(path, device))
         .collect();
     let started = Event::Started(devices);
+    let grabbed = grabbed_nodes();
 
     for (path, device) in keyboards {
         let reader = spawn_reader(path.clone(), device, tx.clone());
@@ -336,12 +415,23 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
 
     // Hotplug scanner: adopt new keyboards and replace stopped readers,
     // including when a virtual device is recreated at the same event node.
+    // The same pass follows the remapper taking keyboards over and
+    // giving them back, which no event announces.
     let scan_tx = tx.clone();
+    let mut scanned_grabs = grabbed.clone();
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(HOTPLUG_INTERVAL);
             if scan_tx.is_closed() {
                 return;
+            }
+
+            let grabbed = grabbed_nodes();
+            if grabbed != scanned_grabs {
+                scanned_grabs.clone_from(&grabbed);
+                if scan_tx.unbounded_send(Event::Grabbed(grabbed)).is_err() {
+                    return;
+                }
             }
 
             for path in scan_candidates(&mut known, input_nodes()) {
@@ -367,8 +457,9 @@ pub fn watch() -> impl Stream<Item = Event> + Send {
     });
 
     // Prepend the startup notice so the UI can report the device count
-    // (or the lack of access to any device).
-    stream::iter([started]).chain(rx)
+    // (or the lack of access to any device), and which of those devices
+    // the remapper is already holding.
+    stream::iter([started, Event::Grabbed(grabbed)]).chain(rx)
 }
 
 #[cfg(test)]
@@ -432,6 +523,90 @@ mod tests {
         assert_eq!(
             detected_form([&broad_virtual].into_iter()),
             Some(keyboard::FORM_FULL)
+        );
+    }
+
+    /// Build a `/proc` with one remapper process holding `grabbed`,
+    /// plus decoys the scan has to ignore.
+    fn fake_proc(name: &str, grabbed: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("keyloom-proc-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let process = |pid: &str, comm: &str, fds: &[&str]| {
+            let process = dir.join(pid);
+            std::fs::create_dir_all(process.join("fd")).unwrap();
+            std::fs::write(process.join("comm"), format!("{comm}\n")).unwrap();
+            for (index, target) in fds.iter().enumerate() {
+                std::os::unix::fs::symlink(target, process.join("fd").join(index.to_string()))
+                    .unwrap();
+            }
+        };
+
+        let mut remapper: Vec<&str> = grabbed.to_vec();
+        // Its uinput handle and config are open too, and are not grabs.
+        remapper.extend(["/dev/uinput", "/home/user/.config/xremap/keyloom.yml"]);
+        process("2", REMAPPER, &remapper);
+        // The compositor reads keyboards without grabbing them, and a
+        // similarly named process is still not the remapper.
+        process("3", "cosmic-comp", &["/dev/input/event3"]);
+        process("4", "xremap-helper", &["/dev/input/event4"]);
+        // /proc holds more than processes; only numeric entries count.
+        std::fs::create_dir_all(dir.join("sys")).unwrap();
+        std::fs::write(dir.join("uptime"), "1 1\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn grabbed_nodes_are_the_keyboards_the_remapper_holds() {
+        let dir = fake_proc("held", &["/dev/input/event5", "/dev/input/event9"]);
+
+        assert_eq!(
+            grabbed_nodes_in(&dir),
+            HashSet::from([
+                PathBuf::from("/dev/input/event5"),
+                PathBuf::from("/dev/input/event9"),
+            ]),
+            "only the remapper's own input nodes count as grabbed"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn nothing_is_grabbed_without_a_running_remapper() {
+        let dir = fake_proc("free", &[]);
+        std::fs::remove_dir_all(dir.join("2")).unwrap();
+
+        assert!(grabbed_nodes_in(&dir).is_empty());
+        assert!(
+            grabbed_nodes_in(Path::new("/keyloom-no-such-proc")).is_empty(),
+            "an unreadable /proc reports no grabs rather than failing"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_the_remappers_virtual_keyboard_counts_as_its_output() {
+        let mut output = layout_device(true, false, true);
+        output.name = "xremap pid=1234".to_owned();
+        assert!(is_remapper_output(&output));
+
+        let mut renamed = output.clone();
+        renamed.name = "xremap".to_owned();
+        assert!(is_remapper_output(&renamed));
+
+        let mut physical = output.clone();
+        physical.virtual_device = false;
+        assert!(
+            !is_remapper_output(&physical),
+            "a physical keyboard is never the remapper's output"
+        );
+
+        let mut solaar = output.clone();
+        solaar.name = "Solaar Keyboard".to_owned();
+        assert!(
+            !is_remapper_output(&solaar),
+            "other software keyboards are not the remapper's output"
         );
     }
 
