@@ -194,9 +194,14 @@ still only previewed in memory.
   selected keyboard.
 - [ ] **Shortcut groups (chord → chord rules)** → xremap `keymap` blocks,
   including the "any modifier" matching option.
-- [ ] **Application-scoped groups** → xremap `application` filters, with a
-  picker for real window classes instead of free-form names.
-- [ ] **Layers** (the previewed Caps-Lock nav layer) → generated layer config.
+- [ ] **Application-specific shortcuts.** Make shortcut groups apply only
+  in the selected applications through xremap `application` filters, with a
+  picker for real window classes instead of free-form names. The current UI
+  is a preview; application-specific shortcuts do not yet affect live input
+  and depend on the shortcut-group output above.
+- [ ] **Working layers.** Turn the previewed Caps-Lock navigation layer into
+  generated layer configuration so holding the layer key actually changes
+  what the other keys do. The current layer is a visual preview only.
 
 ## 8. App polish and distribution
 
@@ -224,6 +229,8 @@ still only previewed in memory.
 Removing the assumptions listed in [§6](#6-apply-and-service-management-apply--manage-iterations):
 today Keyloom requires a preinstalled xremap on `$PATH`, a registered
 `xremap.service` systemd user unit, and manually configured permissions.
+Remapping therefore requires setup outside the app; installing Keyloom alone
+does not yet provide a working remapping setup.
 
 - [ ] **Detect an xremap installation** (binary on `$PATH`, its version) as
   distinct from the service unit's state, without blocking any editing when
@@ -239,7 +246,7 @@ today Keyloom requires a preinstalled xremap on `$PATH`, a registered
   supervision schemes (system-level systemd unit, runit/OpenRC, plain
   desktop-autostart process) can slot in per distro. Also make the unit name
   configurable instead of the hardcoded `xremap.service`.
-- [ ] **First-time setup wizard.** Guided flow that takes a machine from
+- [ ] **Guided installation and first-time setup.** Take a machine from
   nothing to a working setup: install xremap (per the strategy above), add
   the user to the `input` group, install the udev rule granting the `input`
   group access to `/dev/uinput`, ensure the `uinput` module loads at boot,
@@ -248,6 +255,8 @@ today Keyloom requires a preinstalled xremap on `$PATH`, a registered
   [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md)).
   Needs privilege escalation (polkit/pkexec) for the group, udev, and module
   steps, and must explain the keylogging implication of joining `input`.
+  The existing onboarding walkthrough does not perform this installation
+  or system setup.
 
 ## 10. Distant-future possibilities (unscheduled)
 
