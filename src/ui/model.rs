@@ -839,31 +839,6 @@ pub fn starter_profiles() -> Vec<(Profile, Maps)> {
     ]
 }
 
-/// The three onboarding steps.
-pub const ONBOARDING: &[(&str, &str, &str, &str, &str)] = &[
-    (
-        "A",
-        "Your keyboard, your rules",
-        "Press a key to see it light up. Mappings you add are saved and applied automatically.",
-        "Continue with an example",
-        "Waiting for input…",
-    ),
-    (
-        "Caps",
-        "Try the classic first",
-        "For example, make Caps Lock behave like Escape. You can restore the original key whenever you want.",
-        "Set Caps → Esc",
-        "Step 2 of 3",
-    ),
-    (
-        "✓",
-        "Your first remap is ready",
-        "Click a key, choose what it should do. Layers, tap-and-hold and per-app rules live in the same place when you want them.",
-        "Open Keyloom",
-        "Step 3 of 3",
-    ),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

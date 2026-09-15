@@ -146,22 +146,24 @@ workflow is not planned.
   generated output). Shortcut groups are not persisted yet.
 - [ ] **Remember selected device scope** across launches. The active profile
   is already remembered; setup completion is covered by the next task.
-- [ ] **First-run setup lifecycle (0.1.0 blocker).** Open the setup flow on
-  first launch, persist completion or deferral, and allow reopening it from
-  the menu. Resume incomplete setup without claiming the system is ready.
-  The current menu-only walkthrough does not perform the system setup in §9.
+- [x] **First-run setup lifecycle (0.1.0 blocker).** Setup opens on the first
+  launch and from the menu (or the header chip while nothing is set up); the
+  stored state records completion when every step is in order or only waits
+  for a login, and deferral otherwise, so it never reopens on its own. Every
+  opening re-runs the checks, so a resumed setup shows what is actually done
+  rather than assuming it. The old tutorial's Caps Lock → Escape example
+  lives on the summary page.
 
 ## 6. Apply and service management ("Apply" / "Manage" iterations)
 
-> **Current assumption:** xremap is already installed on `$PATH`, registered as
-> a systemd *user* unit named `xremap.service`, and the permissions from
-> xremap's [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md)
-> are in place (user in the `input` group for `/dev/input` access, a udev rule
-> granting the `input` group access to `/dev/uinput`, and the `uinput` module
-> loaded). Keyloom talks to the unit through `systemctl --user`
-> (`src/service.rs`). Removing these assumptions is tracked in
-> [§9](#9-first-run-system-setup-010-blocker). For 0.1.0, only the
-> preinstalled xremap prerequisite remains the user's responsibility.
+> **Current assumption:** xremap is already installed on `$PATH`. First-run
+> setup ([§9](#9-first-run-system-setup-010-blocker), `src/setup.rs`) takes
+> care of the rest from xremap's
+> [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md):
+> the `input` group for `/dev/input` access, a udev rule granting the group
+> access to `/dev/uinput` with the `uinput` module loaded, and a systemd
+> *user* unit named `xremap.service` reading the generated config. Keyloom
+> talks to the unit through `systemctl --user` (`src/service.rs`).
 
 - [x] **Show the service status** without blocking any editing when it is
   absent. (A header chip shows the state in deliberately generic wording —
@@ -183,19 +185,20 @@ workflow is not planned.
   systemd's start rate limit. Success is silent — the change's own toast is
   the confirmation — and failures surface the systemctl error as a toast.
   There is deliberately no Apply button.)
-- [ ] **Enable or disable the unit on login**, the one service control the
-  status chip does not cover now that it starts and stops the unit
+- [ ] **Disable the unit on login.** Setup enables it; the status chip only
+  starts and stops it, and nothing turns the login start off again
   (`src/service.rs`).
-- [ ] **Point the unit at the generated config (0.1.0 blocker).** Auto-apply restarts
-  whatever `ExecStart` the unit has; verify (or help fix) that the unit
-  actually reads `$XDG_CONFIG_HOME/xremap/keyloom.yml` instead of some other
-  file. A unit running with `--watch=config` would even make restarts
-  unnecessary.
-- [ ] **Permission guidance (0.1.0 blocker).** Detect missing `/dev/input` read access (the
-  `input` group) and walk the user through fixing it instead of failing
-  silently. Per xremap's running-without-sudo guide this also covers write
-  access to `/dev/uinput` (udev rule for the `input` group) and the `uinput`
-  kernel module being loaded.
+- [x] **Point the unit at the generated config (0.1.0 blocker).** Setup
+  installs a unit whose `ExecStart` runs the found binary on
+  `$XDG_CONFIG_HOME/xremap/keyloom.yml`, and inspects an existing unit
+  first: one that names `keyloom.yml` is reused, one that does not is shown
+  with its `ExecStart` and can be replaced (backed up) or kept. Auto-apply
+  still restarts whatever unit is there; a kept foreign unit means Keyloom's
+  remaps have no effect, which only setup points out (see §9 follow-ups).
+- [x] **Permission guidance (0.1.0 blocker).** Setup checks effective
+  membership in the `input` group and whether `/dev/uinput` opens for
+  writing, explains what is missing, and fixes each through the desktop's
+  authentication prompt (see §9).
 
 ## 7. Advanced remapping in generated config ("Expand" iteration)
 
@@ -251,29 +254,47 @@ Today the user must configure the service and permissions outside Keyloom.
 For 0.1.0, first-run setup must handle or guide these steps with an already
 installed xremap. This extends the existing onboarding walkthrough.
 
-- [ ] **Check the prerequisite.** Detect the installed xremap binary and
-  version. Explain when it is missing or incompatible without blocking
-  mouse-driven editing. Do not install or bundle xremap in this release.
-- [ ] **Install the user-level systemd unit.** Create an `xremap.service`
-  user unit pointing at the installed binary and Keyloom's generated config,
-  reload the user service manager, and start remapping once setup is ready.
-  Verify an existing unit before reusing or changing it; preserve unrelated
-  user configuration. Coordinate config-path validation with §6.
-- [ ] **Guide input-group membership.** Check whether the current user has
-  the required group access and walk them through joining the `input` group.
-  Explain the access being granted and any logout/login needed before it
-  takes effect; recheck effective access before declaring setup complete.
-- [ ] **Install the udev rule and prepare uinput.** Install the rule needed
-  for input access, reload rules as needed, and ensure `/dev/uinput` is
-  available with the required permissions, including module loading when
-  necessary. Explain any remaining reconnect or session-restart steps.
-- [ ] **Request system authorization graphically.** Use the desktop's
-  authentication prompt (for example, a polkit-backed helper) for privileged
-  system changes such as installing the udev rule. Keep the main app
-  unprivileged and handle canceled or failed authorization with a retry path.
-- [ ] **Verify setup end to end.** Confirm effective input access, a running
-  user service using Keyloom's config, and a working sample remap. Reopening
-  setup must safely reuse completed steps and report unresolved failures.
+- [x] **Check the prerequisite.** The xremap binary is looked up on `PATH`
+  and its version shown; a missing binary is explained and editing keeps
+  working. Compatibility is not checked beyond the binary answering
+  `--version`.
+- [x] **Install the user-level systemd unit.** Setup writes
+  `~/.config/systemd/user/xremap.service` (marked as Keyloom's, so its own
+  file is rewritten freely and anyone else's is backed up beside it first),
+  reloads the user manager, enables the unit, and starts it once access is
+  in effect. An existing unit is inspected before anything is touched (§6).
+- [x] **Guide input-group membership.** Membership in effect (this
+  process's groups) is told apart from membership on record (`/etc/group`),
+  so the step explains the pending logout/login; the fix runs `usermod -aG
+  input` for the user and explains the access it grants. Only a local
+  `input` group is checked; a system without one is reported, not fixed.
+- [x] **Install the udev rule and prepare uinput.** The step opens
+  `/dev/uinput` for writing to know where it stands; the fix installs
+  `00-xremap-input.rules` under `/etc/udev/rules.d` (the packaged rule under
+  `/usr/lib` is recognized), loads `uinput` and registers it in
+  `modules-load.d`, reloads udev, and re-triggers the device. A rule that is
+  installed but not in effect points at the next login.
+- [x] **Request system authorization graphically.** Privileged changes run
+  through `pkexec`; a dismissed or refused prompt is reported on the step
+  with the fix still on offer, and a missing `pkexec` shows the commands to
+  run by hand. The prompt is polkit's generic one (it names `usermod` or
+  `/bin/sh`); a packaged polkit action or helper would let it name Keyloom.
+- [x] **Verify setup end to end.** Reopening setup re-runs every check, so
+  completed steps are reused from what the system says rather than from
+  memory, and the summary reports what is unresolved. Effective input access
+  and a running, enabled service on Keyloom's config are verified; the
+  sample remap is only applied (see below).
+- [ ] **Verify a sample remap end to end.** After the Caps Lock → Escape
+  example, observe the remapper's output device to confirm the remap works
+  instead of trusting that the service started.
+- [ ] **Merge into an existing unit.** A unit the user wrote can only be
+  replaced or kept; xremap merges several config files, so offering to add
+  `keyloom.yml` to its `ExecStart` would keep their setup working. Until
+  then, a kept foreign unit leaves the header saying remapping is enabled
+  while Keyloom's remaps are ignored.
+- [ ] **Notice a remapper running as another user.** A system-wide xremap
+  (or one started by hand as root) competes for the same keyboards; setup
+  does not look for one.
 
 ## 10. Distant-future possibilities (unscheduled)
 

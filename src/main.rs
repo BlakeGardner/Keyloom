@@ -6,6 +6,7 @@ mod config;
 mod keyboard;
 mod monitor;
 mod service;
+mod setup;
 #[cfg(test)]
 mod testing;
 mod ui;

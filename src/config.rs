@@ -40,6 +40,19 @@ pub struct KeyboardLayouts {
     pub devices: HashMap<KeyboardId, LayoutOverride>,
 }
 
+/// Where first-run setup stands, so it opens on its own only until the
+/// user has been through it once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SetupState {
+    /// Never shown: it opens with the next launch.
+    #[default]
+    NotStarted,
+    /// Closed before everything was in order; reopen it from the menu.
+    Deferred,
+    /// Every step was in order (or only waiting for a new login).
+    Complete,
+}
+
 /// Everything Keyloom persists between sessions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, CosmicConfigEntry)]
 #[version = 1]
@@ -51,6 +64,7 @@ pub struct KeyloomConfig {
     /// Counter used to mint unique ids for user-created profiles.
     pub custom_profiles: u32,
     pub keyboard_layouts: KeyboardLayouts,
+    pub setup: SetupState,
 }
 
 impl KeyloomConfig {
@@ -81,6 +95,7 @@ impl KeyloomConfig {
         active_profile: &str,
         custom_profiles: u32,
         keyboard_layouts: &KeyboardLayouts,
+        setup: SetupState,
     ) -> Self {
         Self {
             active_profile: active_profile.to_owned(),
@@ -94,6 +109,7 @@ impl KeyloomConfig {
                 .collect(),
             custom_profiles,
             keyboard_layouts: keyboard_layouts.clone(),
+            setup,
         }
     }
 
@@ -159,11 +175,19 @@ mod tests {
             },
             ..KeyboardLayouts::default()
         };
-        let snapshot = KeyloomConfig::snapshot(&profiles, &maps, "custom-1", 1, &layouts);
+        let snapshot = KeyloomConfig::snapshot(
+            &profiles,
+            &maps,
+            "custom-1",
+            1,
+            &layouts,
+            SetupState::Deferred,
+        );
         assert_eq!(
             snapshot.keyboard_layouts, layouts,
             "profile saves preserve display preferences"
         );
+        assert_eq!(snapshot.setup, SetupState::Deferred);
         let (restored, restored_maps, active, custom) = snapshot.into_state();
 
         assert_eq!(restored, profiles);
@@ -231,6 +255,7 @@ mod tests {
                     },
                 )]),
             },
+            setup: SetupState::Complete,
         };
         config.write_entry(&handle).unwrap();
         assert_eq!(KeyloomConfig::load(&handle), config);
@@ -260,6 +285,11 @@ mod tests {
         assert_eq!(loaded.active_profile, "existing");
         assert_eq!(loaded.custom_profiles, 5);
         assert_eq!(loaded.keyboard_layouts, KeyboardLayouts::default());
+        assert_eq!(
+            loaded.setup,
+            SetupState::NotStarted,
+            "an existing store without a setup record has not been through setup"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

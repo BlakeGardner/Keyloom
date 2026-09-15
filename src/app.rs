@@ -16,10 +16,11 @@ use cosmic::iced::Subscription;
 use cosmic::iced::futures::{Stream, StreamExt};
 use cosmic::prelude::*;
 
-use crate::config::{self, KeyboardLayouts, KeyloomConfig, LayoutOverride};
+use crate::config::{self, KeyboardLayouts, KeyloomConfig, LayoutOverride, SetupState};
 use crate::keyboard;
 use crate::monitor;
 use crate::service;
+use crate::setup;
 use crate::ui;
 use crate::ui::model::{self, Chord, Group, Mapping, Maps, Profile, Rule, key_by_evdev, key_name};
 use crate::xremap;
@@ -126,6 +127,41 @@ pub struct LastKey {
     pub device: String,
 }
 
+/// The page first-run setup is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupPage {
+    Welcome,
+    Step(setup::Step),
+    Finish,
+}
+
+/// First-run setup while it is open: a wizard over the system checks
+/// in [`crate::setup`].
+#[derive(Clone, Debug)]
+pub struct Setup {
+    pub page: SetupPage,
+    /// What the last probe found; `None` until the first one lands.
+    pub facts: Option<setup::Facts>,
+    /// A probe is running.
+    pub probing: bool,
+    /// The step whose fix is running.
+    pub busy: Option<setup::Step>,
+    /// Why the last fix failed, and which step it belonged to.
+    pub error: Option<(setup::Step, setup::ActionError)>,
+}
+
+impl Setup {
+    fn new() -> Self {
+        Self {
+            page: SetupPage::Welcome,
+            facts: None,
+            probing: true,
+            busy: None,
+            error: None,
+        }
+    }
+}
+
 /// Reverse animation retained while a dismissed sheet slides out.
 #[derive(Clone, Copy, Debug)]
 struct SheetCloseAnimation {
@@ -211,14 +247,33 @@ pub enum Message {
     },
     /// Redraw tick while the bottom sheet opens or closes.
     SheetAnimate,
+    /// Open first-run setup: from the menu, from the header chip when
+    /// nothing is set up, and on its own the first time Keyloom runs.
     MenuShowSetup,
+    /// What the setup checks found.
+    SetupProbed(setup::Facts),
+    /// Show another page of setup.
+    SetupPage(SetupPage),
+    /// Run the setup checks again.
+    SetupRecheck,
+    /// Carry out the fix a setup step offers.
+    SetupAct(setup::Step),
+    /// The fix finished.
+    SetupActed {
+        step: setup::Step,
+        result: Result<(), setup::ActionError>,
+    },
+    /// Close setup before its last page.
+    SetupSkip,
+    /// Close setup from its last page.
+    SetupFinish,
+    /// Apply the example remap and close setup.
+    SetupExample,
     MenuReset,
     ResetMappingsConfirm,
     ResetMappingsCancel,
     MenuAbout,
     CloseAbout,
-    SkipOnboarding,
-    NextOnboarding,
     Monitor(monitor::Event),
 }
 
@@ -234,8 +289,10 @@ pub struct App {
     /// Key code awaiting removal confirmation in the active profile.
     pub confirm_remove_mapping: Option<String>,
     pub about_open: bool,
-    pub onboarding: bool,
-    pub onb_step: usize,
+    /// First-run setup, while it is open.
+    pub setup: Option<Setup>,
+    /// How far setup got, as remembered between launches.
+    setup_state: SetupState,
     // Profiles and their in-memory preview state.
     pub profiles: Vec<Profile>,
     pub profile: String,
@@ -430,6 +487,126 @@ impl App {
             service::Status::Inactive | service::Status::Failed => Some(service::Remapping::On),
             service::Status::NotFound | service::Status::Unavailable => None,
         }
+    }
+
+    /// Open first-run setup and start checking the system.
+    fn open_setup(&mut self) -> Task<Message> {
+        self.popover = None;
+        self.rename = None;
+        self.remaps_open = false;
+        self.confirm_remove_mapping = None;
+        self.clear_sheet();
+        self.setup = Some(Setup::new());
+        setup_probe_task()
+    }
+
+    /// Close setup, remembering whether it needs to come back on its
+    /// own. Setup that found everything in order (or only waiting for
+    /// a new login) is complete however it is closed; a completed
+    /// setup never becomes incomplete by being reopened and closed.
+    fn leave_setup(&mut self) {
+        let Some(setup) = self.setup.take() else {
+            return;
+        };
+        if setup
+            .facts
+            .as_ref()
+            .is_some_and(setup::Facts::is_configured)
+        {
+            self.set_setup_state(SetupState::Complete);
+        } else if self.setup_state != SetupState::Complete {
+            self.set_setup_state(SetupState::Deferred);
+        }
+    }
+
+    /// Record how far setup got, without touching the remaps.
+    fn set_setup_state(&mut self, state: SetupState) {
+        if self.setup_state == state {
+            return;
+        }
+        self.setup_state = state;
+        if let Some(settings) = &self.settings
+            && let Err(err) = settings.set("setup", state)
+        {
+            eprintln!("keyloom: failed to save setup state: {err}");
+        }
+    }
+
+    /// Run the fix a setup step offers; [`Message::SetupActed`]
+    /// reports how it went. Steps without a fix, and steps whose fix
+    /// is already running, do nothing.
+    fn setup_act(&mut self, step: setup::Step) -> Task<Message> {
+        let Some(setup) = &mut self.setup else {
+            return Task::none();
+        };
+        if setup.busy.is_some() {
+            return Task::none();
+        }
+        let Some(facts) = setup.facts.clone() else {
+            return Task::none();
+        };
+        let task = match step {
+            setup::Step::Xremap => return Task::none(),
+            setup::Step::InputGroup => {
+                let Some(user) = facts.user else {
+                    return Task::none();
+                };
+                cosmic::task::future(async move {
+                    Message::SetupActed {
+                        step,
+                        result: setup::add_to_input_group(&user).await,
+                    }
+                })
+            }
+            setup::Step::Uinput => cosmic::task::future(async move {
+                Message::SetupActed {
+                    step,
+                    result: setup::prepare_uinput().await,
+                }
+            }),
+            setup::Step::Service => {
+                let Some(action) = facts.service_action() else {
+                    return Task::none();
+                };
+                cosmic::task::future(async move {
+                    Message::SetupActed {
+                        step,
+                        result: setup::run_service_action(action, &facts).await,
+                    }
+                })
+            }
+        };
+        setup.busy = Some(step);
+        setup.error = None;
+        task
+    }
+
+    /// Setup's one-click example: Caps Lock → Escape in the active
+    /// profile, shown on the keyboard and undoable like any change.
+    fn apply_example(&mut self) {
+        self.view = View::Keyboard;
+        self.clear_sheet();
+        self.undo = Some(Undo::Maps(self.profile_maps.clone()));
+        let maps = self.profile_maps.entry(self.profile.clone()).or_default();
+        match maps.iter_mut().find(|(key, _)| key == "CapsLock") {
+            Some((_, mapping)) => {
+                mapping.tap = Some("Escape".to_owned());
+                mapping.device = "all".to_owned();
+            }
+            None => maps.push((
+                "CapsLock".to_owned(),
+                Mapping {
+                    tap: Some("Escape".to_owned()),
+                    device: "all".to_owned(),
+                    ..Mapping::default()
+                },
+            )),
+        }
+        self.flash(
+            "Caps Lock → Escape",
+            "applies automatically · all keyboards",
+        );
+        self.persist();
     }
 
     /// Put remapping in the requested state. The service call runs in
@@ -632,6 +809,7 @@ impl App {
                 &self.profile,
                 u32::try_from(self.custom_profiles).unwrap_or(u32::MAX),
                 &self.keyboard_layouts,
+                self.setup_state,
             );
             if let Err(err) = snapshot.write_entry(settings) {
                 eprintln!("keyloom: failed to save settings: {err}");
@@ -1085,9 +1263,6 @@ impl App {
                 device: format!("Input received from {name}"),
             });
         }
-        if !escape && self.onboarding && self.onb_step == 0 {
-            self.onb_step = 1;
-        }
     }
 }
 
@@ -1124,6 +1299,9 @@ impl cosmic::Application for App {
             .as_mut()
             .map(|stored| std::mem::take(&mut stored.keyboard_layouts))
             .unwrap_or_default();
+        let setup_state = stored
+            .as_ref()
+            .map_or(SetupState::NotStarted, |stored| stored.setup);
         let stored = stored.filter(|stored| !stored.profiles.is_empty());
 
         let (profiles, profile_maps, profile, custom_profiles) = match stored {
@@ -1159,8 +1337,8 @@ impl cosmic::Application for App {
             remaps_open: false,
             confirm_remove_mapping: None,
             about_open: false,
-            onboarding: false,
-            onb_step: 0,
+            setup: None,
+            setup_state,
             profiles,
             profile,
             profile_maps,
@@ -1215,7 +1393,13 @@ impl cosmic::Application for App {
         app.apply_pending = false;
         app.apply_outstanding = false;
 
-        (app, service_status_task())
+        // The first launch walks through system setup; afterwards it
+        // waits in the menu. Tests never open it on their own.
+        let mut tasks = vec![service_status_task()];
+        if app.settings.is_some() && opens_setup_on_launch(app.setup_state) {
+            tasks.push(app.open_setup());
+        }
+        (app, Task::batch(tasks))
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
@@ -1248,7 +1432,6 @@ impl cosmic::Application for App {
                         self.last = None;
                         self.capture = false;
                         self.selected = None;
-                        self.onboarding = false;
                         self.toast = None;
                         self.edit_rule = None;
                     }
@@ -1666,11 +1849,44 @@ impl cosmic::Application for App {
                     self.clear_sheet();
                 }
             }
-            Message::MenuShowSetup => {
-                self.popover = None;
-                self.onboarding = true;
-                self.onb_step = 0;
-                self.clear_sheet();
+            Message::MenuShowSetup => return self.open_setup(),
+            Message::SetupProbed(facts) => {
+                if let Some(setup) = &mut self.setup {
+                    setup.probing = false;
+                    setup.facts = Some(facts);
+                }
+            }
+            Message::SetupPage(page) => {
+                if let Some(setup) = &mut self.setup {
+                    setup.page = page;
+                }
+            }
+            Message::SetupRecheck => {
+                if let Some(setup) = &mut self.setup
+                    && !setup.probing
+                {
+                    setup.probing = true;
+                    return Task::batch([setup_probe_task(), service_status_task()]);
+                }
+            }
+            Message::SetupAct(step) => return self.setup_act(step),
+            Message::SetupActed { step, result } => {
+                // The header chip follows the service either way, even
+                // when setup was closed while the fix ran.
+                let Some(setup) = &mut self.setup else {
+                    return service_status_task();
+                };
+                setup.busy = None;
+                setup.error = result.err().map(|err| (step, err));
+                setup.probing = true;
+                return Task::batch([setup_probe_task(), service_status_task()]);
+            }
+            Message::SetupSkip | Message::SetupFinish => self.leave_setup(),
+            Message::SetupExample => {
+                if self.setup.is_some() {
+                    self.apply_example();
+                    self.leave_setup();
+                }
             }
             Message::MenuReset => {
                 self.popover = None;
@@ -1696,40 +1912,6 @@ impl cosmic::Application for App {
                 self.about_open = true;
             }
             Message::CloseAbout => self.about_open = false,
-            Message::SkipOnboarding => {
-                self.onboarding = false;
-                self.onb_step = 0;
-            }
-            Message::NextOnboarding => {
-                if self.view == View::Tester {
-                    return Task::none();
-                }
-                if self.onb_step >= 2 {
-                    self.onboarding = false;
-                    self.onb_step = 0;
-                    self.view = View::Keyboard;
-                } else if self.onb_step == 1 {
-                    self.undo = Some(Undo::Maps(self.profile_maps.clone()));
-                    let maps = self.profile_maps.entry(self.profile.clone()).or_default();
-                    if let Some(index) = maps.iter().position(|(key, _)| key == "CapsLock") {
-                        maps[index].1.tap = Some("Escape".to_owned());
-                        maps[index].1.device = "all".to_owned();
-                    } else {
-                        maps.push((
-                            "CapsLock".to_owned(),
-                            Mapping {
-                                tap: Some("Escape".to_owned()),
-                                device: "all".to_owned(),
-                                ..Mapping::default()
-                            },
-                        ));
-                    }
-                    self.onb_step = 2;
-                    self.persist();
-                } else {
-                    self.onb_step += 1;
-                }
-            }
             Message::Monitor(event) => match event {
                 monitor::Event::Started(devices) => {
                     self.devices = devices;
@@ -1813,6 +1995,9 @@ impl cosmic::Application for App {
 
     /// Modal dialogs render natively above the window content.
     fn dialog(&self) -> Option<Element<'_, Message>> {
+        if let Some(setup) = &self.setup {
+            return Some(ui::overlays::setup_dialog(self, setup));
+        }
         if self.about_open {
             return Some(ui::overlays::about_dialog());
         }
@@ -1831,9 +2016,6 @@ impl cosmic::Application for App {
         if self.view == View::Keyboard && self.remaps_open {
             return Some(ui::overlays::remaps_dialog(self));
         }
-        if self.onboarding && self.view != View::Tester {
-            return Some(ui::overlays::onboarding(self));
-        }
         None
     }
 
@@ -1845,7 +2027,9 @@ impl cosmic::Application for App {
         // Only window keyboard events reach this callback, so typing Escape
         // in another application cannot dismiss Keyloom's surfaces.
         // Match the dialog stacking order and dismiss only the top surface.
-        if self.about_open {
+        if self.setup.is_some() {
+            self.leave_setup();
+        } else if self.about_open {
             self.about_open = false;
         } else if self.confirm_delete.is_some() {
             self.confirm_delete = None;
@@ -1858,9 +2042,6 @@ impl cosmic::Application for App {
         } else if self.remaps_open {
             self.remaps_open = false;
             self.confirm_remove_mapping = None;
-        } else if self.onboarding {
-            self.onboarding = false;
-            self.onb_step = 0;
         } else if self.popover.is_some() {
             self.popover = None;
             self.rename = None;
@@ -1881,6 +2062,17 @@ fn monitor_stream() -> impl Stream<Item = Message> + Send {
 /// One-off query of the xremap service state.
 fn service_status_task() -> Task<Message> {
     cosmic::task::future(async { Message::ServiceStatus(service::status().await) })
+}
+
+/// One pass of the first-run setup checks.
+fn setup_probe_task() -> Task<Message> {
+    cosmic::task::future(async { Message::SetupProbed(setup::probe().await) })
+}
+
+/// Whether setup opens by itself at launch: only until the user has
+/// been through it once, finished or not.
+fn opens_setup_on_launch(state: SetupState) -> bool {
+    state == SetupState::NotStarted
 }
 
 #[cfg(test)]
@@ -1909,7 +2101,7 @@ mod tests {
         app.confirm_remove_mapping = Some("CapsLock".to_owned());
         app.capture = true;
         app.remaps_open = true;
-        app.onboarding = true;
+        app.setup = Some(Setup::new());
         app.popover = Some(Popover::Menu);
 
         for about_open in [true, false] {
@@ -1920,8 +2112,7 @@ mod tests {
             assert!(app.confirm_remove_mapping.is_some());
             assert!(app.capture);
             assert!(app.remaps_open);
-            assert!(app.onboarding);
-            assert_eq!(app.onb_step, 0);
+            assert!(app.setup.is_some());
             assert!(app.popover.is_some());
             assert_eq!(app.selected, Some("CapsLock"));
             assert!(app.maps().is_empty());
@@ -2914,6 +3105,7 @@ mod tests {
             &original.profile,
             0,
             &original.keyboard_layouts,
+            original.setup_state,
         );
         snapshot.write_entry(&handle).unwrap();
         original.settings = Some(handle);
@@ -3161,21 +3353,217 @@ mod tests {
         assert!(app.rename.is_none());
     }
 
+    /// A system where every setup step is in order.
+    fn ready_facts() -> setup::Facts {
+        setup::Facts {
+            user: Some("me".to_owned()),
+            xremap: setup::XremapCheck::Found {
+                path: PathBuf::from("/usr/bin/xremap"),
+                version: Some("0.15.12".to_owned()),
+            },
+            group: setup::GroupCheck::Effective,
+            uinput: setup::UinputCheck::Writable,
+            unit: setup::UnitCheck::Keyloom {
+                active: true,
+                enabled: true,
+            },
+            config: Some(PathBuf::from("/home/me/.config/xremap/keyloom.yml")),
+        }
+    }
+
+    /// A fresh system: xremap installed, nothing else done.
+    fn fresh_facts() -> setup::Facts {
+        setup::Facts {
+            group: setup::GroupCheck::NotMember,
+            uinput: setup::UinputCheck::NotWritable {
+                rule_installed: false,
+            },
+            unit: setup::UnitCheck::Missing,
+            ..ready_facts()
+        }
+    }
+
     #[test]
-    fn onboarding_demo_applies_caps_to_escape() {
+    fn setup_opens_only_on_the_first_launch() {
+        assert!(opens_setup_on_launch(SetupState::NotStarted));
+        assert!(!opens_setup_on_launch(SetupState::Deferred));
+        assert!(!opens_setup_on_launch(SetupState::Complete));
+        // Tests have no settings store, so init never opens it here.
+        assert!(app().setup.is_none());
+    }
+
+    #[test]
+    fn setup_opens_from_the_menu_and_walks_its_pages() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::TogglePopover(Popover::Menu));
+        let _ = app.update(Message::MenuShowSetup);
+        let setup = app.setup.as_ref().expect("setup opens");
+        assert_eq!(setup.page, SetupPage::Welcome);
+        assert!(setup.probing, "opening starts the checks");
+        assert!(setup.facts.is_none());
+        assert!(app.popover.is_none());
+        assert!(app.selected.is_none(), "the editor sheet gives way");
+        assert!(app.dialog().is_some());
+
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let setup = app.setup.as_ref().unwrap();
+        assert!(!setup.probing);
+        assert_eq!(setup.facts, Some(fresh_facts()));
+
+        for page in [
+            SetupPage::Step(setup::Step::Xremap),
+            SetupPage::Step(setup::Step::Service),
+            SetupPage::Finish,
+            SetupPage::Welcome,
+        ] {
+            let _ = app.update(Message::SetupPage(page));
+            assert_eq!(app.setup.as_ref().unwrap().page, page);
+            assert!(app.dialog().is_some());
+        }
+
+        // Rechecking runs the probe once at a time.
+        let _ = app.update(Message::SetupRecheck);
+        assert!(app.setup.as_ref().unwrap().probing);
+        let _ = app.update(Message::SetupRecheck);
+        assert!(app.setup.as_ref().unwrap().probing);
+        let _ = app.update(Message::SetupProbed(ready_facts()));
+        assert!(!app.setup.as_ref().unwrap().probing);
+    }
+
+    #[test]
+    fn leaving_setup_records_completion_only_when_the_system_is_ready() {
+        // Skipped before the checks landed: come back later.
         let mut app = app();
         let _ = app.update(Message::MenuShowSetup);
-        assert!(app.onboarding);
+        let _ = app.update(Message::SetupSkip);
+        assert!(app.setup.is_none());
+        assert_eq!(app.setup_state, SetupState::Deferred);
 
-        let _ = app.update(Message::NextOnboarding); // step 0 -> 1
-        let _ = app.update(Message::NextOnboarding); // applies Caps -> Esc
+        // Unfinished, however it is closed.
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let _ = app.update(Message::SetupPage(SetupPage::Finish));
+        let _ = app.update(Message::SetupFinish);
+        assert_eq!(app.setup_state, SetupState::Deferred);
+
+        // Everything in order: complete, even when skipped.
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupProbed(ready_facts()));
+        let _ = app.update(Message::SetupSkip);
+        assert_eq!(app.setup_state, SetupState::Complete);
+
+        // Waiting only for a new login counts as complete too.
+        let mut app = self::app();
+        let _ = app.update(Message::MenuShowSetup);
+        let mut waiting = ready_facts();
+        waiting.group = setup::GroupCheck::NeedsLogin;
+        waiting.unit = setup::UnitCheck::Keyloom {
+            active: false,
+            enabled: true,
+        };
+        let _ = app.update(Message::SetupProbed(waiting));
+        let _ = app.on_escape();
+        assert!(app.setup.is_none(), "Escape closes setup");
+        assert_eq!(app.setup_state, SetupState::Complete);
+
+        // Reopening a completed setup never makes it incomplete again.
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let _ = app.update(Message::SetupSkip);
+        assert_eq!(app.setup_state, SetupState::Complete);
+    }
+
+    #[test]
+    fn setup_fixes_run_one_at_a_time_and_report_failures() {
+        let mut app = app();
+        let _ = app.update(Message::MenuShowSetup);
+
+        // Nothing to act on before the checks land.
+        let _ = app.update(Message::SetupAct(setup::Step::InputGroup));
+        assert_eq!(app.setup.as_ref().unwrap().busy, None);
+
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        // xremap has no fix, only a recheck.
+        let _ = app.update(Message::SetupAct(setup::Step::Xremap));
+        assert_eq!(app.setup.as_ref().unwrap().busy, None);
+
+        let _ = app.update(Message::SetupAct(setup::Step::InputGroup));
+        assert_eq!(
+            app.setup.as_ref().unwrap().busy,
+            Some(setup::Step::InputGroup)
+        );
+        // A second fix waits for the first.
+        let _ = app.update(Message::SetupAct(setup::Step::Uinput));
+        assert_eq!(
+            app.setup.as_ref().unwrap().busy,
+            Some(setup::Step::InputGroup)
+        );
+
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::InputGroup,
+            result: Err(setup::ActionError::Cancelled),
+        });
+        let setup = app.setup.as_ref().unwrap();
+        assert_eq!(setup.busy, None);
+        assert_eq!(
+            setup.error,
+            Some((setup::Step::InputGroup, setup::ActionError::Cancelled))
+        );
+        assert!(setup.probing, "the outcome is checked, not assumed");
+
+        // The next attempt clears the old failure.
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let _ = app.update(Message::SetupAct(setup::Step::Uinput));
+        let setup = app.setup.as_ref().unwrap();
+        assert_eq!(setup.busy, Some(setup::Step::Uinput));
+        assert_eq!(setup.error, None);
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::Uinput,
+            result: Ok(()),
+        });
+        assert_eq!(app.setup.as_ref().unwrap().error, None);
+
+        // The service step acts only when the facts offer something.
+        let _ = app.update(Message::SetupProbed(ready_facts()));
+        let _ = app.update(Message::SetupAct(setup::Step::Service));
+        assert_eq!(app.setup.as_ref().unwrap().busy, None);
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let _ = app.update(Message::SetupAct(setup::Step::Service));
+        assert_eq!(app.setup.as_ref().unwrap().busy, Some(setup::Step::Service));
+
+        // A result arriving after setup was closed is simply dropped.
+        let _ = app.update(Message::SetupSkip);
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::Service,
+            result: Ok(()),
+        });
+        assert!(app.setup.is_none());
+    }
+
+    #[test]
+    fn the_setup_example_maps_caps_lock_to_escape_and_closes() {
+        let mut app = app();
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupProbed(ready_facts()));
+        let _ = app.update(Message::SetupPage(SetupPage::Finish));
+        let _ = app.update(Message::SetupExample);
+
+        assert!(app.setup.is_none());
+        assert_eq!(app.setup_state, SetupState::Complete);
+        assert_eq!(app.view, View::Keyboard, "the new remap is shown");
         assert_eq!(
             app.mapping("CapsLock").and_then(|m| m.tap.as_deref()),
             Some("Escape")
         );
+        assert_eq!(app.apply_seq, 1, "the example applies like any change");
+        let _ = app.update(Message::Undo);
+        assert!(app.mapping("CapsLock").is_none(), "and is undoable");
 
-        let _ = app.update(Message::NextOnboarding); // closes
-        assert!(!app.onboarding);
+        // Outside setup the message does nothing.
+        let _ = app.update(Message::SetupExample);
+        assert!(app.mapping("CapsLock").is_none());
     }
 
     #[test]

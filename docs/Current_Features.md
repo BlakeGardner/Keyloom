@@ -9,9 +9,10 @@ missing and defines the 0.1.0 release commitments.
 for the current session. Profiles and key mappings, however, are persisted
 via cosmic-config and translated into an xremap configuration file at
 `~/.config/xremap/keyloom.yml` on every change (see "Persistence and
-generated configuration" below). Keyloom applies changes by restarting an
-existing `xremap.service` systemd user unit automatically, but it does not
-yet install xremap, register the unit, or set up permissions.
+generated configuration" below). Keyloom applies changes by restarting the
+`xremap.service` systemd user unit automatically; first-run setup installs
+that unit and walks through the input permissions (see "First-run setup"
+below). Installing xremap itself is still up to the user.
 
 ## Application shell
 
@@ -19,9 +20,9 @@ yet install xremap, register the unit, or set up permissions.
 - Follows the system light/dark theme.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
   Shortcuts), remapping status, and access to setup, reset, and About actions.
-- Three-step onboarding flow available from "Show first-run setup" in the
-  menu, including a one-click Caps Lock → Escape example; can be skipped
-  or reopened. It does not yet open automatically on first launch.
+- First-run setup opens on its own the first time Keyloom runs and can be
+  reopened from "Set up remapping" in the menu, or from the header's status
+  chip while no service is set up (see "First-run setup" below).
 - About dialog with the application version, description, project credits,
   and GPLv3-only license information.
 - Undo is available for destructive or notable changes.
@@ -188,6 +189,53 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 - Shortcut groups are not yet part of the generated output or the stored
   model.
 
+## First-run setup
+
+Keyloom assumes xremap is already installed; setup takes it from there. A
+wizard opens the first time Keyloom runs (and from the ⋯ menu or the
+header's status chip afterwards) and walks through four checks, fixing
+what it can one step at a time. Keyloom itself stays unprivileged: changes
+to the system go through the desktop's authentication prompt (`pkexec`),
+one prompt per step, and each step shows the command it runs.
+
+- **xremap** — finds the binary on `PATH` and shows its version. A missing
+  xremap is explained, not installed; editing keeps working.
+- **Keyboard access** — checks membership in the `input` group, telling
+  membership that is in effect apart from membership that still needs a
+  new login. "Add me to the input group" runs `usermod -aG input` and
+  explains that any program running as the user gains the same access.
+- **Virtual keyboard** — checks that `/dev/uinput` opens for writing. The
+  fix installs the rule `KERNEL=="uinput", GROUP="input", TAG+="uaccess"`
+  as `/etc/udev/rules.d/00-xremap-input.rules`, loads the `uinput` module
+  now and at boot, and reloads udev. A rule the xremap packages ship is
+  recognized.
+- **Remapping service** — installs Keyloom's own `xremap.service` user unit
+  under `~/.config/systemd/user/`, modeled on a hand-written unit proven on
+  COSMIC: it waits for the compositor's Wayland socket, runs the found
+  binary with `--watch` on `keyloom.yml`, keeps xremap running, and logs at
+  info level (xremap's debug level would write every key press to the
+  journal). Setup then reloads systemd, enables the unit, and starts it when
+  access is already in effect (otherwise it starts at the next login). No
+  password is needed. An existing unit is inspected first:
+  one that already reads `keyloom.yml` is left alone; one that does not is
+  shown with its `ExecStart` and can be replaced (its file is backed up
+  beside it) or kept, in which case Keyloom's remaps have no effect.
+
+Every step can be rechecked after manual changes; a cancelled or refused
+authorization is reported on the step with the fix still on offer. The
+summary page says whether everything works, only a logout and login
+remain, or steps still need attention, and offers a one-click Caps Lock →
+Escape example that is undoable like any change. Setup opens by itself
+only on the first launch: closing it records completion when every step is
+in order (or only waits for a login) and deferral otherwise, so it never
+nags.
+
+Limitations: the authentication prompt is polkit's generic one, naming
+`usermod` or `/bin/sh` rather than Keyloom; a unit the user wrote can only
+be replaced or kept, not merged with Keyloom's configuration; an xremap
+running as another user (a system service) is not noticed; and the example
+remap is applied, not verified end to end.
+
 ## Applying (xremap service)
 
 - Changes apply themselves — there is no Apply button. Every change that
@@ -205,16 +253,16 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   or paused — a unit Keyloom stopped reads exactly like one that was already
   stopped ("Remapping Paused", amber) — and amber also covers the moments
   between: being paused or resumed, or a change on its way to the service.
-  The chip stays passive only while a restart is in flight, and when there is
-  no unit to control.
+  The chip stays passive only while a restart is in flight, or when there is
+  no systemd to ask; with no unit at all it opens first-run setup instead.
 - The chip has the final say: remapping stopped from it stays stopped —
   switching views, closing Keyloom, and quitting it all leave it alone. Only
   the chip starts it again (or the unit's own start on the next login).
 - A mapping change made while remapping is paused is written to the config
   but starts nothing, since a service reads the file when it does start.
-- Enabling or disabling the unit on login is still left to the user.
-- The existing user unit must read `keyloom.yml`; Keyloom does not update
-  its `ExecStart` or migrate the previous `config.yml` file.
-- Keyloom assumes xremap is installed and the user unit plus permissions are
-  already set up; installing or registering them is not handled yet (see
-  [Functionality_TODO.md](Functionality_TODO.md) §6 and §9).
+- Setup enables the unit at login; there is no separate control to turn
+  that off afterwards.
+- A unit the user wrote must read `keyloom.yml` itself: setup points this
+  out and offers to replace it, but never edits its `ExecStart`.
+- Keyloom assumes xremap is installed; the unit and permissions are handled
+  by first-run setup (see above).

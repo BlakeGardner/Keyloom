@@ -227,10 +227,10 @@ pub enum WriteOutcome {
     SkippedForeign(PathBuf),
 }
 
-/// Where the generated configuration lives:
-/// `$XDG_CONFIG_HOME/xremap/keyloom.yml` (usually `~/.config`).
-pub fn config_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+/// The user's configuration directory: `$XDG_CONFIG_HOME`, or
+/// `~/.config` when that is unset.
+pub(crate) fn config_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
@@ -238,8 +238,13 @@ pub fn config_path() -> Option<PathBuf> {
             std::env::var_os("HOME")
                 .filter(|home| !home.is_empty())
                 .map(|home| PathBuf::from(home).join(".config"))
-        })?;
-    Some(base.join("xremap").join("keyloom.yml"))
+        })
+}
+
+/// Where the generated configuration lives:
+/// `$XDG_CONFIG_HOME/xremap/keyloom.yml` (usually `~/.config`).
+pub fn config_path() -> Option<PathBuf> {
+    Some(config_home()?.join("xremap").join("keyloom.yml"))
 }
 
 /// Write the generated document to [`config_path`].
@@ -279,7 +284,7 @@ pub fn write_to(path: &Path, yaml: &str, overwrite_foreign: bool) -> io::Result<
 }
 
 /// Copy a foreign file to the first free `<name>.bak[.N]` beside it.
-fn backup(path: &Path) -> io::Result<()> {
+pub(crate) fn backup(path: &Path) -> io::Result<()> {
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())

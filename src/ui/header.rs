@@ -172,37 +172,50 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
             None => (muted(), "Checking remapping…"),
         }
     };
-    let status_dot = container(widget::Space::new().width(7.0).height(7.0)).class(
-        ctheme::Container::custom(move |_| container::Style {
-            background: Some(dot_color.into()),
-            border: Border {
-                radius: 4.0.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        }),
-    );
-    let status_row = widget::row::with_capacity(2)
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .push(status_dot)
-        .push(txt(label, 11.0, oklch(0.85, 0.01, 152.0)));
+    // Widgets are built, not cloned: each branch below makes its own row.
+    let status_row = move || {
+        let status_dot = container(widget::Space::new().width(7.0).height(7.0)).class(
+            ctheme::Container::custom(move |_| container::Style {
+                background: Some(dot_color.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            }),
+        );
+        widget::row::with_capacity(2)
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .push(status_dot)
+            .push(txt(label, 11.0, oklch(0.85, 0.01, 152.0)))
+    };
 
-    // Pressing the chip stops or starts remapping; it stays passive
-    // when there is no unit to control or a restart is already running.
-    let status: Element<'_, Message> = match app.remapping_toggle() {
-        Some(target) => hint(
-            widget::button::custom(status_row)
+    // Pressing the chip stops or starts remapping; with nothing set up
+    // it opens setup instead, and it stays passive while a restart is
+    // already running or there is no systemd to ask.
+    let chip = |message: Message, hint_text: &str| {
+        hint(
+            widget::button::custom(status_row())
                 .class(header_chip())
                 .padding([7, 10])
-                .on_press(Message::SetRemapping(target))
+                .on_press(message)
                 .into(),
+            hint_text,
+        )
+    };
+    let status: Element<'_, Message> = match app.remapping_toggle() {
+        Some(target) => chip(
+            Message::SetRemapping(target),
             match target {
                 service::Remapping::On => "Start remapping again.",
                 service::Remapping::Off => "Pause remapping.",
             },
         ),
-        None => container(status_row)
+        None if app.service == Some(service::Status::NotFound) => {
+            chip(Message::MenuShowSetup, "Set up remapping.")
+        }
+        None => container(status_row())
             .padding([7, 10])
             .class(ctheme::Container::custom(|_| container::Style {
                 background: Some(white(0.05).into()),
