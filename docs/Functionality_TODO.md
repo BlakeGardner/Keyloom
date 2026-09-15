@@ -236,6 +236,8 @@ still only previewed in memory. The tasks below are 0.1.0 blockers.
 - [x] **Keep custom dialogs open when clicking inside them.** The shared
   modal card captures clicks on text, padding, and unused space so they
   cannot reach the dismissal backdrop; controls and outside clicks still work.
+  First-run setup opts out of backdrop dismissal: a stray click outside the
+  wizard would otherwise skip it and stop it from reopening on its own.
 - [x] **Real About dialog** replacing the toast, with the embedded SVG logo,
   Cargo build version, application description, and technology credits.
   Uses the same modal chrome as onboarding; Close, Escape, and backdrop

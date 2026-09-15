@@ -318,10 +318,12 @@ pub fn toast<'a>(app: &'a App, toast: &'a Toast) -> Element<'a, Message> {
         .into()
 }
 
-/// A dimmed backdrop with a centered dialog card.
+/// A dimmed backdrop with a centered dialog card. Pressing the backdrop
+/// sends `on_backdrop`; with `None` the scrim still swallows the press
+/// so it cannot reach the page beneath, but the dialog stays open.
 fn modal<'a, Renderer: cosmic::iced::core::Renderer + 'a>(
     card: cosmic::iced::Element<'a, Message, cosmic::Theme, Renderer>,
-    on_backdrop: Message,
+    on_backdrop: Option<Message>,
 ) -> cosmic::iced::Element<'a, Message, cosmic::Theme, Renderer> {
     let backdrop = mouse_area(
         container(widget::Space::new())
@@ -331,8 +333,11 @@ fn modal<'a, Renderer: cosmic::iced::core::Renderer + 'a>(
                 background: Some(scrim().into()),
                 ..container::Style::default()
             })),
-    )
-    .on_press(on_backdrop);
+    );
+    let backdrop = match on_backdrop {
+        Some(message) => backdrop.on_press(message),
+        None => backdrop,
+    };
 
     // Capture presses on the card's text and padding before they reach the scrim.
     // Keep the full-window centering container transparent to backdrop clicks.
@@ -464,7 +469,7 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
     }))
     .into();
 
-    modal(card, Message::CloseRemaps)
+    modal(card, Some(Message::CloseRemaps))
 }
 
 /// The "Press the key you want to use" recording dialog.
@@ -521,7 +526,7 @@ pub fn capture_dialog(app: &App) -> Element<'_, Message> {
             .into(),
     );
 
-    modal(card, Message::SetCapture(false))
+    modal(card, Some(Message::SetCapture(false)))
 }
 
 /// Confirm removal while keeping the remaps list open underneath.
@@ -561,7 +566,7 @@ pub fn remove_mapping_dialog(app: &App) -> Element<'_, Message> {
             .push(buttons)
             .into(),
     );
-    modal(card, Message::RemoveMappingCancel)
+    modal(card, Some(Message::RemoveMappingCancel))
 }
 
 /// Confirm clearing all mappings in the active profile.
@@ -601,7 +606,7 @@ pub fn reset_mappings_dialog(app: &App) -> Element<'_, Message> {
             .push(buttons)
             .into(),
     );
-    modal(card, Message::ResetMappingsCancel)
+    modal(card, Some(Message::ResetMappingsCancel))
 }
 
 /// The delete-profile confirmation dialog.
@@ -650,7 +655,7 @@ pub fn delete_profile_dialog(app: &App) -> Element<'_, Message> {
             .into(),
     );
 
-    modal(card, Message::DeleteCancel)
+    modal(card, Some(Message::DeleteCancel))
 }
 
 /// Application identity, license, and credits, using the first-run dialog chrome.
@@ -729,7 +734,7 @@ pub fn about_dialog() -> Element<'static, Message> {
             .into(),
     );
 
-    modal(card, Message::CloseAbout)
+    modal(card, Some(Message::CloseAbout))
 }
 
 /// Green: the setup step is in order.
@@ -1293,15 +1298,16 @@ fn primary(label: &str, message: Option<Message>) -> Element<'static, Message> {
 }
 
 /// The first-run setup wizard: a welcome page, one page per system
-/// step, and a summary. Clicking outside closes it like its own
-/// buttons would.
+/// step, and a summary. Clicking outside does nothing: a stray click
+/// must not skip setup, which would keep it from opening on its own
+/// again. "Skip for now", Finish, and Escape are the ways out.
 pub fn setup_dialog(setup: &Setup) -> Element<'_, Message> {
-    let (content, on_backdrop) = match setup.page {
-        SetupPage::Welcome => (welcome_page(), Message::SetupSkip),
-        SetupPage::Step(step) => (step_page(setup, step), Message::SetupSkip),
-        SetupPage::Finish => (finish_page(setup), Message::SetupFinish),
+    let content = match setup.page {
+        SetupPage::Welcome => welcome_page(),
+        SetupPage::Step(step) => step_page(setup, step),
+        SetupPage::Finish => finish_page(setup),
     };
-    modal(dialog_card(content), on_backdrop)
+    modal(dialog_card(content), None)
 }
 
 fn welcome_page() -> Element<'static, Message> {
@@ -1508,14 +1514,13 @@ mod tests {
         Event, Layout, Point, Rectangle, Shell, Size, clipboard, layout, mouse, widget::Tree,
     };
 
-    #[test]
-    fn modal_captures_card_clicks_but_keeps_controls_and_backdrop_active() {
-        // Use the headless renderer to exercise the actual stack's event routing.
-        let control =
-            mouse_area(widget::Space::new().width(80).height(40)).on_press(Message::CloseAbout);
-        let card: cosmic::iced::Element<'_, Message, cosmic::Theme, ()> =
-            container(control).width(200).height(120).padding(20).into();
-        let mut modal = modal(card, Message::SetupSkip);
+    /// Lay out `modal` in an 800×600 window and press the left mouse
+    /// button at `point`, returning whether the press was captured and
+    /// the messages it published.
+    fn press_at(
+        modal: &mut cosmic::iced::Element<'_, Message, cosmic::Theme, ()>,
+        point: Point,
+    ) -> (bool, Vec<Message>) {
         let mut tree = Tree::new(modal.as_widget());
         let viewport = Rectangle::with_size(Size::new(800.0, 600.0));
         let node = modal.as_widget_mut().layout(
@@ -1524,6 +1529,30 @@ mod tests {
             &layout::Limits::new(Size::ZERO, viewport.size()),
         );
         let event = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        modal.as_widget_mut().update(
+            &mut tree,
+            &event,
+            Layout::new(&node),
+            mouse::Cursor::Available(point),
+            &(),
+            &mut clipboard::Null,
+            &mut shell,
+            &viewport,
+        );
+        let captured = shell.is_event_captured();
+        (captured, messages)
+    }
+
+    #[test]
+    fn modal_captures_card_clicks_but_keeps_controls_and_backdrop_active() {
+        // Use the headless renderer to exercise the actual stack's event routing.
+        let control =
+            mouse_area(widget::Space::new().width(80).height(40)).on_press(Message::CloseAbout);
+        let card: cosmic::iced::Element<'_, Message, cosmic::Theme, ()> =
+            container(control).width(200).height(120).padding(20).into();
+        let mut modal = modal(card, Some(Message::CloseRemaps));
 
         // The centered card spans (300, 240)..(500, 360), with a control
         // at (320, 260)..(400, 300). Both padding and unused content stay open.
@@ -1531,21 +1560,10 @@ mod tests {
             (Point::new(310.0, 250.0), None),
             (Point::new(450.0, 330.0), None),
             (Point::new(330.0, 270.0), Some(Message::CloseAbout)),
-            (Point::new(100.0, 100.0), Some(Message::SetupSkip)),
+            (Point::new(100.0, 100.0), Some(Message::CloseRemaps)),
         ] {
-            let mut messages = Vec::new();
-            let mut shell = Shell::new(&mut messages);
-            modal.as_widget_mut().update(
-                &mut tree,
-                &event,
-                Layout::new(&node),
-                mouse::Cursor::Available(point),
-                &(),
-                &mut clipboard::Null,
-                &mut shell,
-                &viewport,
-            );
-            assert!(shell.is_event_captured());
+            let (captured, messages) = press_at(&mut modal, point);
+            assert!(captured);
             match expected {
                 None => assert!(
                     messages.is_empty(),
@@ -1554,11 +1572,27 @@ mod tests {
                 Some(Message::CloseAbout) => {
                     assert!(matches!(messages.as_slice(), [Message::CloseAbout]));
                 }
-                Some(Message::SetupSkip) => {
-                    assert!(matches!(messages.as_slice(), [Message::SetupSkip]));
+                Some(Message::CloseRemaps) => {
+                    assert!(matches!(messages.as_slice(), [Message::CloseRemaps]));
                 }
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    fn inert_backdrop_swallows_clicks_without_dismissing() {
+        // Setup passes no backdrop message: a stray click outside the card
+        // must neither close the dialog nor fall through to the page.
+        let card: cosmic::iced::Element<'_, Message, cosmic::Theme, ()> =
+            container(widget::Space::new())
+                .width(200)
+                .height(120)
+                .into();
+        let mut modal = modal(card, None);
+
+        let (captured, messages) = press_at(&mut modal, Point::new(100.0, 100.0));
+        assert!(captured, "backdrop click fell through to the page");
+        assert!(messages.is_empty(), "backdrop click dismissed the dialog");
     }
 }

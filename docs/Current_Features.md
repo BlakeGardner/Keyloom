@@ -229,7 +229,8 @@ summary page says whether everything works, only a logout and login
 remain, or steps still need attention. Setup opens by itself
 only on the first launch: closing it records completion when every step is
 in order (or only waits for a login) and deferral otherwise, so it never
-nags.
+nags. Only "Skip for now", Finish, or Escape close the wizard; a click
+outside it is ignored so a stray click cannot skip setup.
 
 Limitations: the authentication prompt is polkit's generic one, naming
 `usermod` or `/bin/sh` rather than Keyloom; a unit the user wrote can only
