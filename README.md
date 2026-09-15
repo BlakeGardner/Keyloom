@@ -52,6 +52,12 @@ for downloads and release notes.
 Keyloom is in early development. Remapping currently requires additional
 setup outside the app; a guided installation experience is still planned.
 
+## What's next
+
+See the [upcoming features roadmap](docs/Upcoming_Features.md) for plans
+beyond the first release, including more keyboard layouts, a translated
+interface, a log viewer, and application-specific remaps.
+
 ## License
 
 Keyloom is free and open source, licensed under [GPL-3.0-only](LICENSE).

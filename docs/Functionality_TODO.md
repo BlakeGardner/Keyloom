@@ -9,6 +9,11 @@ for what exists today. Unchecked items track missing functionality and
 follow-up work; checked items record completed work. Each task is meant to
 be small enough to pick up on its own.
 
+Selected post-0.1.0 features are tracked in
+[Upcoming Features](Upcoming_Features.md) instead of duplicated here.
+Remaining unchecked items in this document are not automatically release
+blockers; the first-release scope still defines release commitments.
+
 ## 1. Generated configuration (v0.1)
 
 Configuration is generated and written automatically to
@@ -194,11 +199,6 @@ still only previewed in memory.
   selected keyboard.
 - [ ] **Shortcut groups (chord → chord rules)** → xremap `keymap` blocks,
   including the "any modifier" matching option.
-- [ ] **Application-specific shortcuts.** Make shortcut groups apply only
-  in the selected applications through xremap `application` filters, with a
-  picker for real window classes instead of free-form names. The current UI
-  is a preview; application-specific shortcuts do not yet affect live input
-  and depend on the shortcut-group output above.
 - [ ] **Working layers.** Turn the previewed Caps-Lock navigation layer into
   generated layer configuration so holding the layer key actually changes
   what the other keys do. The current layer is a visual preview only.

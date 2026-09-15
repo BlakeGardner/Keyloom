@@ -86,6 +86,12 @@ existing hand-written YAML.
 
 ## Explicitly deferred
 
+The selected post-0.1.0 roadmap is tracked in
+[Upcoming Features](Upcoming_Features.md), including Fluent-based interface
+internationalization, Mac keyboard presentation, non-English keyboard
+layouts, a log viewer, and application-specific remaps. These do not block
+the first release.
+
 - Importing or editing existing YAML, exporting to a user-selected file, and
   selecting a different managed configuration path.
 - Installing or bundling xremap, permission setup, and registering a user unit.
