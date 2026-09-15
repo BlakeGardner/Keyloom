@@ -2,8 +2,8 @@
 
 What Keyloom does today. This is the counterpart to
 [Functionality_TODO.md](Functionality_TODO.md), which tracks what is still
-missing; [First_Release_Scope.md](First_Release_Scope.md) defines the v0.1
-target.
+missing and defines the 0.1.0 release commitments.
+[Upcoming Features](Upcoming_Features.md) tracks plans beyond that release.
 
 **The big caveat:** shortcut groups are an in-memory preview and live only
 for the current session. Profiles and key mappings, however, are persisted

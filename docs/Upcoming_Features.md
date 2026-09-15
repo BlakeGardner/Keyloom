@@ -1,6 +1,9 @@
 # Upcoming Features
 
-These features are planned.
+These features are planned for after **0.1.0** and do not block the first
+public release. No delivery dates are assigned. First-run system setup,
+application-specific remaps, and layers are part of the first-release work
+tracked in [Functionality TODO](Functionality_TODO.md).
 
 ## A translated interface
 
@@ -26,12 +29,13 @@ These features are planned.
 - [ ] Provide an in-app viewer for remapping service logs so users can
   investigate failures without opening a terminal.
 
-## Application-specific remaps
+## Ship xremap with Keyloom
 
-- [ ] Let users choose which applications a remap applies to, with an
-  application picker instead of manually entered application identifiers.
-  For example, use a different shortcut in a terminal than in a browser.
-  The current application-specific shortcut controls are session-only
-  previews and do not affect live input. Working shortcut groups and their
-  persistence are prerequisites for application-specific shortcuts; apply
-  application targeting through generated xremap `application` filters.
+- [ ] Bundle a compatible xremap binary or provide it as a package dependency
+  for supported distributions. Version 0.1.0 assumes xremap is already
+  installed; its first-run setup will configure the service and permissions.
+
+## Broader service-manager support
+
+- [ ] Support service managers beyond the initial systemd user-service setup,
+  with configurable service integration where needed.

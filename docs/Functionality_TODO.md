@@ -1,18 +1,27 @@
 # Functionality TODO
 
-Tracks the functionality still needed to make Keyloom complete, based on the
-current UI and the known scope in [First_Release_Scope.md](First_Release_Scope.md)
-(v0.1, takes precedence) and [Product_Plan.md](Product_Plan.md) (long-term vision).
+Tracks remaining work for Keyloom. See [Current Features](Current_Features.md)
+for implemented behavior and [Upcoming Features](Upcoming_Features.md) for
+features deferred beyond the first public release.
 
-The UI shell is largely in place — see [Current_Features.md](Current_Features.md)
-for what exists today. Unchecked items track missing functionality and
-follow-up work; checked items record completed work. Each task is meant to
-be small enough to pick up on its own.
+## 0.1.0 release commitments
 
-Selected post-0.1.0 features are tracked in
-[Upcoming Features](Upcoming_Features.md) instead of duplicated here.
-Remaining unchecked items in this document are not automatically release
-blockers; the first-release scope still defines release commitments.
+The first public release assumes **xremap is already installed** on a system
+using systemd user services. Keyloom will guide the user from that prerequisite
+to working remapping through first-run setup. Installing or bundling xremap is
+reserved for a later release.
+
+The following are release blockers, with detailed tasks below:
+
+- First-run setup and remembered completion state (§5 and §9).
+- A user-level service reading Keyloom's configuration and working input
+  permissions (§6 and §9).
+- Persisted, working application-specific remaps and their shortcut rules (§7).
+- Persisted, working layers (§7).
+
+Unchecked tasks outside these commitments are not automatically release
+blockers. Checked items describe completed work; planned capabilities below
+must not be read as already implemented.
 
 ## 1. Generated configuration (v0.1)
 
@@ -132,15 +141,15 @@ workflow is not planned.
 
 ## 5. Persistence ("Save" iteration)
 
-- [ ] **Save YAML to a user-selected file** via a native file dialog.
 - [x] **Persist profiles and mappings between sessions** via cosmic-config
   (`src/config.rs`; the rule model stays the source of truth and YAML remains
   generated output). Shortcut groups are not persisted yet.
-- [ ] **Remember UI state** worth keeping across launches (active profile is
-  remembered; selected device scope and onboarding-completed flag are not).
-- [ ] **Open onboarding on first launch.** The walkthrough currently opens
-  only from the menu. Show it for a fresh install and use the persisted
-  completion/skipped flag to avoid reopening it on subsequent launches.
+- [ ] **Remember selected device scope** across launches. The active profile
+  is already remembered; setup completion is covered by the next task.
+- [ ] **First-run setup lifecycle (0.1.0 blocker).** Open the setup flow on
+  first launch, persist completion or deferral, and allow reopening it from
+  the menu. Resume incomplete setup without claiming the system is ready.
+  The current menu-only walkthrough does not perform the system setup in §9.
 
 ## 6. Apply and service management ("Apply" / "Manage" iterations)
 
@@ -151,7 +160,8 @@ workflow is not planned.
 > granting the `input` group access to `/dev/uinput`, and the `uinput` module
 > loaded). Keyloom talks to the unit through `systemctl --user`
 > (`src/service.rs`). Removing these assumptions is tracked in
-> [§9](#9-installation-and-distribution-support-long-term).
+> [§9](#9-first-run-system-setup-010-blocker). For 0.1.0, only the
+> preinstalled xremap prerequisite remains the user's responsibility.
 
 - [x] **Show the service status** without blocking any editing when it is
   absent. (A header chip shows the state in deliberately generic wording —
@@ -176,12 +186,12 @@ workflow is not planned.
 - [ ] **Enable or disable the unit on login**, the one service control the
   status chip does not cover now that it starts and stops the unit
   (`src/service.rs`).
-- [ ] **Point the unit at the generated config.** Auto-apply restarts
+- [ ] **Point the unit at the generated config (0.1.0 blocker).** Auto-apply restarts
   whatever `ExecStart` the unit has; verify (or help fix) that the unit
   actually reads `$XDG_CONFIG_HOME/xremap/keyloom.yml` instead of some other
   file. A unit running with `--watch=config` would even make restarts
   unnecessary.
-- [ ] **Permission guidance.** Detect missing `/dev/input` read access (the
+- [ ] **Permission guidance (0.1.0 blocker).** Detect missing `/dev/input` read access (the
   `input` group) and walk the user through fixing it instead of failing
   silently. Per xremap's running-without-sudo guide this also covers write
   access to `/dev/uinput` (udev rule for the `input` group) and the `uinput`
@@ -190,18 +200,29 @@ workflow is not planned.
 ## 7. Advanced remapping in generated config ("Expand" iteration)
 
 Everything here is already editable in the UI; the unchecked items are
-still only previewed in memory.
+still only previewed in memory. The tasks below are 0.1.0 blockers.
 
 - [x] **Tap/hold mappings** → xremap `held`/`alone` output.
 - [x] **Two-way swaps** → two explicit generated entries.
 - [x] **Disabled keys** → generated no-op mapping (empty output list).
 - [x] **Device-scoped mappings** → per-device `modmap` sections keyed to the
   selected keyboard.
-- [ ] **Shortcut groups (chord → chord rules)** → xremap `keymap` blocks,
-  including the "any modifier" matching option.
+- [ ] **Persist shortcut groups.** Save and restore groups, their rules, and
+  application scopes with profiles so remaps survive relaunch.
+- [ ] **Working shortcut groups (chord → chord rules).** Generate xremap
+  `keymap` blocks, including the "any modifier" matching option, and apply
+  edits through the existing automatic configuration workflow.
+- [ ] **Application-specific remaps.** Provide an application picker and
+  generate application filters so rules affect only the selected applications.
+  Verify matching on the supported desktop environments and explain any
+  unsupported setup. Confirm a rule works in its target app and does not
+  affect another app, including after relaunch.
 - [ ] **Working layers.** Turn the previewed Caps-Lock navigation layer into
   generated layer configuration so holding the layer key actually changes
-  what the other keys do. The current layer is a visual preview only.
+  what the other keys do. Persist layer configuration with profiles and
+  apply edits automatically. Verify entering and leaving a layer, restoring
+  normal keys on release, and retaining it after relaunch. The current layer
+  is a visual preview only.
 
 ## 8. App polish and distribution
 
@@ -224,39 +245,35 @@ still only previewed in memory.
 - [x] **Choose a license** — GPLv3-only (`GPL-3.0-only`), with the full text
   in [LICENSE](../LICENSE), Cargo package metadata, and a README license summary.
 
-## 9. Installation and distribution support (long term)
+## 9. First-run system setup (0.1.0 blocker)
 
-Removing the assumptions listed in [§6](#6-apply-and-service-management-apply--manage-iterations):
-today Keyloom requires a preinstalled xremap on `$PATH`, a registered
-`xremap.service` systemd user unit, and manually configured permissions.
-Remapping therefore requires setup outside the app; installing Keyloom alone
-does not yet provide a working remapping setup.
+Today the user must configure the service and permissions outside Keyloom.
+For 0.1.0, first-run setup must handle or guide these steps with an already
+installed xremap. This extends the existing onboarding walkthrough.
 
-- [ ] **Detect an xremap installation** (binary on `$PATH`, its version) as
-  distinct from the service unit's state, without blocking any editing when
-  it is absent.
-- [ ] **Per-distribution dependency strategy.** Decide how xremap gets onto
-  each supported distro: declare it as a package dependency where a package
-  exists (e.g. Fedora copr, AUR, Gentoo guru), bundle/ship our own copy where
-  none does, or install via `cargo install` as a fallback. Track this per
-  packaging target (deb for Pop!_OS/Ubuntu first, Flatpak needs its own
-  answer since a sandboxed app cannot manage host services directly).
-- [ ] **Service-manager abstraction.** `src/service.rs` shells out to
-  `systemctl --user` today; keep status/restart behind one interface so other
-  supervision schemes (system-level systemd unit, runit/OpenRC, plain
-  desktop-autostart process) can slot in per distro. Also make the unit name
-  configurable instead of the hardcoded `xremap.service`.
-- [ ] **Guided installation and first-time setup.** Take a machine from
-  nothing to a working setup: install xremap (per the strategy above), add
-  the user to the `input` group, install the udev rule granting the `input`
-  group access to `/dev/uinput`, ensure the `uinput` module loads at boot,
-  then register and enable an `xremap.service` user unit pointing at the
-  generated config (steps from xremap's
-  [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md)).
-  Needs privilege escalation (polkit/pkexec) for the group, udev, and module
-  steps, and must explain the keylogging implication of joining `input`.
-  The existing onboarding walkthrough does not perform this installation
-  or system setup.
+- [ ] **Check the prerequisite.** Detect the installed xremap binary and
+  version. Explain when it is missing or incompatible without blocking
+  mouse-driven editing. Do not install or bundle xremap in this release.
+- [ ] **Install the user-level systemd unit.** Create an `xremap.service`
+  user unit pointing at the installed binary and Keyloom's generated config,
+  reload the user service manager, and start remapping once setup is ready.
+  Verify an existing unit before reusing or changing it; preserve unrelated
+  user configuration. Coordinate config-path validation with §6.
+- [ ] **Guide input-group membership.** Check whether the current user has
+  the required group access and walk them through joining the `input` group.
+  Explain the access being granted and any logout/login needed before it
+  takes effect; recheck effective access before declaring setup complete.
+- [ ] **Install the udev rule and prepare uinput.** Install the rule needed
+  for input access, reload rules as needed, and ensure `/dev/uinput` is
+  available with the required permissions, including module loading when
+  necessary. Explain any remaining reconnect or session-restart steps.
+- [ ] **Request system authorization graphically.** Use the desktop's
+  authentication prompt (for example, a polkit-backed helper) for privileged
+  system changes such as installing the udev rule. Keep the main app
+  unprivileged and handle canceled or failed authorization with a retry path.
+- [ ] **Verify setup end to end.** Confirm effective input access, a running
+  user service using Keyloom's config, and a working sample remap. Reopening
+  setup must safely reuse completed steps and report unresolved failures.
 
 ## 10. Distant-future possibilities (unscheduled)
 

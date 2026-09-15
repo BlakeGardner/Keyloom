@@ -50,13 +50,14 @@ Visit the **[releases page](https://github.com/BlakeGardner/Keyloom/releases)**
 for downloads and release notes.
 
 Keyloom is in early development. Remapping currently requires additional
-setup outside the app; a guided installation experience is still planned.
+setup outside the app. Guided setup, application-specific remaps, and layers
+are planned for the first public release, 0.1.0.
 
 ## What's next
 
 See the [upcoming features roadmap](docs/Upcoming_Features.md) for plans
 beyond the first release, including more keyboard layouts, a translated
-interface, a log viewer, and application-specific remaps.
+interface, and a log viewer.
 
 ## License
 
