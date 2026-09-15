@@ -16,6 +16,7 @@ features = [
     "a11y",
     "dbus-config",
     "multi-window",
+    "process",
     "tokio",
     "wayland",
     "wgpu",

@@ -200,7 +200,8 @@ one prompt per step. Pages stay high level; paths, the unit, and the exact
 commands sit behind a "Show details" toggle that is off by default.
 
 - **xremap** — finds the binary on `PATH` and shows its version. A missing
-  xremap is explained, not installed; editing keeps working.
+  xremap is explained, not installed: the explanation links to the project's
+  page, which opens in the browser, and editing keeps working.
 - **Keyboard access** — checks membership in the `input` group, telling
   membership that is in effect apart from membership that still needs a
   new login. "Add me to the input group" runs `usermod -aG input` and

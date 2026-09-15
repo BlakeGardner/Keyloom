@@ -262,6 +262,13 @@ pub enum Message {
     SetupRecheck,
     /// Show or hide the technical details on setup's step pages.
     SetupToggleDetails,
+    /// Open a web page in the user's browser.
+    OpenUrl(&'static str),
+    /// Whether the browser could be asked to open the page.
+    UrlOpened {
+        url: &'static str,
+        opened: bool,
+    },
     /// Carry out the fix a setup step offers.
     SetupAct(setup::Step),
     /// The fix finished.
@@ -1850,6 +1857,24 @@ impl cosmic::Application for App {
                     setup.details = !setup.details;
                 }
             }
+            Message::OpenUrl(url) => {
+                // xdg-open hands the page to the default browser; the
+                // detached spawn keeps the browser out of Keyloom's
+                // process tree.
+                return cosmic::task::future(async move {
+                    let mut command = std::process::Command::new("xdg-open");
+                    command.arg(url);
+                    Message::UrlOpened {
+                        url,
+                        opened: cosmic::process::spawn(command).await.is_some(),
+                    }
+                });
+            }
+            Message::UrlOpened { url, opened } => {
+                if !opened {
+                    self.flash("Could not open a browser", format!("Visit {url} yourself."));
+                }
+            }
             Message::SetupAct(step) => return self.setup_act(step),
             Message::SetupActed { step, result } => {
                 // The header chip follows the service either way, even
@@ -3404,6 +3429,23 @@ mod tests {
         assert!(app.setup.as_ref().unwrap().probing);
         let _ = app.update(Message::SetupProbed(ready_facts()));
         assert!(!app.setup.as_ref().unwrap().probing);
+    }
+
+    #[test]
+    fn a_page_that_could_not_be_opened_is_shown_instead() {
+        let mut app = app();
+        let _ = app.update(Message::UrlOpened {
+            url: setup::XREMAP_URL,
+            opened: true,
+        });
+        assert!(app.toast.is_none(), "an opened page needs no comment");
+
+        let _ = app.update(Message::UrlOpened {
+            url: setup::XREMAP_URL,
+            opened: false,
+        });
+        let toast = app.toast.as_ref().expect("the user is told where to go");
+        assert!(toast.sub.contains(setup::XREMAP_URL));
     }
 
     #[test]

@@ -48,6 +48,9 @@ pub const RULE: &str = r#"KERNEL=="uinput", GROUP="input", TAG+="uaccess""#;
 /// The device xremap creates its virtual keyboard through.
 pub const UINPUT: &str = "/dev/uinput";
 
+/// Where to get xremap when it is not installed.
+pub const XREMAP_URL: &str = "https://github.com/xremap/xremap#installation";
+
 /// What runs as the administrator to prepare `/dev/uinput`: install the
 /// rule, make sure the module is loaded now and at boot, and apply the
 /// rule to the existing device node.
