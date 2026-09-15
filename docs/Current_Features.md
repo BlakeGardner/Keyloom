@@ -196,7 +196,8 @@ wizard opens the first time Keyloom runs (and from the ⋯ menu or the
 header's status chip afterwards) and walks through four checks, fixing
 what it can one step at a time. Keyloom itself stays unprivileged: changes
 to the system go through the desktop's authentication prompt (`pkexec`),
-one prompt per step, and each step shows the command it runs.
+one prompt per step. Pages stay high level; paths, the unit, and the exact
+commands sit behind a "Show details" toggle that is off by default.
 
 - **xremap** — finds the binary on `PATH` and shows its version. A missing
   xremap is explained, not installed; editing keeps working.
@@ -224,8 +225,7 @@ one prompt per step, and each step shows the command it runs.
 Every step can be rechecked after manual changes; a cancelled or refused
 authorization is reported on the step with the fix still on offer. The
 summary page says whether everything works, only a logout and login
-remain, or steps still need attention, and offers a one-click Caps Lock →
-Escape example that is undoable like any change. Setup opens by itself
+remain, or steps still need attention. Setup opens by itself
 only on the first launch: closing it records completion when every step is
 in order (or only waits for a login) and deferral otherwise, so it never
 nags.
@@ -233,8 +233,8 @@ nags.
 Limitations: the authentication prompt is polkit's generic one, naming
 `usermod` or `/bin/sh` rather than Keyloom; a unit the user wrote can only
 be replaced or kept, not merged with Keyloom's configuration; an xremap
-running as another user (a system service) is not noticed; and the example
-remap is applied, not verified end to end.
+running as another user (a system service) is not noticed; and no sample
+remap is verified end to end.
 
 ## Applying (xremap service)
 

@@ -152,7 +152,7 @@ workflow is not planned.
   for a login, and deferral otherwise, so it never reopens on its own. Every
   opening re-runs the checks, so a resumed setup shows what is actually done
   rather than assuming it. The old tutorial's Caps Lock → Escape example
-  lives on the summary page.
+  was dropped with it.
 
 ## 6. Apply and service management ("Apply" / "Manage" iterations)
 
@@ -282,10 +282,10 @@ installed xremap. This extends the existing onboarding walkthrough.
 - [x] **Verify setup end to end.** Reopening setup re-runs every check, so
   completed steps are reused from what the system says rather than from
   memory, and the summary reports what is unresolved. Effective input access
-  and a running, enabled service on Keyloom's config are verified; the
-  sample remap is only applied (see below).
-- [ ] **Verify a sample remap end to end.** After the Caps Lock → Escape
-  example, observe the remapper's output device to confirm the remap works
+  and a running, enabled service on Keyloom's config are verified; no
+  sample remap is exercised (see below).
+- [ ] **Verify a sample remap end to end.** Apply a throwaway remap during
+  setup and observe the remapper's output device to confirm it works,
   instead of trusting that the service started.
 - [ ] **Merge into an existing unit.** A unit the user wrote can only be
   replaced or kept; xremap merges several config files, so offering to add

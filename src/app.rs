@@ -148,6 +148,9 @@ pub struct Setup {
     pub busy: Option<setup::Step>,
     /// Why the last fix failed, and which step it belonged to.
     pub error: Option<(setup::Step, setup::ActionError)>,
+    /// Whether the technical details (paths, the unit, the commands)
+    /// are shown; off until asked for.
+    pub details: bool,
 }
 
 impl Setup {
@@ -158,6 +161,7 @@ impl Setup {
             probing: true,
             busy: None,
             error: None,
+            details: false,
         }
     }
 }
@@ -256,6 +260,8 @@ pub enum Message {
     SetupPage(SetupPage),
     /// Run the setup checks again.
     SetupRecheck,
+    /// Show or hide the technical details on setup's step pages.
+    SetupToggleDetails,
     /// Carry out the fix a setup step offers.
     SetupAct(setup::Step),
     /// The fix finished.
@@ -267,8 +273,6 @@ pub enum Message {
     SetupSkip,
     /// Close setup from its last page.
     SetupFinish,
-    /// Apply the example remap and close setup.
-    SetupExample,
     MenuReset,
     ResetMappingsConfirm,
     ResetMappingsCancel,
@@ -579,34 +583,6 @@ impl App {
         setup.busy = Some(step);
         setup.error = None;
         task
-    }
-
-    /// Setup's one-click example: Caps Lock → Escape in the active
-    /// profile, shown on the keyboard and undoable like any change.
-    fn apply_example(&mut self) {
-        self.view = View::Keyboard;
-        self.clear_sheet();
-        self.undo = Some(Undo::Maps(self.profile_maps.clone()));
-        let maps = self.profile_maps.entry(self.profile.clone()).or_default();
-        match maps.iter_mut().find(|(key, _)| key == "CapsLock") {
-            Some((_, mapping)) => {
-                mapping.tap = Some("Escape".to_owned());
-                mapping.device = "all".to_owned();
-            }
-            None => maps.push((
-                "CapsLock".to_owned(),
-                Mapping {
-                    tap: Some("Escape".to_owned()),
-                    device: "all".to_owned(),
-                    ..Mapping::default()
-                },
-            )),
-        }
-        self.flash(
-            "Caps Lock → Escape",
-            "applies automatically · all keyboards",
-        );
-        self.persist();
     }
 
     /// Put remapping in the requested state. The service call runs in
@@ -1869,6 +1845,11 @@ impl cosmic::Application for App {
                     return Task::batch([setup_probe_task(), service_status_task()]);
                 }
             }
+            Message::SetupToggleDetails => {
+                if let Some(setup) = &mut self.setup {
+                    setup.details = !setup.details;
+                }
+            }
             Message::SetupAct(step) => return self.setup_act(step),
             Message::SetupActed { step, result } => {
                 // The header chip follows the service either way, even
@@ -1882,12 +1863,6 @@ impl cosmic::Application for App {
                 return Task::batch([setup_probe_task(), service_status_task()]);
             }
             Message::SetupSkip | Message::SetupFinish => self.leave_setup(),
-            Message::SetupExample => {
-                if self.setup.is_some() {
-                    self.apply_example();
-                    self.leave_setup();
-                }
-            }
             Message::MenuReset => {
                 self.popover = None;
                 if self.view != View::Tester {
@@ -1996,7 +1971,7 @@ impl cosmic::Application for App {
     /// Modal dialogs render natively above the window content.
     fn dialog(&self) -> Option<Element<'_, Message>> {
         if let Some(setup) = &self.setup {
-            return Some(ui::overlays::setup_dialog(self, setup));
+            return Some(ui::overlays::setup_dialog(setup));
         }
         if self.about_open {
             return Some(ui::overlays::about_dialog());
@@ -3432,6 +3407,31 @@ mod tests {
     }
 
     #[test]
+    fn setup_details_are_hidden_until_asked_for() {
+        let mut app = app();
+        let _ = app.update(Message::SetupToggleDetails);
+        assert!(app.setup.is_none(), "nothing to toggle while closed");
+
+        let _ = app.update(Message::MenuShowSetup);
+        assert!(!app.setup.as_ref().unwrap().details);
+        let _ = app.update(Message::SetupToggleDetails);
+        assert!(app.setup.as_ref().unwrap().details);
+        let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Service)));
+        assert!(
+            app.setup.as_ref().unwrap().details,
+            "the choice carries across pages"
+        );
+        let _ = app.update(Message::SetupToggleDetails);
+        assert!(!app.setup.as_ref().unwrap().details);
+
+        // Reopening starts hidden again.
+        let _ = app.update(Message::SetupToggleDetails);
+        let _ = app.update(Message::SetupSkip);
+        let _ = app.update(Message::MenuShowSetup);
+        assert!(!app.setup.as_ref().unwrap().details);
+    }
+
+    #[test]
     fn leaving_setup_records_completion_only_when_the_system_is_ready() {
         // Skipped before the checks landed: come back later.
         let mut app = app();
@@ -3539,31 +3539,6 @@ mod tests {
             result: Ok(()),
         });
         assert!(app.setup.is_none());
-    }
-
-    #[test]
-    fn the_setup_example_maps_caps_lock_to_escape_and_closes() {
-        let mut app = app();
-        let _ = app.update(Message::SetView(View::Tester));
-        let _ = app.update(Message::MenuShowSetup);
-        let _ = app.update(Message::SetupProbed(ready_facts()));
-        let _ = app.update(Message::SetupPage(SetupPage::Finish));
-        let _ = app.update(Message::SetupExample);
-
-        assert!(app.setup.is_none());
-        assert_eq!(app.setup_state, SetupState::Complete);
-        assert_eq!(app.view, View::Keyboard, "the new remap is shown");
-        assert_eq!(
-            app.mapping("CapsLock").and_then(|m| m.tap.as_deref()),
-            Some("Escape")
-        );
-        assert_eq!(app.apply_seq, 1, "the example applies like any change");
-        let _ = app.update(Message::Undo);
-        assert!(app.mapping("CapsLock").is_none(), "and is undoable");
-
-        // Outside setup the message does nothing.
-        let _ = app.update(Message::SetupExample);
-        assert!(app.mapping("CapsLock").is_none());
     }
 
     #[test]
