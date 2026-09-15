@@ -17,7 +17,9 @@ below). Installing xremap itself is still up to the user.
 ## Application shell
 
 - Native Rust + libcosmic application; runs on Wayland and X11.
-- Follows the system light/dark theme.
+- Follows the desktop's light/dark preference: directly on COSMIC, and
+  through the XDG settings portal on other desktops (GNOME, KDE, and any
+  compositor with a portal backend), updating live when it changes.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
   Shortcuts), remapping status, and access to setup, reset, and About actions.
 - First-run setup opens on its own the first time Keyloom runs and can be

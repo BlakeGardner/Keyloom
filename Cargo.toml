@@ -22,4 +22,5 @@ features = [
     "wayland",
     "wgpu",
     "winit",
+    "xdg-portal",
 ]
