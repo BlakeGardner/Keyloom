@@ -664,7 +664,7 @@ pub fn about_dialog() -> Element<'static, Message> {
     .height(Length::Fixed(144.0));
 
     let card = dialog_card(
-        widget::column::with_capacity(7)
+        widget::column::with_capacity(8)
             .spacing(16)
             .align_x(Alignment::Center)
             .push(logo)
@@ -687,6 +687,25 @@ pub fn about_dialog() -> Element<'static, Message> {
                 txt("Built with Rust and libcosmic. Powered by xremap.", 12.0, muted())
                 .align_x(Alignment::Center)
                 .width(Length::Fill),
+            )
+            .push(
+                // Centered through the container, not the text: rich text
+                // places its link spans as if it were left-aligned.
+                container(
+                    rich_text([
+                        span("Downloads, source, and issue reports live on the "),
+                        span("Keyloom project page")
+                            .link(env!("CARGO_PKG_REPOSITORY"))
+                            .color(accent())
+                            .underline(true),
+                        span("."),
+                    ])
+                    .on_link_click(Message::OpenUrl)
+                    .size(12)
+                    .class(ctheme::Text::Color(muted())),
+                )
+                .width(Length::Fill)
+                .align_x(Alignment::Center),
             )
             .push(
                 txt(

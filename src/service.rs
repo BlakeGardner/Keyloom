@@ -203,7 +203,7 @@ pub fn unit_file(binary: &Path, config: &Path) -> String {
         "{UNIT_MARKER}\n\
          [Unit]\n\
          Description=Keyboard remapping for Keyloom (xremap)\n\
-         Documentation=https://github.com/BlakeGardner/Keyloom\n\
+         Documentation={}\n\
          After=graphical-session.target input-method.target\n\
          PartOf=graphical-session.target\n\
          \n\
@@ -218,6 +218,7 @@ pub fn unit_file(binary: &Path, config: &Path) -> String {
          \n\
          [Install]\n\
          WantedBy=graphical-session.target\n",
+        env!("CARGO_PKG_REPOSITORY"),
         quote(binary),
         quote(config)
     )
