@@ -3,6 +3,9 @@
 Keyloom is a Rust desktop application built with libcosmic. Follow the
 existing code patterns and keep changes focused on the requested work.
 
+Before writing, reviewing, or refactoring Rust code, invoke the `rust-skills`
+skill (when available) and follow its guidance.
+
 ## Keep product documentation current
 
 Treat the product docs as a durable description of Keyloom, not a changelog
