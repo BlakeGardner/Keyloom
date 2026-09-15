@@ -7,7 +7,7 @@ use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message};
 use crate::ui::model::{self, key_name};
-use crate::ui::theme::{accent, muted, oklch, oklcha, vgradient};
+use crate::ui::theme::{accent, muted, oklch, tint, vgradient};
 use crate::ui::{eyebrow, mono, panel, txt, txt_semibold};
 
 /// Why the selected keyboard is silent.
@@ -27,15 +27,15 @@ pub fn notice(app: &App) -> Option<Element<'_, Message>> {
             widget::row::with_capacity(2)
                 .spacing(10)
                 .align_y(Alignment::Center)
-                .push(txt_semibold(title, 12.5, oklch(0.95, 0.02, 152.0)))
+                .push(txt_semibold(title, 12.5, tint(0.95, 0.02)))
                 .push(txt(detail, 12.0, muted())),
         )
         .width(Length::Fill)
         .padding([10, 16])
         .class(ctheme::Container::custom(|_| container::Style {
-            background: Some(oklch(0.25, 0.02, 152.0).into()),
+            background: Some(tint(0.25, 0.02).into()),
             border: Border {
-                color: oklch(0.45, 0.07, 152.0),
+                color: tint(0.45, 0.07),
                 width: 1.0,
                 radius: 11.0.into(),
             },
@@ -87,7 +87,7 @@ fn key_panel(app: &App) -> crate::ui::Panel<'_> {
     .height(Length::Fixed(64.0))
     .class(ctheme::Container::custom(move |_| container::Style {
         background: Some(if has_last {
-            vgradient(oklch(0.48, 0.1, 152.0), oklch(0.4, 0.09, 152.0))
+            vgradient(tint(0.48, 0.1), tint(0.4, 0.09))
         } else {
             oklch(0.27, 0.006, 152.0).into()
         }),
@@ -102,7 +102,7 @@ fn key_panel(app: &App) -> crate::ui::Panel<'_> {
         },
         shadow: if has_last {
             Shadow {
-                color: oklcha(0.7, 0.14, 152.0, 0.7),
+                color: tint(0.7, 0.14).scale_alpha(0.7),
                 offset: Vector::ZERO,
                 blur_radius: 26.0,
             }
@@ -160,16 +160,12 @@ fn modifier_panel(app: &App) -> crate::ui::Panel<'_> {
             container(txt_semibold(
                 label,
                 11.5,
-                if held {
-                    oklch(0.97, 0.02, 152.0)
-                } else {
-                    muted()
-                },
+                if held { tint(0.97, 0.02) } else { muted() },
             ))
             .padding([5, 11])
             .class(ctheme::Container::custom(move |_| container::Style {
                 background: Some(if held {
-                    oklch(0.36, 0.06, 152.0).into()
+                    tint(0.36, 0.06).into()
                 } else {
                     crate::ui::theme::white(0.04).into()
                 }),

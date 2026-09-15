@@ -9,7 +9,7 @@ use cosmic::{Element, theme as ctheme};
 use crate::app::{App, Layer, Message, Popover, View};
 use crate::keyboard;
 use crate::ui::model::{self, key_name, nav_layer, short};
-use crate::ui::theme::{ButtonStyle, accent, chip, muted, oklch, vgradient, white};
+use crate::ui::theme::{ButtonStyle, accent, chip, muted, oklch, tint, vgradient, white};
 use crate::ui::{tester, txt, txt_semibold};
 
 /// The device scope (or tester input filter) and the layer preview picker.
@@ -238,7 +238,7 @@ pub fn area(app: &App) -> Element<'_, Message> {
                         .push(txt_semibold(
                             "Click a key above to choose its new action.",
                             13.0,
-                            oklch(0.82, 0.13, 152.0),
+                            tint(0.82, 0.13),
                         ))
                         .width(Length::Shrink),
                 )
@@ -284,7 +284,7 @@ fn summary(app: &App) -> Element<'_, Message> {
 /// Chip text color helper.
 fn chip_text(active: bool) -> Color {
     if active {
-        oklch(0.97, 0.02, 152.0)
+        tint(0.97, 0.02)
     } else {
         oklch(0.72, 0.01, 152.0)
     }
@@ -350,24 +350,24 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         border = oklch(0.29, 0.005, 152.0);
     }
     if layer_label.is_some() {
-        bg = vgradient(oklch(0.4, 0.09, 152.0), oklch(0.33, 0.075, 152.0));
-        border = oklch(0.52, 0.1, 152.0);
-        color = oklch(0.97, 0.02, 152.0);
+        bg = vgradient(tint(0.4, 0.09), tint(0.33, 0.075));
+        border = tint(0.52, 0.1);
+        color = tint(0.97, 0.02);
     } else if is_trigger {
-        bg = vgradient(oklch(0.42, 0.1, 152.0), oklch(0.35, 0.085, 152.0));
+        bg = vgradient(tint(0.42, 0.1), tint(0.35, 0.085));
         border = accent();
-        color = oklch(0.98, 0.02, 152.0);
+        color = tint(0.98, 0.02);
     } else if mapping.is_some() && !nav_active {
-        bg = vgradient(oklch(0.34, 0.032, 152.0), oklch(0.285, 0.028, 152.0));
-        border = oklch(0.46, 0.075, 152.0);
+        bg = vgradient(tint(0.34, 0.032), tint(0.285, 0.028));
+        border = tint(0.46, 0.075);
     }
     if selected {
         border = accent();
         border_width = 1.5;
-        outline = Some((3.0, oklch(0.5, 0.09, 152.0).scale_alpha(0.35)));
+        outline = Some((3.0, tint(0.5, 0.09).scale_alpha(0.35)));
     }
     if pressed {
-        bg = vgradient(oklch(0.5, 0.1, 152.0), oklch(0.42, 0.09, 152.0));
+        bg = vgradient(tint(0.5, 0.1), tint(0.42, 0.09));
         color = oklch(0.99, 0.01, 152.0);
         border = accent();
         border_width = 1.0;

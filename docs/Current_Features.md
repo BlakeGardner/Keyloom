@@ -20,6 +20,8 @@ below). Installing xremap itself is still up to the user.
 - Follows the desktop's light/dark preference: directly on COSMIC, and
   through the XDG settings portal on other desktops (GNOME, KDE, and any
   compositor with a portal backend), updating live when it changes.
+- On COSMIC the interface adopts the user's accent color from COSMIC
+  Settings; on other desktops Keyloom uses its own green accent.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
   Shortcuts), remapping status, and access to setup, reset, and About actions.
 - First-run setup opens on its own the first time Keyloom runs and can be

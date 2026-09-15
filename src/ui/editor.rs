@@ -9,7 +9,7 @@ use crate::app::{App, Message, Mode};
 use crate::ui::model::{ACTION_GROUPS, MODS, auto_group, key_name, short};
 use crate::ui::theme::{
     ButtonStyle, accent, accent_filled, black, border, fg, flat_button, flat_tab, keycap, muted,
-    oklch, outline_button, quiet, white,
+    oklch, outline_button, quiet, tint, white,
 };
 use crate::ui::{mono, txt, txt_semibold};
 
@@ -346,16 +346,12 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
             widget::button::custom(txt_semibold(
                 label,
                 11.0,
-                if on {
-                    oklch(0.97, 0.02, 152.0)
-                } else {
-                    muted()
-                },
+                if on { tint(0.97, 0.02) } else { muted() },
             ))
             .class(
                 ButtonStyle {
                     bg: Some(Background::Color(if on {
-                        oklch(0.33, 0.05, 152.0)
+                        tint(0.33, 0.05)
                     } else {
                         white(0.03)
                     })),

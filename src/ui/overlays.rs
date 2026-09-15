@@ -15,7 +15,8 @@ use crate::setup::{
 };
 use crate::ui::model::key_name;
 use crate::ui::theme::{
-    accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, quiet, scrim, white,
+    accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, quiet, scrim, tint,
+    white,
 };
 use crate::ui::{eyebrow, mono, popover_panel, txt, txt_semibold};
 
@@ -157,7 +158,7 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
                 .push(action("Duplicate", Message::NewProfile { duplicate: true }))
                 .push(
                     widget::button::custom(
-                        txt_semibold("New", 11.5, oklch(0.93, 0.02, 152.0))
+                        txt_semibold("New", 11.5, tint(0.93, 0.02))
                             .align_x(Alignment::Center)
                             .width(Length::Fill),
                     )
@@ -201,8 +202,8 @@ pub fn size_popup(app: &App) -> Element<'_, Message> {
     let mut column = widget::column::with_capacity(keyboard::FORM_FACTORS.len() + 3).spacing(2);
 
     for (index, form) in keyboard::FORM_FACTORS.iter().enumerate() {
-        let sub = (detected == Some(index))
-            .then(|| txt(detected_note, 10.5, oklch(0.75, 0.09, 152.0)).into());
+        let sub =
+            (detected == Some(index)).then(|| txt(detected_note, 10.5, tint(0.75, 0.09)).into());
         column = column.push(popup_row(
             form.name.to_owned(),
             sub,
@@ -220,7 +221,7 @@ pub fn size_popup(app: &App) -> Element<'_, Message> {
             .spacing(2)
             .push(txt(sub, 10.5, muted()));
         if detected_iso == Some(iso) {
-            details = details.push(txt(detected_note, 10.5, oklch(0.75, 0.09, 152.0)));
+            details = details.push(txt(detected_note, 10.5, tint(0.75, 0.09)));
         }
         column = column.push(popup_row(
             name.to_owned(),
@@ -252,7 +253,7 @@ pub fn menu_popup(app: &App) -> Element<'_, Message> {
 /// The confirmation toast at the bottom of the shell.
 pub fn toast<'a>(app: &'a App, toast: &'a Toast) -> Element<'a, Message> {
     let check = container(
-        txt_semibold("✓", 9.0, oklch(0.2, 0.03, 152.0))
+        txt_semibold("✓", 9.0, tint(0.2, 0.03))
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
             .width(Length::Fill)
@@ -726,7 +727,7 @@ pub fn about_dialog() -> Element<'static, Message> {
                 .width(Length::Fill),
             )
             .push(
-                widget::button::custom(txt_semibold("Close", 12.5, oklch(0.96, 0.02, 152.0)))
+                widget::button::custom(txt_semibold("Close", 12.5, tint(0.96, 0.02)))
                     .class(accent_button())
                     .padding([9, 24])
                     .on_press(Message::CloseAbout),
@@ -1286,15 +1287,11 @@ fn ghost(label: &str, message: Option<Message>) -> Element<'static, Message> {
 
 /// The accented call to action; `None` leaves it disabled.
 fn primary(label: &str, message: Option<Message>) -> Element<'static, Message> {
-    widget::button::custom(txt_semibold(
-        label.to_owned(),
-        12.5,
-        oklch(0.96, 0.02, 152.0),
-    ))
-    .class(accent_button())
-    .padding([9, 18])
-    .on_press_maybe(message)
-    .into()
+    widget::button::custom(txt_semibold(label.to_owned(), 12.5, tint(0.96, 0.02)))
+        .class(accent_button())
+        .padding([9, 18])
+        .on_press_maybe(message)
+        .into()
 }
 
 /// The first-run setup wizard: a welcome page, one page per system

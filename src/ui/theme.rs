@@ -4,12 +4,24 @@
 //! The export specifies every color in OKLCH for a dark interface;
 //! [`oklch`] converts those values to sRGB at runtime and, when the
 //! system is in light mode, mirrors the lightness axis so the whole
-//! token set adapts to COSMIC's appearance setting.
+//! token set adapts to the desktop's appearance setting.
+//!
+//! Accent handling depends on the desktop. Under COSMIC the accent and
+//! every accent-tinted token follow the user's accent color from COSMIC
+//! Settings; elsewhere Keyloom keeps its own green ([`KEYLOOM_HUE`]).
 
+use std::sync::OnceLock;
+
+use cosmic::cosmic_theme::Component;
+use cosmic::cosmic_theme::palette::{IntoColor, Oklcha, Srgba};
 use cosmic::iced::gradient::Linear;
 use cosmic::iced::{Background, Color, Gradient, Radians};
 use cosmic::theme;
 use cosmic::widget::button;
+
+/// OKLCH hue of Keyloom's own green accent, used wherever the desktop
+/// does not supply one.
+pub const KEYLOOM_HUE: f32 = 152.0;
 
 /// Whether the active COSMIC theme is dark (updates live on switches).
 pub fn dark_mode() -> bool {
@@ -117,14 +129,73 @@ pub fn muted() -> Color {
 pub fn border() -> Color {
     oklch(0.39, 0.008, 152.0)
 }
+/// The accent: the desktop's under COSMIC, Keyloom's green elsewhere.
 pub fn accent() -> Color {
+    system_accent().map_or_else(keyloom_accent, |component| component.base.into())
+}
+
+/// Semantic "running" green for status indicators. Fixed on every
+/// desktop: like the amber and red beside it, it signals state rather
+/// than brand, so it must not follow the accent.
+pub fn success() -> Color {
+    keyloom_accent()
+}
+
+/// Keyloom's own green accent.
+fn keyloom_accent() -> Color {
     // The mirrored accent would be too dark to read as a brand color;
     // use a hand-tuned light-mode green instead.
     if dark_mode() {
-        raw_oklcha(0.78, 0.14, 152.0, 1.0)
+        raw_oklcha(0.78, 0.14, KEYLOOM_HUE, 1.0)
     } else {
-        raw_oklcha(0.50, 0.135, 152.0, 1.0)
+        raw_oklcha(0.50, 0.135, KEYLOOM_HUE, 1.0)
     }
+}
+
+/// An accent-tinted token: [`oklch`] at the active accent's hue, so
+/// fills, borders, and text washes stay in the same family as [`accent`].
+pub fn tint(l: f32, c: f32) -> Color {
+    oklch(l, c, accent_hue())
+}
+
+/// Hue shared by every accent-tinted token.
+fn accent_hue() -> f32 {
+    accent_hue_of(system_accent().map(|component| component.base))
+}
+
+/// [`accent_hue`] for an explicit system accent, if any.
+fn accent_hue_of(system: Option<Srgba>) -> f32 {
+    system.map_or(KEYLOOM_HUE, hue_degrees)
+}
+
+/// OKLCH hue of an sRGB color, in `0.0..360.0`.
+fn hue_degrees(color: Srgba) -> f32 {
+    let oklch: Oklcha = color.into_color();
+    oklch.hue.into_positive_degrees()
+}
+
+/// The desktop's accent component when Keyloom should follow it, which
+/// it does only under COSMIC: other desktops get Keyloom's own palette.
+fn system_accent() -> Option<Component> {
+    on_cosmic().then(|| theme::active().cosmic().accent.clone())
+}
+
+/// Whether Keyloom is running inside COSMIC, judged once from
+/// `XDG_CURRENT_DESKTOP`.
+fn on_cosmic() -> bool {
+    static ON_COSMIC: OnceLock<bool> = OnceLock::new();
+    *ON_COSMIC
+        .get_or_init(|| is_cosmic_desktop(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()))
+}
+
+/// Whether an `XDG_CURRENT_DESKTOP` value (a colon-separated list of
+/// desktop names) names COSMIC.
+fn is_cosmic_desktop(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        value
+            .split(':')
+            .any(|name| name.trim().eq_ignore_ascii_case("cosmic"))
+    })
 }
 
 /// A top-to-bottom linear gradient, like `linear-gradient(top, bottom)`.
@@ -255,7 +326,7 @@ fn fade(background: Background, factor: f32) -> Background {
 pub fn quiet(pressed: bool) -> theme::Button {
     ButtonStyle {
         bg: Some(Background::Color(if pressed {
-            oklch(0.30, 0.04, 152.0)
+            tint(0.30, 0.04)
         } else {
             oklch(0.26, 0.008, 152.0)
         })),
@@ -274,7 +345,7 @@ pub fn quiet(pressed: bool) -> theme::Button {
 pub fn tab(active: bool) -> theme::Button {
     if active {
         ButtonStyle {
-            bg: Some(Background::Color(oklch(0.36, 0.03, 152.0))),
+            bg: Some(Background::Color(tint(0.36, 0.03))),
             text: oklch(0.97, 0.01, 152.0),
             radius: 7.0,
             ..Default::default()
@@ -309,8 +380,8 @@ pub fn header_chip() -> theme::Button {
 pub fn chip(active: bool) -> theme::Button {
     if active {
         ButtonStyle {
-            bg: Some(Background::Color(oklch(0.32, 0.05, 152.0))),
-            text: oklch(0.97, 0.02, 152.0),
+            bg: Some(Background::Color(tint(0.32, 0.05))),
+            text: tint(0.97, 0.02),
             border: accent(),
             border_width: 1.0,
             radius: 8.0,
@@ -335,7 +406,7 @@ pub fn chip(active: bool) -> theme::Button {
 pub fn menu_row(active: bool) -> theme::Button {
     if active {
         ButtonStyle {
-            bg: Some(Background::Color(oklch(0.32, 0.04, 152.0))),
+            bg: Some(Background::Color(tint(0.32, 0.04))),
             text: oklch(0.97, 0.01, 152.0),
             radius: 9.0,
             ..Default::default()
@@ -355,10 +426,10 @@ pub fn menu_row(active: bool) -> theme::Button {
 /// Accented call-to-action buttons (`+ New group`, onboarding CTA).
 pub fn accent_button() -> theme::Button {
     ButtonStyle {
-        bg: Some(Background::Color(oklch(0.3, 0.04, 152.0))),
-        hover_bg: Some(Background::Color(oklch(0.36, 0.06, 152.0))),
-        text: oklch(0.93, 0.02, 152.0),
-        border: oklch(0.45, 0.07, 152.0),
+        bg: Some(Background::Color(tint(0.3, 0.04))),
+        hover_bg: Some(Background::Color(tint(0.36, 0.06))),
+        text: tint(0.93, 0.02),
+        border: tint(0.45, 0.07),
         border_width: 1.0,
         radius: 9.0,
         ..Default::default()
@@ -452,15 +523,66 @@ pub fn flat_button() -> theme::Button {
 
 /// Accent-filled primary action (`.editor-done`).
 pub fn accent_filled() -> theme::Button {
+    let (base, hover, on) = match system_accent() {
+        Some(component) => (
+            component.base.into(),
+            component.hover.into(),
+            component.on.into(),
+        ),
+        None => (keyloom_accent(), tint(0.86, 0.14), bg()),
+    };
     ButtonStyle {
-        bg: Some(Background::Color(accent())),
-        hover_bg: Some(Background::Color(oklch(0.86, 0.14, 152.0))),
-        text: bg(),
-        border: accent(),
-        hover_border: Some(oklch(0.86, 0.14, 152.0)),
+        bg: Some(Background::Color(base)),
+        hover_bg: Some(Background::Color(hover)),
+        text: on,
+        border: base,
+        hover_border: Some(hover),
         border_width: 1.0,
         radius: 8.0,
         ..Default::default()
     }
     .class()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cosmic_is_recognized_anywhere_in_the_desktop_list() {
+        assert!(is_cosmic_desktop(Some("COSMIC")));
+        assert!(is_cosmic_desktop(Some("cosmic")));
+        assert!(is_cosmic_desktop(Some("X-Vendor:COSMIC")));
+        assert!(is_cosmic_desktop(Some("COSMIC:GNOME")));
+    }
+
+    #[test]
+    fn other_desktops_are_not_cosmic() {
+        assert!(!is_cosmic_desktop(None));
+        assert!(!is_cosmic_desktop(Some("")));
+        assert!(!is_cosmic_desktop(Some("GNOME")));
+        assert!(!is_cosmic_desktop(Some("ubuntu:GNOME")));
+        assert!(!is_cosmic_desktop(Some("KDE")));
+        assert!(!is_cosmic_desktop(Some("cosmic-ish")));
+    }
+
+    #[test]
+    fn hue_round_trips_through_srgb() {
+        let green = raw_oklcha(0.7, 0.1, KEYLOOM_HUE, 1.0);
+        let hue = hue_degrees(Srgba::new(green.r, green.g, green.b, green.a));
+        assert!((hue - KEYLOOM_HUE).abs() < 1.0, "hue was {hue}");
+
+        let blue = raw_oklcha(0.7, 0.1, 250.0, 1.0);
+        let hue = hue_degrees(Srgba::new(blue.r, blue.g, blue.b, blue.a));
+        assert!((hue - 250.0).abs() < 1.0, "hue was {hue}");
+    }
+
+    #[test]
+    fn tint_hue_follows_the_system_accent_when_present() {
+        assert!((accent_hue_of(None) - KEYLOOM_HUE).abs() < f32::EPSILON);
+
+        let purple = raw_oklcha(0.6, 0.15, 300.0, 1.0);
+        let hue = accent_hue_of(Some(Srgba::new(purple.r, purple.g, purple.b, 1.0)));
+        assert!((hue - 300.0).abs() < 1.0, "hue was {hue}");
+    }
 }

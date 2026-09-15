@@ -10,7 +10,7 @@ use cosmic::{Element, theme as ctheme};
 use crate::app::{App, Message, Popover, View};
 use crate::service;
 use crate::ui::overlays;
-use crate::ui::theme::{accent, black, header_chip, muted, oklch, tab, white};
+use crate::ui::theme::{accent, black, header_chip, muted, oklch, success, tab, white};
 use crate::ui::{txt, txt_semibold};
 
 /// Brand icon, product name, and the profile picker.
@@ -161,7 +161,9 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
         match app.service {
             Some(status) => (
                 match status {
-                    service::Status::Active => accent(),
+                    // Traffic-light green, never the accent: the dot's
+                    // colors carry meaning.
+                    service::Status::Active => success(),
                     service::Status::Inactive => oklch(HOLDING.0, HOLDING.1, HOLDING.2),
                     service::Status::Failed => oklch(0.62, 0.19, 25.0),
                     // Nothing to act on: no unit, or no systemd to ask.

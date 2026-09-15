@@ -7,7 +7,8 @@ use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, EditRule, Message, Side};
 use crate::ui::theme::{
-    ButtonStyle, accent, accent_button, accent_filled, ghost_button, muted, oklch, quiet, white,
+    ButtonStyle, accent, accent_button, accent_filled, ghost_button, muted, oklch, quiet, tint,
+    white,
 };
 use crate::ui::{chord_pills, eyebrow, txt, txt_semibold};
 
@@ -172,7 +173,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                     .class(
                         ButtonStyle {
                             bg: Some(Background::Color(if active {
-                                oklch(0.3, 0.04, 152.0)
+                                tint(0.3, 0.04)
                             } else {
                                 white(0.028 * dim)
                             })),
@@ -265,7 +266,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn new_group_button() -> Element<'static, Message> {
-    widget::button::custom(txt_semibold("+ New group", 12.0, oklch(0.93, 0.02, 152.0)))
+    widget::button::custom(txt_semibold("+ New group", 12.0, tint(0.93, 0.02)))
         .class(accent_button())
         .padding([8, 14])
         .on_press(Message::AddGroup)
@@ -289,7 +290,7 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
             if recording { "Listening…" } else { "Record" },
             10.5,
             if recording {
-                oklch(0.97, 0.02, 152.0)
+                tint(0.97, 0.02)
             } else {
                 oklch(0.85, 0.01, 152.0)
             },
@@ -297,7 +298,7 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
         .class(
             ButtonStyle {
                 bg: Some(Background::Color(if recording {
-                    oklch(0.34, 0.06, 152.0)
+                    tint(0.34, 0.06)
                 } else {
                     white(0.05)
                 })),
@@ -326,7 +327,7 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
         .padding([9, 11])
         .class(ctheme::Container::custom(move |_| container::Style {
             background: Some(if recording {
-                oklch(0.28, 0.035, 152.0).into()
+                tint(0.28, 0.035).into()
             } else {
                 crate::ui::theme::black(0.2).into()
             }),
@@ -394,7 +395,7 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
                         "Ignore modifiers",
                         11.5,
                         if any_mod {
-                            oklch(0.96, 0.02, 152.0)
+                            tint(0.96, 0.02)
                         } else {
                             oklch(0.8, 0.01, 152.0)
                         },
@@ -404,7 +405,7 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
             .class(
                 ButtonStyle {
                     bg: Some(Background::Color(if any_mod {
-                        oklch(0.31, 0.045, 152.0)
+                        tint(0.31, 0.045)
                     } else {
                         white(0.03)
                     })),

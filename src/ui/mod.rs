@@ -17,7 +17,7 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message, View};
-use theme::{oklch, shadow, surface, white};
+use theme::{oklch, shadow, surface, tint, white};
 
 /// Text widget carrying cosmic's theme and renderer generics.
 pub type Txt<'a> = widget::Text<'a, cosmic::Theme, cosmic::Renderer>;
@@ -115,11 +115,7 @@ pub fn pill(label: &str, kind: Pill) -> Element<'static, Message> {
         ),
         Pill::Mod => (Some(white(0.05)), white(0.10), oklch(0.78, 0.01, 152.0)),
         Pill::Empty => (None, white(0.18), theme::muted()),
-        Pill::Key => (
-            Some(oklch(0.31, 0.04, 152.0)),
-            oklch(0.44, 0.07, 152.0),
-            oklch(0.95, 0.02, 152.0),
-        ),
+        Pill::Key => (Some(tint(0.31, 0.04)), tint(0.44, 0.07), tint(0.95, 0.02)),
     };
     container(txt_semibold(label, 11.0, color).line_height(LineHeight::Absolute(12.0.into())))
         .padding([5, 8])
