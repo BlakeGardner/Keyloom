@@ -14,6 +14,7 @@ const TWO_LAYERS: &str = include_str!("keyloom/two-layers.yml");
 const REMAPPED_KEY: &str = include_str!("keyloom/remapped-key.yml");
 const APP_SCOPED: &str = include_str!("keyloom/app-scoped.yml");
 const SIDED_MODIFIERS: &str = include_str!("keyloom/sided-modifiers.yml");
+const MEDIA_ANY_MODIFIER: &str = include_str!("keyloom/media-any-modifier.yml");
 
 fn press(key: Key) -> Action {
     Action::KeyEvent(KeyEvent::new(key, KeyValue::Press))
@@ -397,5 +398,40 @@ fn keyloom_sided_modifier_matches_one_key_only() {
             release(Key::KEY_C),
             release(Key::KEY_LEFTCTRL),
         ],
+    );
+}
+
+/// An "any modifier" rule from Volume Up to itself: with Shift held,
+/// xremap releases Shift around a plain Volume Up; alone, Volume Up
+/// passes through untouched because no rule is written for it.
+#[test]
+fn keyloom_any_modifier_drops_the_held_modifier_and_leaves_the_plain_key() {
+    assert_actions(
+        MEDIA_ANY_MODIFIER,
+        vec![
+            Event::key_press(Key::KEY_LEFTSHIFT),
+            Event::key_press(Key::KEY_VOLUMEUP),
+            Event::key_release(Key::KEY_VOLUMEUP),
+            Event::key_release(Key::KEY_LEFTSHIFT),
+        ],
+        vec![
+            press(Key::KEY_LEFTSHIFT),
+            release(Key::KEY_LEFTSHIFT),
+            press(Key::KEY_VOLUMEUP),
+            release(Key::KEY_VOLUMEUP),
+            delay(),
+            press(Key::KEY_LEFTSHIFT),
+            delay(),
+            release(Key::KEY_VOLUMEUP),
+            release(Key::KEY_LEFTSHIFT),
+        ],
+    );
+    assert_actions(
+        MEDIA_ANY_MODIFIER,
+        vec![
+            Event::key_press(Key::KEY_VOLUMEUP),
+            Event::key_release(Key::KEY_VOLUMEUP),
+        ],
+        vec![press(Key::KEY_VOLUMEUP), release(Key::KEY_VOLUMEUP)],
     );
 }

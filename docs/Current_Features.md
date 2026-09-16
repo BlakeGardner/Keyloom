@@ -275,7 +275,9 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   application and one per application scope shown while the combo was made.
 - "Any modifier" makes a group's shortcuts match while Shift, Ctrl, Alt, or
   Super is held as well, releasing that modifier around the output; with two
-  unrelated modifiers held, only one of them is released.
+  unrelated modifiers held, only one of them is released. A rule from a key
+  to itself, such as Volume Up to Volume Up, adds only those entries, so the
+  plain key keeps working as it is.
 
 ## Persistence and generated configuration
 

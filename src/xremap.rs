@@ -568,7 +568,10 @@ fn chord_symbol(chord: &Chord) -> Option<String> {
 /// application first, then the general ones, each in profile order, so
 /// a shortcut made for an application wins over the same shortcut made
 /// for every application. Paused groups, incomplete rules, and rules
-/// with keys xremap cannot name generate nothing.
+/// with keys xremap cannot name generate nothing. A rule whose two
+/// sides are the same changes nothing by itself and is left out, so
+/// the key keeps passing through (repeats included); with "any
+/// modifier" it still adds the entries that drop a held modifier.
 fn group_blocks<F: Fn(&str) -> String>(groups: &[Group], places: &Places<'_, F>) -> Vec<String> {
     let mut blocks: Vec<(u8, String)> = Vec::new();
     for group in groups.iter().filter(|group| group.enabled) {
@@ -601,7 +604,9 @@ fn group_blocks<F: Fn(&str) -> String>(groups: &[Group], places: &Places<'_, F>)
                     }
                 }
             }
-            rule_line(from, &to);
+            if from != to {
+                rule_line(from, &to);
+            }
         }
         if lines.is_empty() {
             continue;
@@ -1465,6 +1470,48 @@ mod tests {
         );
     }
 
+    /// A rule from a key to itself adds nothing on its own; with "any
+    /// modifier" it adds only the entries that drop a held modifier, so
+    /// the plain key keeps passing through.
+    #[test]
+    fn identity_rules_generate_only_their_any_modifier_entries() {
+        let groups = vec![
+            group(
+                "Plain",
+                "",
+                false,
+                vec![rule(&[], "Volume Up", &[], "Volume Up")],
+            ),
+            group(
+                "Media keys ignore modifiers",
+                "",
+                true,
+                vec![rule(&[], "Volume Up", &[], "Volume Up")],
+            ),
+        ];
+        let yaml = super::generate(
+            Rules {
+                maps: &Vec::new(),
+                layers: &[],
+                apps: &[],
+                groups: &groups,
+            },
+            no_devices,
+        );
+        let expected = format!(
+            "{MARKER}\n\
+             modmap: []\n\
+             keymap:\n\
+             \x20 - name: 'Keyloom shortcuts: Media keys ignore modifiers'\n\
+             \x20   remap:\n\
+             \x20     Ctrl-KEY_VOLUMEUP: KEY_VOLUMEUP\n\
+             \x20     Shift-KEY_VOLUMEUP: KEY_VOLUMEUP\n\
+             \x20     Alt-KEY_VOLUMEUP: KEY_VOLUMEUP\n\
+             \x20     Super-KEY_VOLUMEUP: KEY_VOLUMEUP\n"
+        );
+        assert_eq!(yaml, expected);
+    }
+
     /// Paused groups, incomplete rules, and keys xremap cannot name
     /// generate nothing; a chord repeated in a group is written once.
     #[test]
@@ -1820,6 +1867,22 @@ mod tests {
             },
             no_devices,
         );
+        // Volume Up works while a modifier is held, and alone passes
+        // through untouched.
+        let media = super::generate(
+            Rules {
+                maps: &Vec::new(),
+                layers: &[],
+                apps: &[],
+                groups: &[group(
+                    "Media keys ignore modifiers",
+                    "",
+                    true,
+                    vec![rule(&[], "Volume Up", &[], "Volume Up")],
+                )],
+            },
+            no_devices,
+        );
         for (name, yaml) in [
             (
                 "navigation.yml",
@@ -1835,6 +1898,7 @@ mod tests {
             ),
             ("app-scoped.yml", app_scoped),
             ("sided-modifiers.yml", sided),
+            ("media-any-modifier.yml", media),
         ] {
             fs::write(dir.join(name), yaml).expect("harness directory is writable");
         }
