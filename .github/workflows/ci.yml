@@ -63,10 +63,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    env:
-      # Keep the xremap source checkout out of Keyloom's target/, which
-      # rust-cache caches on its own.
-      XREMAP_HARNESS_DIR: ${{ runner.temp }}/xremap-harness
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
@@ -82,16 +78,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
       - uses: Swatinem/rust-cache@v2
+      # The xremap source checkout lives in the runner's temp directory,
+      # outside Keyloom's target/, which rust-cache caches on its own.
       - name: Cache the pinned xremap source build for the layer harness
         uses: actions/cache@v4
         with:
-          path: ${{ env.XREMAP_HARNESS_DIR }}
+          path: ${{ runner.temp }}/xremap-harness
           key: xremap-harness-${{ runner.os }}-${{ env.XREMAP_VERSION }}-${{ steps.toolchain.outputs.cachekey }}
       - name: Run tests
         run: cargo test --verbose --locked
       - name: Validate generated configs with pinned xremap
         run: cargo test --verbose --locked xremap::tests::generated_documents_parse_with_real_xremap -- --ignored --exact
       - name: Run generated layer documents through xremap's event handler
+        env:
+          XREMAP_HARNESS_DIR: ${{ runner.temp }}/xremap-harness
         run: ./scripts/verify-layers-with-xremap.sh
 
   deny:
