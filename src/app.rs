@@ -888,7 +888,17 @@ impl App {
             return Task::none();
         };
         let task = match step {
-            setup::Step::Xremap => return Task::none(),
+            setup::Step::Xremap => {
+                if facts.xremap_action().is_none() {
+                    return Task::none();
+                }
+                cosmic::task::future(async move {
+                    Message::SetupActed {
+                        step,
+                        result: setup::install_xremap(&facts).await,
+                    }
+                })
+            }
             setup::Step::InputGroup => {
                 let Some(user) = facts.user else {
                     return Task::none();
@@ -4764,7 +4774,9 @@ mod tests {
             user: Some("me".to_owned()),
             xremap: setup::XremapCheck::Found {
                 path: PathBuf::from("/usr/bin/xremap"),
-                version: Some("0.15.12".to_owned()),
+                version: Some("0.15.13".to_owned()),
+                desktops: Some(vec![crate::session::Desktop::Cosmic]),
+                managed: false,
             },
             group: setup::GroupCheck::Effective,
             uinput: setup::UinputCheck::Writable,
@@ -4773,6 +4785,10 @@ mod tests {
                 enabled: true,
             },
             config: Some(PathBuf::from("/home/me/.config/xremap/keyloom.yml")),
+            session: crate::session::Session {
+                desktop: Some(crate::session::Desktop::Cosmic),
+                x11: false,
+            },
         }
     }
 
@@ -4922,6 +4938,39 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_xremap_can_be_downloaded_from_its_step() {
+        let mut app = app();
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupProbed(setup::Facts {
+            xremap: setup::XremapCheck::Missing,
+            ..fresh_facts()
+        }));
+        // The task itself is dropped here, so nothing is downloaded.
+        let _ = app.update(Message::SetupAct(setup::Step::Xremap));
+        let offered = crate::install::asset().is_some() && crate::install::managed_path().is_some();
+        assert_eq!(
+            app.setup.as_ref().unwrap().busy,
+            offered.then_some(setup::Step::Xremap),
+            "the download runs where Keyloom has a release for this processor"
+        );
+
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::Xremap,
+            result: Err(setup::ActionError::Failed("no network".to_owned())),
+        });
+        let setup = app.setup.as_ref().unwrap();
+        assert_eq!(setup.busy, None);
+        assert_eq!(
+            setup.error,
+            Some((
+                setup::Step::Xremap,
+                setup::ActionError::Failed("no network".to_owned())
+            ))
+        );
+        assert!(setup.probing, "the outcome is checked, not assumed");
+    }
+
+    #[test]
     fn setup_fixes_run_one_at_a_time_and_report_failures() {
         let mut app = app();
         let _ = app.update(Message::MenuShowSetup);
@@ -4931,7 +4980,7 @@ mod tests {
         assert_eq!(app.setup.as_ref().unwrap().busy, None);
 
         let _ = app.update(Message::SetupProbed(fresh_facts()));
-        // xremap has no fix, only a recheck.
+        // An installed xremap has no fix, only a recheck.
         let _ = app.update(Message::SetupAct(setup::Step::Xremap));
         assert_eq!(app.setup.as_ref().unwrap().busy, None);
 

@@ -29,11 +29,13 @@ tracked in [Functionality TODO](Functionality_TODO.md).
 - [ ] Provide an in-app viewer for remapping service logs so users can
   investigate failures without opening a terminal.
 
-## Ship xremap with Keyloom
+## Ship xremap in packages
 
-- [ ] Bundle a compatible xremap binary or provide it as a package dependency
-  for supported distributions. Version 0.1.0 assumes xremap is already
-  installed; its first-run setup will configure the service and permissions.
+- [ ] Provide xremap as a package dependency, or bundle it, for supported
+  distributions, so packaged installs need no download. Version 0.1.0's
+  first-run setup downloads the pinned xremap release into the user's
+  `~/.local/bin` when none is installed, and uses a distribution's xremap
+  when there is one.
 
 ## Broader service-manager support
 

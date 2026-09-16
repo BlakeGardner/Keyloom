@@ -36,10 +36,12 @@ install -Dm644 data/io.github.blakegardner.Keyloom.svg \
 ```
 
 Use the distribution's usual desktop/icon cache hooks when installing or
-removing a package. Packages must also account for runtime dependencies;
-Keyloom currently expects xremap to be installed separately and uses systemd
-user services. This directory does not yet provide a distribution package
-recipe or AppStream metadata.
+removing a package. Packages must also account for runtime dependencies:
+Keyloom uses systemd user services and drives xremap, which its first-run
+setup downloads into the user's `~/.local/bin` when the system has none (a
+package may instead depend on an xremap of at least version 0.15.13, which
+setup then uses as it is). This directory does not yet provide a
+distribution package recipe or AppStream metadata.
 
 ## Validation
 

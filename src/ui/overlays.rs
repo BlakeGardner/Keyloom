@@ -8,11 +8,13 @@ use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message, Picker, PickerTarget, Setup, SetupPage, Toast, View};
 use crate::apps;
+use crate::install;
 use crate::keyboard;
 use crate::service;
+use crate::session::Desktop;
 use crate::setup::{
-    Facts, GroupCheck, INPUT_GROUP, RULE, RULES_PATH, Step, UINPUT, UinputCheck, UnitCheck,
-    XREMAP_URL, XremapCheck,
+    AppMatching, Facts, GroupCheck, INPUT_GROUP, RULE, RULES_PATH, Step, UINPUT, UinputCheck,
+    UnitCheck, XREMAP_GNOME_EXTENSION_URL, XREMAP_URL, XremapAction, XremapCheck,
 };
 use crate::ui::model::key_name;
 use crate::ui::theme::{
@@ -1380,35 +1382,176 @@ fn step_view(facts: &Facts, step: Step) -> StepView {
 }
 
 fn xremap_view(facts: &Facts) -> StepView {
+    let action = facts.xremap_action();
     match &facts.xremap {
-        XremapCheck::Found { path, version } => StepView {
-            color: color_ok(),
-            status: match version {
-                Some(version) => format!("Installed (version {version})"),
-                None => "Installed".to_owned(),
+        XremapCheck::Found {
+            path,
+            version,
+            desktops,
+            managed,
+        } => {
+            let status = match (version, managed) {
+                (Some(version), true) => {
+                    format!("Installed (version {version}, downloaded by Keyloom)")
+                }
+                (Some(version), false) => format!("Installed (version {version})"),
+                (None, true) => "Installed (downloaded by Keyloom)".to_owned(),
+                (None, false) => "Installed".to_owned(),
+            };
+            let mut detail = format!(
+                "Binary: {}\nDesktop: {}",
+                path.display(),
+                session_label(facts)
+            );
+            if let Some(desktops) = desktops {
+                detail.push_str(&format!("\nCan ask: {}", desktop_list(desktops)));
+            }
+            let update = action == Some(XremapAction::Update);
+            let lead = if update {
+                if let Some(asset) = install::asset() {
+                    detail.push_str(&format!(
+                        "\nDownload: {}\nSHA-256: {}",
+                        asset.url, asset.sha256
+                    ));
+                }
+                format!(
+                    "Keyloom now ships xremap {}; updating replaces its copy and restarts \
+                     remapping. ",
+                    install::RELEASE
+                )
+            } else {
+                String::new()
+            };
+            StepView {
+                color: color_ok(),
+                status,
+                title: "xremap is installed".to_owned(),
+                body: matching_body(facts, lead),
+                detail: Some(detail),
+                action: update.then_some("Update xremap"),
+            }
+        }
+        XremapCheck::Missing => match (action, install::asset(), install::managed_path()) {
+            (Some(XremapAction::Download), Some(asset), Some(destination)) => StepView {
+                color: color_attention(),
+                status: "Not installed".to_owned(),
+                title: "Get xremap".to_owned(),
+                body: Body::Linked {
+                    before: format!(
+                        "Keyloom does its remapping through xremap, which isn't installed yet. \
+                         Keyloom can download xremap {} from the project's releases into your \
+                         home folder; no administrator access is needed. Or install it from \
+                         your distribution's packages or the ",
+                        asset.version
+                    ),
+                    link: "xremap project page",
+                    url: XREMAP_URL,
+                    after: ", then check again. You can keep mapping keys in the meantime."
+                        .to_owned(),
+                },
+                detail: Some(format!(
+                    "Download: {}\nSHA-256: {}\nInstalls to: {}\nLooked for an executable \
+                     named xremap on PATH first.",
+                    asset.url,
+                    asset.sha256,
+                    destination.display()
+                )),
+                action: fix("Download xremap"),
             },
-            title: "xremap is installed".to_owned(),
-            body: Body::None,
-            detail: Some(format!("Binary: {}", path.display())),
-            action: None,
-        },
-        XremapCheck::Missing => StepView {
-            color: color_blocked(),
-            status: "Not installed".to_owned(),
-            title: "Install xremap first".to_owned(),
-            body: Body::Linked {
-                before: "Keyloom does its remapping through xremap, and it isn't installed \
-                         yet. Install it from your distribution's packages or from the "
-                    .to_owned(),
-                link: "xremap project page",
-                url: XREMAP_URL,
-                after: ", then check again. You can keep mapping keys in the meantime.".to_owned(),
+            _ => StepView {
+                color: color_blocked(),
+                status: "Not installed".to_owned(),
+                title: "Install xremap first".to_owned(),
+                body: Body::Linked {
+                    before: "Keyloom does its remapping through xremap, and it isn't installed \
+                             yet. Install it from your distribution's packages or from the "
+                        .to_owned(),
+                    link: "xremap project page",
+                    url: XREMAP_URL,
+                    after: ", then check again. You can keep mapping keys in the meantime."
+                        .to_owned(),
+                },
+                detail: Some(format!(
+                    "Looked for an executable named xremap on PATH.\n{}\n{XREMAP_URL}",
+                    if install::asset().is_none() {
+                        format!(
+                            "Keyloom has no xremap release to download for this processor ({}).",
+                            std::env::consts::ARCH
+                        )
+                    } else {
+                        "Keyloom could not find your home directory to download xremap into."
+                            .to_owned()
+                    }
+                )),
+                action: None,
             },
-            detail: Some(format!(
-                "Looked for an executable named xremap on PATH.\n{XREMAP_URL}"
-            )),
-            action: None,
         },
+    }
+}
+
+/// The session as the details line names it.
+fn session_label(facts: &Facts) -> String {
+    let desktop = facts
+        .session
+        .desktop
+        .map_or("not recognized", Desktop::label);
+    let server = if facts.session.x11 { "X11" } else { "Wayland" };
+    format!("{desktop} ({server} session)")
+}
+
+/// Desktops by name, comma-separated.
+fn desktop_list(desktops: &[Desktop]) -> String {
+    if desktops.is_empty() {
+        return "no desktop".to_owned();
+    }
+    desktops
+        .iter()
+        .map(|desktop| desktop.label())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What the xremap step says about application-specific remaps here,
+/// after `lead` (which ends with a space when it says anything).
+fn matching_body(facts: &Facts, lead: String) -> Body {
+    match facts.app_matching() {
+        AppMatching::NotInstalled => {
+            if lead.is_empty() {
+                Body::None
+            } else {
+                Body::Plain(lead)
+            }
+        }
+        AppMatching::Supported(Desktop::Gnome) if !facts.session.x11 => Body::Linked {
+            before: format!(
+                "{lead}This build can tell which window is in front on GNOME once xremap's "
+            ),
+            link: "GNOME Shell extension",
+            url: XREMAP_GNOME_EXTENSION_URL,
+            after: " is installed and turned on; application-specific remaps depend on it."
+                .to_owned(),
+        },
+        AppMatching::Supported(desktop) => Body::Plain(format!(
+            "{lead}This build can tell which window is in front on {}, so application-specific \
+             remaps apply here.",
+            desktop.label()
+        )),
+        AppMatching::Unsupported { desktop, supports } => Body::Plain(format!(
+            "{lead}This build can't tell which window is in front on {} (it can on {}), so \
+             application-specific remaps won't apply here. The full build from the xremap \
+             project page can.",
+            desktop.label(),
+            desktop_list(&supports)
+        )),
+        AppMatching::Unreported => Body::Plain(format!(
+            "{lead}This xremap doesn't say which desktops it supports (newer releases do), so it picks \
+             on its own how to tell which window is in front; application-specific remaps \
+             depend on its build matching this desktop."
+        )),
+        AppMatching::UnknownDesktop => Body::Plain(format!(
+            "{lead}Keyloom couldn't tell which desktop this is, so xremap picks on its own how \
+             to ask which window is in front."
+        )),
     }
 }
 
@@ -1559,7 +1702,7 @@ fn service_view(facts: &Facts) -> StepView {
         };
         Some(format!(
             "Unit: {unit_path}\nExecStart={}",
-            crate::setup::exec_start_of(&service::unit_file(binary, config))
+            crate::setup::exec_start_of(&service::unit_file(binary, config, facts.launch()))
         ))
     };
     let installed = || Some(format!("Unit: {unit_path}\nRemaps: {config}"));
@@ -1975,8 +2118,14 @@ fn step_page(setup: &Setup, step: Step) -> Element<'_, Message> {
         .spacing(10)
         .align_y(Alignment::Center);
     if let Some(label) = view.action {
+        // The xremap step's only fix is a download, which is worth
+        // naming while it runs.
+        let working = match step {
+            Step::Xremap => "Downloading…",
+            Step::InputGroup | Step::Uinput | Step::Service => "Working…",
+        };
         actions = actions.push(primary(
-            if busy { "Working…" } else { label },
+            if busy { working } else { label },
             (!busy).then_some(Message::SetupAct(step)),
         ));
     }

@@ -8,7 +8,10 @@ repository = "https://github.com/BlakeGardner/Keyloom"
 [dependencies]
 evdev = "0.13"
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.11"
 tokio = { version = "1", features = ["process", "time"] }
+ureq = "3"
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

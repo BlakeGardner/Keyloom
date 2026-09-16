@@ -12,9 +12,11 @@ env:
   # against: the pinned binary must load them
   # (generated_documents_parse_with_real_xremap in src/xremap.rs), and
   # the pinned source's own event-handler tests must agree with what the
-  # layer documents mean (scripts/verify-layers-with-xremap.sh). Bump
-  # deliberately when targeting a new xremap.
-  XREMAP_VERSION: 0.15.12
+  # layer documents mean (scripts/verify-layers-with-xremap.sh). It is
+  # also the release first-run setup downloads (install::RELEASE in
+  # src/install.rs; a test checks that the two agree). Bump deliberately
+  # when targeting a new xremap.
+  XREMAP_VERSION: 0.15.13
 
 # Cancel in-progress runs when new commits are pushed to the same PR/branch,
 # but never cancel runs on main.
@@ -69,7 +71,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
       - name: Install pinned xremap for config validation
         run: |
-          curl -sSL -o /tmp/xremap.zip "https://github.com/xremap/xremap/releases/download/v${XREMAP_VERSION}/xremap-linux-x86_64-cosmic.zip"
+          curl -sSL -o /tmp/xremap.zip "https://github.com/xremap/xremap/releases/download/v${XREMAP_VERSION}/xremap-linux-x86_64-full.zip"
           mkdir -p "$HOME/.local/bin"
           unzip -o /tmp/xremap.zip -d "$HOME/.local/bin"
           chmod +x "$HOME/.local/bin/xremap"
@@ -89,6 +91,8 @@ jobs:
         run: cargo test --verbose --locked
       - name: Validate generated configs with pinned xremap
         run: cargo test --verbose --locked xremap::tests::generated_documents_parse_with_real_xremap -- --ignored --exact
+      - name: Check that the release setup downloads is what GitHub serves
+        run: cargo test --verbose --locked install::tests::the_pinned_asset_is_what_github_serves -- --ignored --exact
       - name: Run generated layer documents through xremap's event handler
         env:
           XREMAP_HARNESS_DIR: ${{ runner.temp }}/xremap-harness

@@ -6,10 +6,11 @@ features deferred beyond the first public release.
 
 ## 0.1.0 release commitments
 
-The first public release assumes **xremap is already installed** on a system
-using systemd user services. Keyloom will guide the user from that prerequisite
-to working remapping through first-run setup. Installing or bundling xremap is
-reserved for a later release.
+The first public release targets a system using systemd user services.
+First-run setup guides the user to working remapping, and **downloads xremap
+itself when none is installed** (the pinned release, into the user's
+`~/.local/bin`); a distribution's xremap is used when present. Shipping
+xremap inside Keyloom's packages is reserved for a later release.
 
 The following are release blockers, with detailed tasks below:
 
@@ -160,8 +161,9 @@ workflow is not planned.
 
 ## 6. Apply and service management ("Apply" / "Manage" iterations)
 
-> **Current assumption:** xremap is already installed on `$PATH`. First-run
-> setup ([§9](#9-first-run-system-setup-010-blocker), `src/setup.rs`) takes
+> **Current assumption:** xremap is on `PATH`, or first-run setup has
+> downloaded it into `~/.local/bin`. Setup
+> ([§9](#9-first-run-system-setup-010-blocker), `src/setup.rs`) takes
 > care of the rest from xremap's
 > [running-without-sudo guide](https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md):
 > the `input` group for `/dev/input` access, a udev rule granting the group
@@ -239,13 +241,22 @@ through the generated configuration. The tasks below are 0.1.0 blockers.
   shortcut differing between an application and elsewhere; relaunch is
   covered by the store round-trip tests. Limits: ids match exactly, one
   scope per application, layer jobs are the same in every application, and
-  matching depends on an xremap build that can ask the desktop (COSMIC's
-  build on COSMIC; GNOME and KDE need xremap's extension or script), which
-  setup does not check.
-- [ ] **Explain unsupported desktops for application matching.** Setup's
-  xremap step could tell whether the installed build can ask this desktop
-  which window is in front, instead of leaving the picker's "could not ask"
-  note as the only hint.
+  matching depends on an xremap build with a client for this desktop
+  (GNOME's Wayland session also needs xremap's GNOME Shell extension),
+  which setup's xremap step now reports.
+- [x] **Explain unsupported desktops for application matching.** Setup's
+  xremap step asks the installed build which desktops it can ask
+  (`xremap --list-desktops`, since xremap 0.15.13) and says whether
+  application-specific remaps can work on the detected desktop, pointing
+  GNOME users at the extension; a build that cannot say (older than
+  0.15.13) or a desktop Keyloom does not recognize is explained rather
+  than guessed at. The unit and the picker's `--list-windows` pass
+  `--desktop` for the detected desktop when the build lists it, so what
+  the picker shows is what remapping matches on.
+- [ ] **Offer Keyloom's download beside a user's single-desktop build.** A
+  distribution's xremap without a client for this desktop is used as it
+  is and explained; setup could install Keyloom's full build alongside
+  and prefer it.
 - [ ] **Application-scoped layer jobs.** The model carries an application
   scope per job, but the deck shows one context at a time; letting a layer
   differ per application needs the deck to show a layer inside an
@@ -295,19 +306,42 @@ through the generated configuration. The tasks below are 0.1.0 blockers.
 
 ## 9. First-run system setup (0.1.0 blocker)
 
-Today the user must configure the service and permissions outside Keyloom.
-For 0.1.0, first-run setup must handle or guide these steps with an already
-installed xremap. This extends the existing onboarding walkthrough.
+For 0.1.0, first-run setup must take a fresh system, with or without xremap,
+to working remapping, handling or guiding each step. This extends the
+existing onboarding walkthrough.
 
-- [x] **Check the prerequisite.** The xremap binary is looked up on `PATH`
-  and its version shown; a missing binary is explained and editing keeps
-  working. Compatibility is not checked beyond the binary answering
-  `--version`.
+- [x] **Check the prerequisite.** The xremap binary is looked up on `PATH`,
+  then where Keyloom's own download goes (`~/.local/bin/xremap`, which
+  need not be on `PATH`); its version and the desktops its build can ask
+  are shown, and a copy Keyloom downloaded is told apart from one the user
+  installed by its digest. A missing binary is explained and editing keeps
+  working.
+- [x] **Download xremap when there is none.** The xremap step offers to
+  download the pinned `full` build of xremap (`install::RELEASE` in
+  `src/install.rs`; it has a client for every desktop) from the project's
+  GitHub releases into `~/.local/bin`, without administrator access: the
+  zip's SHA-256 is checked against the digest recorded in Keyloom before
+  anything is written, the binary is unpacked beside its destination,
+  asked for its version, and only then moved into place. Keyloom's own
+  download is offered an update when Keyloom moves to a newer release; a
+  binary the user installed is never replaced. Limits: only x86_64 and
+  aarch64 (the processors xremap publishes binaries for); no progress or
+  cancellation (the download is about 3 MB and bounded by a timeout); and
+  a distribution's xremap older than 0.15.13 is used as it is, with
+  neither download nor `--desktop`.
 - [x] **Install the user-level systemd unit.** Setup writes
   `~/.config/systemd/user/xremap.service` (marked as Keyloom's, so its own
   file is rewritten freely and anyone else's is backed up beside it first),
   reloads the user manager, enables the unit, and starts it once access is
   in effect. An existing unit is inspected before anything is touched (§6).
+  The unit names the detected desktop (`--desktop`) when the binary lists
+  it, so xremap asks the right compositor for application-specific rules,
+  and skips its wait for a Wayland socket on X11 sessions, where none
+  appears.
+- [ ] **Follow a desktop change on its own.** The unit names the desktop
+  setup saw; logging into another desktop leaves it stale until "Update
+  service" is clicked in setup. Keyloom could refresh its own unit at
+  launch when the detected desktop or session type changed.
 - [x] **Guide input-group membership.** Membership in effect (this
   process's groups) is told apart from membership on record (`/etc/group`),
   so the step explains the pending logout/login; the fix runs `usermod -aG

@@ -4,7 +4,8 @@
 # generator emits are checked against the pinned xremap release.
 #
 # Builds the xremap source at the pinned tag (kept in sync with
-# XREMAP_VERSION in .github/workflows/ci.yml) under target/, adds
+# XREMAP_VERSION in .github/workflows/ci.yml and install::RELEASE in
+# src/install.rs, the release setup downloads) under target/, adds
 # scripts/xremap-harness/tests_keyloom.rs to its test suite, and runs it
 # on documents dumped by Keyloom's generator.
 #
@@ -15,7 +16,7 @@
 # network access for the clone and a few minutes to build.
 set -eu
 
-version=${XREMAP_VERSION:-0.15.12}
+version=${XREMAP_VERSION:-0.15.13}
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=${XREMAP_HARNESS_DIR:-"$root/target/xremap-harness"}
 src="$work/xremap-$version"

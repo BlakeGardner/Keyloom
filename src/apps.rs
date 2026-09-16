@@ -2,7 +2,9 @@
 //! picker: installed desktop entries (names and icons), and the windows
 //! open right now, whose ids are exactly what remapping matches on.
 //!
-//! Open windows come from `xremap --list-windows`, which asks the
+//! Open windows come from `xremap --list-windows`, run on the binary
+//! the remapping service uses and told about the same desktop, so the
+//! picker sees exactly what remapping will match on. It asks the
 //! compositor the way the running remapper does and returns before
 //! xremap selects any input device, so it never takes a keyboard away
 //! from the remapper that is running.
@@ -13,6 +15,7 @@ use cosmic::desktop::{self, fde};
 use tokio::process::Command;
 
 use crate::config::APP_ID;
+use crate::setup;
 use crate::ui::model::AppRef;
 
 /// An application's icon, as its desktop entry names it.
@@ -106,7 +109,14 @@ fn installed() -> Vec<KnownApp> {
 /// (a desktop its build cannot ask), with xremap's own explanation
 /// where it gives one.
 async fn open_windows() -> Result<Vec<Window>, String> {
-    let output = Command::new("xremap")
+    let Some((binary, launch)) = setup::xremap_invocation().await else {
+        return Err("xremap is not installed".to_owned());
+    };
+    let mut command = Command::new(&binary);
+    if let Some(desktop) = launch.desktop {
+        command.args(["--desktop", desktop.flag()]);
+    }
+    let output = command
         .arg("--list-windows")
         .output()
         .await

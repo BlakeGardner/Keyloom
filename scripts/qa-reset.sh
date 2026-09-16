@@ -2,9 +2,10 @@
 #
 # qa-reset.sh — put a test machine back to "never set up" for Keyloom QA.
 #
-# Keyloom's first-run setup changes four things on a system. This script
-# undoes all of them, then removes Keyloom's own saved state and the xremap
-# package, so the wizard can be exercised again from scratch:
+# Keyloom's first-run setup changes a few things on a system. This script
+# undoes all of them, then removes Keyloom's own saved state, the xremap
+# package, and Keyloom's own download of xremap, so the wizard can be
+# exercised again from scratch:
 #
 #   1. The xremap.service systemd *user* unit Keyloom installs
 #      (~/.config/systemd/user/xremap.service) — stopped, disabled, and
@@ -23,6 +24,10 @@
 #      also removes the udev rule the package ships. On systems without
 #      apt, or with an xremap that no package owns, this step only reports
 #      what it found.
+#   6. Keyloom's own download of xremap (~/.local/bin/xremap), when the
+#      file there is byte for byte a release Keyloom downloads (checked
+#      against the digests in src/install.rs). A binary placed there by
+#      hand is reported and left alone.
 #
 # What it does NOT touch:
 #   - Hand-written xremap configs. Only keyloom.yml* is removed.
@@ -99,6 +104,7 @@ KEYLOOM_STORE="$CONFIG_HOME/cosmic/io.github.blakegardner.Keyloom"
 RULES_FILE=/etc/udev/rules.d/00-xremap-input.rules
 MODULES_FILE=/etc/modules-load.d/uinput.conf
 INPUT_GROUP=input
+DOWNLOADED_XREMAP="$HOME/.local/bin/xremap"
 
 # --- confirmation ------------------------------------------------------------
 
@@ -107,6 +113,14 @@ xremap_packages() {
     command -v dpkg-query >/dev/null 2>&1 || return 0
     dpkg-query -W -f='${Package} ${Status}\n' 'xremap*' 2>/dev/null \
         | awk '$NF == "installed" { print $1 }'
+}
+
+# Whether a file is byte for byte one of the xremap releases Keyloom
+# downloads, judged by the digests recorded in src/install.rs.
+is_keyloom_download() {
+    command -v sha256sum >/dev/null 2>&1 || return 1
+    digest=$(sha256sum -- "$1" | cut -d' ' -f1)
+    grep -q "\"$digest\"" "$(dirname "$0")/../src/install.rs"
 }
 
 echo "This resets Keyloom's first-run setup on this machine for user $USER:"
@@ -121,6 +135,13 @@ elif command -v xremap >/dev/null 2>&1; then
     echo "  - xremap at $(command -v xremap) is not from a Debian package and stays installed"
 else
     echo "  - xremap is not installed"
+fi
+if [ -e "$DOWNLOADED_XREMAP" ]; then
+    if is_keyloom_download "$DOWNLOADED_XREMAP"; then
+        echo "  - delete Keyloom's downloaded xremap, $DOWNLOADED_XREMAP"
+    else
+        echo "  - $DOWNLOADED_XREMAP was not downloaded by Keyloom and stays"
+    fi
 fi
 echo "Steps marked with sudo ask for your password."
 
@@ -180,6 +201,20 @@ elif command -v xremap >/dev/null 2>&1; then
     echo "  'xremap missing' path is being tested"
 else
     echo "  not installed"
+fi
+
+# --- 2b. Keyloom's own download of xremap ------------------------------------
+
+step "Removing Keyloom's downloaded xremap"
+if [ -e "$DOWNLOADED_XREMAP" ]; then
+    if is_keyloom_download "$DOWNLOADED_XREMAP"; then
+        run rm -f -- "$DOWNLOADED_XREMAP"
+    else
+        echo "  $DOWNLOADED_XREMAP is not a release Keyloom downloads; remove it by hand"
+        echo "  if the 'xremap missing' path is being tested"
+    fi
+else
+    echo "  none"
 fi
 
 # --- 3. The input group ------------------------------------------------------

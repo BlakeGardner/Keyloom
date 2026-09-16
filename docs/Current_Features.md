@@ -11,8 +11,8 @@ configuration file at `~/.config/xremap/keyloom.yml` on every change (see
 "Persistence and generated configuration" below). Keyloom applies changes
 by restarting the `xremap.service` systemd user unit automatically;
 first-run setup installs that unit and walks through the input permissions
-(see "First-run setup" below). Installing xremap itself is still up to the
-user.
+(see "First-run setup" below), and downloads xremap itself into the user's
+`~/.local/bin` when none is installed.
 
 ## Application shell
 
@@ -135,8 +135,9 @@ user.
   scope's applications, renaming, and removing the scope (with
   confirmation, undoable; its remaps and shortcuts go with it).
 - The application picker lists the applications open right now first,
-  named exactly as remapping sees them (Keyloom asks the installed xremap
-  with `--list-windows`, which exits before it touches any input device),
+  named exactly as remapping sees them (Keyloom asks the same xremap the
+  service runs, told about the same desktop, with `--list-windows`, which
+  exits before it touches any input device),
   then the installed applications from their desktop entries with their
   icons, with a search box, and a field to type an application id for
   anything not listed. An application belongs to at most one scope per
@@ -155,10 +156,12 @@ user.
 - One context at a time: showing an application scope leaves the layer
   and the other way round. Layer jobs behave the same in every application.
 - Application ids are matched exactly (case included), the way xremap
-  matches them. Matching needs an xremap build that can ask the desktop
-  which window is in front (the COSMIC build on COSMIC; GNOME and KDE need
-  xremap's extension or script); the picker explains when it could not ask
-  which applications are open.
+  matches them. Matching needs an xremap build with a client for this
+  desktop (the `full` build Keyloom downloads has one for every desktop;
+  GNOME's Wayland session also needs xremap's GNOME Shell extension).
+  Setup's xremap step says whether this build can tell which window is in
+  front here, and the picker explains when it could not ask which
+  applications are open.
 
 ## Profiles
 
@@ -329,17 +332,29 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 
 ## First-run setup
 
-Keyloom assumes xremap is already installed; setup takes it from there. A
-wizard opens the first time Keyloom runs (and from the ⋯ menu or the
-header's status chip afterwards) and walks through four checks, fixing
-what it can one step at a time. Keyloom itself stays unprivileged: changes
-to the system go through the desktop's authentication prompt (`pkexec`),
-one prompt per step. Pages stay high level; paths, the unit, and the exact
-commands sit behind a "Show details" toggle that is off by default.
+Setup starts from a system with or without xremap. A wizard opens the first
+time Keyloom runs (and from the ⋯ menu or the header's status chip
+afterwards) and walks through four checks, fixing what it can one step at a
+time. Keyloom itself stays unprivileged: changes to the system go through
+the desktop's authentication prompt (`pkexec`), one prompt per step. Pages
+stay high level; paths, the unit, and the exact commands sit behind a "Show
+details" toggle that is off by default.
 
-- **xremap** — finds the binary on `PATH` and shows its version. A missing
-  xremap is explained, not installed: the explanation links to the project's
-  page, which opens in the browser, and editing keeps working.
+- **xremap** — finds the binary on `PATH`, or Keyloom's own download in
+  `~/.local/bin`, and shows its version, whether Keyloom downloaded it, and
+  whether its build can tell which window is in front on this desktop, so
+  application-specific remaps can work; on GNOME's Wayland session the step
+  links to xremap's GNOME Shell extension, which matching there needs. With
+  no xremap at all, "Download xremap" fetches the release Keyloom was tested
+  with (its `full` build, with a client for every desktop) from the project's
+  GitHub releases into `~/.local/bin`: no administrator access is needed,
+  the download is checked against the digest recorded in Keyloom before
+  anything is written, and the binary is asked for its version before it
+  is put in place. Keyloom's own download is offered an update when Keyloom
+  moves to a newer release; a binary the user installed is never touched.
+  Processors without an xremap release (anything but x86_64 and aarch64)
+  get an explanation and a link to the project page instead. Editing keeps
+  working throughout.
 - **Keyboard access** — checks membership in the `input` group, telling
   membership that is in effect apart from membership that still needs a
   new login. "Add me to the input group" runs `usermod -aG input` and
@@ -351,10 +366,15 @@ commands sit behind a "Show details" toggle that is off by default.
   recognized.
 - **Remapping service** — installs Keyloom's own `xremap.service` user unit
   under `~/.config/systemd/user/`, modeled on a hand-written unit proven on
-  COSMIC: it waits for the compositor's Wayland socket, runs the found
-  binary with `--watch` on `keyloom.yml`, keeps xremap running, and logs at
-  info level (xremap's debug level would write every key press to the
-  journal). Setup then reloads systemd, enables the unit, and starts it when
+  COSMIC: on Wayland sessions it waits for the compositor's socket (X11
+  sessions skip the wait, since none appears), runs the found binary with
+  `--watch` on `keyloom.yml`, names the detected desktop with `--desktop`
+  when the binary lists it (so xremap asks the right compositor for
+  application-specific rules; older builds, and builds without this
+  desktop's client, are left to choose for themselves), keeps xremap
+  running, and logs at info level (xremap's debug level would write every
+  key press to the journal). Setup then reloads systemd, enables the unit,
+  and starts it when
   access is already in effect (otherwise it starts at the next login). No
   password is needed. An existing unit is inspected first:
   one that already reads `keyloom.yml` is left alone; one that does not is
@@ -373,8 +393,11 @@ outside it is ignored so a stray click cannot skip setup.
 Limitations: the authentication prompt is polkit's generic one, naming
 `usermod` or `/bin/sh` rather than Keyloom; a unit the user wrote can only
 be replaced or kept, not merged with Keyloom's configuration; an xremap
-running as another user (a system service) is not noticed; and no sample
-remap is verified end to end.
+running as another user (a system service) is not noticed; logging into a
+different desktop leaves the unit naming the old one until "Update service"
+is clicked in setup; a distribution's xremap older than 0.15.13 gets
+neither the download nor `--desktop`; and no sample remap is verified end
+to end.
 
 ## Applying (xremap service)
 
@@ -404,5 +427,5 @@ remap is verified end to end.
   that off afterwards.
 - A unit the user wrote must read `keyloom.yml` itself: setup points this
   out and offers to replace it, but never edits its `ExecStart`.
-- Keyloom assumes xremap is installed; the unit and permissions are handled
-  by first-run setup (see above).
+- xremap itself, the unit, and the permissions are handled by first-run
+  setup (see above), which downloads xremap when none is installed.

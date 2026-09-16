@@ -1,15 +1,18 @@
-//! First-run system setup: the checks and fixes that take a system
-//! with xremap installed to working remapping.
+//! First-run system setup: the checks and fixes that take a fresh
+//! system to working remapping.
 //!
 //! Beyond Keyloom itself, remapping needs four things: the xremap
-//! binary, read access to keyboards (membership in the `input` group),
-//! write access to `/dev/uinput` for the virtual keyboard xremap types
-//! on (a udev rule, plus the `uinput` module), and a systemd user unit
-//! that runs xremap with Keyloom's generated configuration. [`probe`]
-//! finds out where the system stands on each; the action functions fix
-//! one step at a time, asking for administrator authorization through
-//! the desktop's polkit prompt (`pkexec`) where a change needs it.
-//! Keyloom itself stays unprivileged throughout.
+//! binary (found on `PATH`, or downloaded by Keyloom into the user's
+//! `~/.local/bin` when there is none; see [`crate::install`]), read
+//! access to keyboards (membership in the `input` group), write access
+//! to `/dev/uinput` for the virtual keyboard xremap types on (a udev
+//! rule, plus the `uinput` module), and a systemd user unit that runs
+//! xremap with Keyloom's generated configuration, told which desktop to
+//! ask for application-specific rules. [`probe`] finds out where the
+//! system stands on each; the action functions fix one step at a time,
+//! asking for administrator authorization through the desktop's polkit
+//! prompt (`pkexec`) where a change needs it. Keyloom itself stays
+//! unprivileged throughout.
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -19,7 +22,9 @@ use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
+use crate::install;
 use crate::service;
+use crate::session::{Desktop, Session};
 use crate::xremap;
 
 /// The group Linux grants keyboard (`/dev/input`) access to.
@@ -51,6 +56,11 @@ pub const UINPUT: &str = "/dev/uinput";
 /// Where to get xremap when it is not installed.
 pub const XREMAP_URL: &str = "https://github.com/xremap/xremap#installation";
 
+/// xremap's GNOME Shell extension, which its GNOME client asks for the
+/// window in front; without it, application-specific rules cannot
+/// match on GNOME's Wayland session.
+pub const XREMAP_GNOME_EXTENSION_URL: &str = "https://extensions.gnome.org/extension/5060/xremap/";
+
 /// What runs as the administrator to prepare `/dev/uinput`: install the
 /// rule, make sure the module is loaded now and at boot, and apply the
 /// rule to the existing device node.
@@ -66,7 +76,7 @@ pub const UINPUT_SCRIPT: &str = "set -e\n\
 /// The setup steps, in the order the wizard walks them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
-    /// The xremap binary is on `PATH`.
+    /// The xremap binary is installed.
     Xremap,
     /// The user may read keyboards.
     InputGroup,
@@ -99,15 +109,24 @@ impl Step {
     }
 }
 
-/// Whether the xremap binary could be found.
+/// Whether the xremap binary could be found, and what it can do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum XremapCheck {
     Found {
         path: PathBuf,
         /// What `xremap --version` reported, when it ran.
         version: Option<String>,
+        /// The desktops this build can ask which window is in front,
+        /// from `xremap --list-desktops`. `None` when the binary has no
+        /// such flag (before xremap 0.15.13) or its answer was not
+        /// understood.
+        desktops: Option<Vec<Desktop>>,
+        /// Keyloom's own download: at [`install::managed_path`] and,
+        /// byte for byte, a release Keyloom ships. A binary the user put
+        /// there themselves is not.
+        managed: bool,
     },
-    /// Not on `PATH`.
+    /// Neither on `PATH` nor where Keyloom would have put it.
     Missing,
 }
 
@@ -185,6 +204,37 @@ pub enum ServiceAction {
     Start,
 }
 
+/// What the xremap step can do next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XremapAction {
+    /// Download the release Keyloom ships into the user's `~/.local/bin`.
+    Download,
+    /// Replace Keyloom's own download with the release it ships now.
+    Update,
+}
+
+/// Whether application-specific remaps can work here: whether the
+/// installed xremap can tell which window is in front on this desktop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppMatching {
+    /// No xremap to ask.
+    NotInstalled,
+    /// The build has a client for this desktop.
+    Supported(Desktop),
+    /// The build has no client for this desktop; `supports` lists the
+    /// desktops it does have one for.
+    Unsupported {
+        desktop: Desktop,
+        supports: Vec<Desktop>,
+    },
+    /// The build does not say which desktops it supports (before xremap
+    /// 0.15.13), so it picks on its own.
+    Unreported,
+    /// Keyloom could not tell which desktop this is, so xremap picks on
+    /// its own.
+    UnknownDesktop,
+}
+
 /// Everything setup learned about the system in one pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Facts {
@@ -200,6 +250,8 @@ pub struct Facts {
     pub unit: UnitCheck,
     /// Keyloom's generated configuration, which the unit must read.
     pub config: Option<PathBuf>,
+    /// The desktop this session runs on, which the unit tells xremap.
+    pub session: Session,
 }
 
 impl Facts {
@@ -212,6 +264,50 @@ impl Facts {
     /// The installed xremap binary, if there is one.
     pub fn xremap_path(&self) -> Option<&Path> {
         self.xremap.path()
+    }
+
+    /// How the unit should start this xremap on this session.
+    pub fn launch(&self) -> service::Launch {
+        launch_for(&self.xremap, self.session)
+    }
+
+    /// The change the xremap step offers, if any: a download when there
+    /// is no xremap at all, an update when Keyloom's own download is not
+    /// the release it ships now. Both need a release for this processor
+    /// and a home directory to put it in. A copy the user installed
+    /// themselves is never touched, wherever it is.
+    pub fn xremap_action(&self) -> Option<XremapAction> {
+        if install::asset().is_none() || install::managed_path().is_none() {
+            return None;
+        }
+        match &self.xremap {
+            XremapCheck::Missing => Some(XremapAction::Download),
+            XremapCheck::Found {
+                managed: true,
+                version,
+                ..
+            } if version.as_deref() != Some(install::RELEASE) => Some(XremapAction::Update),
+            XremapCheck::Found { .. } => None,
+        }
+    }
+
+    /// Whether application-specific remaps can work with this xremap on
+    /// this desktop.
+    pub fn app_matching(&self) -> AppMatching {
+        let XremapCheck::Found { desktops, .. } = &self.xremap else {
+            return AppMatching::NotInstalled;
+        };
+        let Some(desktop) = self.session.desktop else {
+            return AppMatching::UnknownDesktop;
+        };
+        match desktops {
+            None => AppMatching::Unreported,
+            Some(supports) if supports.contains(&desktop) => AppMatching::Supported(desktop),
+            Some(supports) => AppMatching::Unsupported {
+                desktop,
+                supports: supports.clone(),
+            },
+        }
     }
 
     /// Whether the step is in order.
@@ -330,10 +426,12 @@ pub async fn probe() -> Facts {
     let group = group_check(&groups, &status, user.as_deref());
     let uinput = uinput_check_at(Path::new(UINPUT), rule_installed).await;
     let config = xremap::config_path();
+    let session = Session::detect();
+    let launch = launch_for(&xremap, session);
     let expected = xremap
         .path()
         .zip(config.as_deref())
-        .map(|(binary, config)| service::unit_file(binary, config));
+        .map(|(binary, config)| service::unit_file(binary, config, launch));
     let unit = unit_check(unit, expected.as_deref(), config.as_deref()).await;
     Facts {
         user,
@@ -342,7 +440,44 @@ pub async fn probe() -> Facts {
         uinput,
         unit,
         config,
+        session,
     }
+}
+
+/// How to start a given xremap on a given session: name the desktop
+/// only when the binary lists it (a binary without `--list-desktops`
+/// would refuse `--desktop` altogether, and one without this desktop's
+/// client would ask nothing at all), and wait for a Wayland socket only
+/// where one will appear.
+pub fn launch_for(xremap: &XremapCheck, session: Session) -> service::Launch {
+    let supported = match xremap {
+        XremapCheck::Found {
+            desktops: Some(desktops),
+            ..
+        } => Some(desktops.as_slice()),
+        XremapCheck::Found { desktops: None, .. } | XremapCheck::Missing => None,
+    };
+    launch_with(supported, session)
+}
+
+fn launch_with(supported: Option<&[Desktop]>, session: Session) -> service::Launch {
+    let desktop = session
+        .desktop
+        .filter(|desktop| supported.is_some_and(|supported| supported.contains(desktop)));
+    service::Launch {
+        desktop,
+        wait_for_wayland: !session.x11,
+    }
+}
+
+/// The binary and the way to start it, for running xremap outside the
+/// unit (the application picker's `--list-windows`): the same binary
+/// the unit would run, told about the same desktop.
+pub async fn xremap_invocation() -> Option<(PathBuf, service::Launch)> {
+    let path = locate_xremap().await?;
+    let desktops = list_desktops(&path).await;
+    let launch = launch_with(desktops.as_deref(), Session::detect());
+    Some((path, launch))
 }
 
 /// A text file's contents, or nothing when it cannot be read: every
@@ -351,19 +486,107 @@ async fn read_or_empty(path: &str) -> String {
     tokio::fs::read_to_string(path).await.unwrap_or_default()
 }
 
-/// Look for the xremap binary on `PATH` and ask it for its version.
+/// Look for the xremap binary and ask it what it is: its version, and
+/// which desktops it can ask which window is in front. Both questions
+/// make xremap exit before it touches any input device.
 async fn xremap_check() -> XremapCheck {
-    let Some(path) = find_on_path("xremap", std::env::var_os("PATH").as_deref()).await else {
+    let Some(path) = locate_xremap().await else {
         return XremapCheck::Missing;
     };
-    let version = Command::new(&path)
+    let (version, desktops, managed) =
+        tokio::join!(version_of(&path), list_desktops(&path), is_managed(&path));
+    XremapCheck::Found {
+        path,
+        version,
+        desktops,
+        managed,
+    }
+}
+
+/// The xremap binary: the first on `PATH`, else Keyloom's own download,
+/// which need not be on `PATH` at all.
+pub async fn locate_xremap() -> Option<PathBuf> {
+    locate_in(
+        std::env::var_os("PATH").as_deref(),
+        install::managed_path().as_deref(),
+    )
+    .await
+}
+
+/// [`locate_xremap`] over an explicit `PATH` value and download location.
+async fn locate_in(path: Option<&OsStr>, managed: Option<&Path>) -> Option<PathBuf> {
+    if let Some(found) = find_on_path("xremap", path).await {
+        return Some(found);
+    }
+    match managed {
+        Some(managed) if is_executable(managed).await => Some(managed.to_path_buf()),
+        _ => None,
+    }
+}
+
+/// What `xremap --version` reports, when it runs.
+async fn version_of(path: &Path) -> Option<String> {
+    Command::new(path)
         .arg("--version")
         .output()
         .await
         .ok()
         .filter(|output| output.status.success())
-        .and_then(|output| parse_version(&String::from_utf8_lossy(&output.stdout)));
-    XremapCheck::Found { path, version }
+        .and_then(|output| parse_version(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The desktops a binary can ask, from `xremap --list-desktops`. A
+/// binary without the flag exits with an error, and an answer in an
+/// unexpected shape is not guessed at: both give `None`.
+async fn list_desktops(path: &Path) -> Option<Vec<Desktop>> {
+    let output = Command::new(path)
+        .arg("--list-desktops")
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    parse_desktops(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Read `This variant of xremap supports: GNOME, KDE, …`. Names that
+/// are not desktops (the `Socket` bridge) are skipped; without the
+/// line, nothing is known.
+pub(crate) fn parse_desktops(stdout: &str) -> Option<Vec<Desktop>> {
+    let list = stdout
+        .lines()
+        .find_map(|line| line.split_once("supports:").map(|(_, list)| list))?;
+    Some(
+        list.split(',')
+            .filter_map(Desktop::from_list_name)
+            .collect(),
+    )
+}
+
+/// Whether a binary is Keyloom's own download: where Keyloom puts it,
+/// and byte for byte a release Keyloom ships. Hashing a few megabytes
+/// only happens for a binary at that one path.
+async fn is_managed(path: &Path) -> bool {
+    let Some(managed) = install::managed_path() else {
+        return false;
+    };
+    if !same_file(path, &managed).await {
+        return false;
+    }
+    let Ok(bytes) = tokio::fs::read(path).await else {
+        return false;
+    };
+    tokio::task::spawn_blocking(move || install::known_release(&bytes).is_some())
+        .await
+        .unwrap_or(false)
+}
+
+/// Whether two paths name the same file, following symlinks where the
+/// paths resolve.
+async fn same_file(a: &Path, b: &Path) -> bool {
+    match tokio::join!(tokio::fs::canonicalize(a), tokio::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 /// The first executable named `name` in a `PATH`-style list.
@@ -644,6 +867,12 @@ impl From<service::Error> for ActionError {
     }
 }
 
+impl From<install::Error> for ActionError {
+    fn from(err: install::Error) -> Self {
+        Self::Failed(err.to_string())
+    }
+}
+
 /// Run a program as the administrator through the desktop's polkit
 /// prompt.
 async fn privileged(program: &str, args: &[&str]) -> Result<(), ActionError> {
@@ -698,6 +927,26 @@ pub async fn prepare_uinput() -> Result<(), ActionError> {
     privileged("/bin/sh", &["-c", UINPUT_SCRIPT]).await
 }
 
+/// Carry out the xremap step: download the release Keyloom ships into
+/// the user's `~/.local/bin`, which is also how Keyloom's own download
+/// is updated. A running unit of Keyloom's is restarted so the new
+/// binary takes over. Nothing here needs the administrator.
+///
+/// # Errors
+///
+/// When the download, its verification, or the install fails, or when
+/// `systemctl` refuses the restart.
+pub async fn install_xremap(facts: &Facts) -> Result<(), ActionError> {
+    install::download_and_install().await?;
+    if matches!(
+        facts.unit,
+        UnitCheck::Keyloom { active: true, .. } | UnitCheck::Stale { active: true }
+    ) {
+        service::restart().await?;
+    }
+    Ok(())
+}
+
 /// Carry out the service step. Everything here runs as the user.
 ///
 /// # Errors
@@ -713,7 +962,7 @@ pub async fn run_service_action(action: ServiceAction, facts: &Facts) -> Result<
             "xremap must be installed before the service can be set up".to_owned(),
         ));
     };
-    let text = service::unit_file(binary, config);
+    let text = service::unit_file(binary, config, facts.launch());
     let write_failed = |err: &dyn fmt::Display| {
         ActionError::Failed(format!("could not write the service file: {err}"))
     };
@@ -744,12 +993,15 @@ mod tests {
     const PASSWD: &str =
         "root:x:0:0:root:/root:/bin/bash\nblake:x:1000:1000::/home/blake:/bin/zsh\n";
 
+    /// A COSMIC session with a distribution's xremap that can ask it.
     fn facts() -> Facts {
         Facts {
             user: Some("blake".to_owned()),
             xremap: XremapCheck::Found {
                 path: PathBuf::from("/usr/bin/xremap"),
-                version: Some("0.15.12".to_owned()),
+                version: Some("0.15.13".to_owned()),
+                desktops: Some(vec![Desktop::Cosmic]),
+                managed: false,
             },
             group: GroupCheck::Effective,
             uinput: UinputCheck::Writable,
@@ -758,6 +1010,20 @@ mod tests {
                 enabled: true,
             },
             config: Some(PathBuf::from("/home/blake/.config/xremap/keyloom.yml")),
+            session: Session {
+                desktop: Some(Desktop::Cosmic),
+                x11: false,
+            },
+        }
+    }
+
+    /// Keyloom's own download of the release it ships.
+    fn managed(version: &str) -> XremapCheck {
+        XremapCheck::Found {
+            path: install::managed_path().expect("a home directory"),
+            version: Some(version.to_owned()),
+            desktops: Some(Desktop::ALL.to_vec()),
+            managed: true,
         }
     }
 
@@ -912,9 +1178,202 @@ mod tests {
     }
 
     #[test]
+    fn the_supported_desktops_are_read_off_the_list() {
+        assert_eq!(
+            parse_desktops(
+                "This variant of xremap supports: GNOME, KDE, Hypr, Niri, wlroots, COSMIC, Pantheon, X11, Socket\n"
+            ),
+            Some(Desktop::ALL.to_vec()),
+            "every desktop, without the bridge"
+        );
+        assert_eq!(
+            parse_desktops("This variant of xremap supports: COSMIC\n"),
+            Some(vec![Desktop::Cosmic])
+        );
+        assert_eq!(
+            parse_desktops("This variant of xremap supports: \n"),
+            Some(Vec::new()),
+            "a build with no desktop client at all"
+        );
+        assert_eq!(
+            parse_desktops("error: unexpected argument '--list-desktops' found\n"),
+            None,
+            "an older xremap, or an answer in another shape"
+        );
+        assert_eq!(parse_desktops(""), None);
+    }
+
+    #[test]
+    fn the_desktop_is_named_only_when_the_binary_can_ask_it() {
+        let cosmic = Session {
+            desktop: Some(Desktop::Cosmic),
+            x11: false,
+        };
+        let full = facts().xremap;
+        assert_eq!(
+            launch_for(&full, cosmic),
+            service::Launch {
+                desktop: Some(Desktop::Cosmic),
+                wait_for_wayland: true,
+            }
+        );
+
+        let gnome_only = XremapCheck::Found {
+            path: PathBuf::from("/usr/bin/xremap"),
+            version: Some("0.15.13".to_owned()),
+            desktops: Some(vec![Desktop::Gnome]),
+            managed: false,
+        };
+        assert_eq!(
+            launch_for(&gnome_only, cosmic),
+            service::Launch::default(),
+            "a build without this desktop's client is left to its own devices"
+        );
+
+        let old = XremapCheck::Found {
+            path: PathBuf::from("/usr/bin/xremap"),
+            version: Some("0.15.12".to_owned()),
+            desktops: None,
+            managed: false,
+        };
+        assert_eq!(
+            launch_for(&old, cosmic),
+            service::Launch::default(),
+            "a binary without --list-desktops would refuse --desktop"
+        );
+        assert_eq!(
+            launch_for(&XremapCheck::Missing, cosmic),
+            service::Launch::default()
+        );
+
+        let x11 = Session {
+            desktop: Some(Desktop::X11),
+            x11: true,
+        };
+        assert_eq!(
+            launch_for(&managed("0.15.13"), x11),
+            service::Launch {
+                desktop: Some(Desktop::X11),
+                wait_for_wayland: false,
+            },
+            "no Wayland socket to wait for on X11"
+        );
+        assert_eq!(
+            launch_for(&full, Session::default()),
+            service::Launch::default(),
+            "an unrecognized desktop is left to xremap"
+        );
+    }
+
+    #[test]
+    fn the_xremap_step_offers_a_download_or_an_update_for_keylooms_own_copy() {
+        if install::asset().is_none() || install::managed_path().is_none() {
+            // Nothing to offer on this processor, or without a home.
+            return;
+        }
+        let mut facts = facts();
+        assert_eq!(
+            facts.xremap_action(),
+            None,
+            "a distribution's xremap is theirs"
+        );
+
+        facts.xremap = XremapCheck::Missing;
+        assert_eq!(facts.xremap_action(), Some(XremapAction::Download));
+
+        facts.xremap = managed(install::RELEASE);
+        assert_eq!(
+            facts.xremap_action(),
+            None,
+            "already the release Keyloom ships"
+        );
+
+        facts.xremap = managed("0.15.12");
+        assert_eq!(facts.xremap_action(), Some(XremapAction::Update));
+
+        // The user's own binary at Keyloom's location is never replaced.
+        facts.xremap = XremapCheck::Found {
+            path: install::managed_path().expect("a home directory"),
+            version: Some("0.15.12".to_owned()),
+            desktops: Some(Desktop::ALL.to_vec()),
+            managed: false,
+        };
+        assert_eq!(facts.xremap_action(), None);
+    }
+
+    #[test]
+    fn application_matching_follows_the_build_and_the_desktop() {
+        let mut facts = facts();
+        assert_eq!(
+            facts.app_matching(),
+            AppMatching::Supported(Desktop::Cosmic)
+        );
+
+        facts.session.desktop = Some(Desktop::Gnome);
+        assert_eq!(
+            facts.app_matching(),
+            AppMatching::Unsupported {
+                desktop: Desktop::Gnome,
+                supports: vec![Desktop::Cosmic],
+            }
+        );
+
+        facts.xremap = XremapCheck::Found {
+            path: PathBuf::from("/usr/bin/xremap"),
+            version: Some("0.15.12".to_owned()),
+            desktops: None,
+            managed: false,
+        };
+        assert_eq!(facts.app_matching(), AppMatching::Unreported);
+
+        facts.session.desktop = None;
+        assert_eq!(facts.app_matching(), AppMatching::UnknownDesktop);
+
+        facts.xremap = XremapCheck::Missing;
+        assert_eq!(facts.app_matching(), AppMatching::NotInstalled);
+    }
+
+    #[tokio::test]
+    async fn the_binary_on_path_wins_over_keylooms_download() {
+        let dir = TempDir::new("setup-locate");
+        let bin = dir.path().join("bin");
+        let local = dir.path().join(".local").join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        let on_path = bin.join("xremap");
+        let downloaded = local.join("xremap");
+        let path = std::env::join_paths([&bin]).unwrap();
+
+        assert_eq!(locate_in(Some(&path), Some(&downloaded)).await, None);
+        fs::write(&downloaded, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&downloaded, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            locate_in(Some(&path), Some(&downloaded)).await,
+            Some(downloaded.clone()),
+            "the download is found even though its directory is not on PATH"
+        );
+        assert_eq!(
+            locate_in(None, Some(&downloaded)).await,
+            Some(downloaded.clone())
+        );
+        fs::write(&on_path, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&on_path, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            locate_in(Some(&path), Some(&downloaded)).await,
+            Some(on_path),
+            "a copy the user has on PATH comes first"
+        );
+        assert_eq!(locate_in(None, None).await, None);
+    }
+
+    #[test]
     fn units_are_classified_by_marker_and_contents() {
         let config = Path::new("/home/me/.config/xremap/keyloom.yml");
-        let ours = service::unit_file(Path::new("/usr/bin/xremap"), config);
+        let ours = service::unit_file(
+            Path::new("/usr/bin/xremap"),
+            config,
+            service::Launch::default(),
+        );
         let classify = |active, enabled, text: Option<&str>| {
             classify_unit(
                 active,
@@ -935,10 +1394,27 @@ mod tests {
                 enabled: true
             }
         );
-        let moved = service::unit_file(Path::new("/usr/local/bin/xremap"), config);
+        let moved = service::unit_file(
+            Path::new("/usr/local/bin/xremap"),
+            config,
+            service::Launch::default(),
+        );
         assert_eq!(
             classify(false, true, Some(&moved)),
             UnitCheck::Stale { active: false }
+        );
+        let named = service::unit_file(
+            Path::new("/usr/bin/xremap"),
+            config,
+            service::Launch {
+                desktop: Some(Desktop::Cosmic),
+                wait_for_wayland: true,
+            },
+        );
+        assert_eq!(
+            classify(true, true, Some(&named)),
+            UnitCheck::Stale { active: true },
+            "a unit naming a desktop the binary no longer would is stale, and vice versa"
         );
 
         let theirs = "[Service]\nExecStart=/usr/bin/xremap --watch /home/me/other.yml\n";

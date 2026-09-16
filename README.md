@@ -53,9 +53,10 @@ response. Pause remapping from the app when you need to test its original keys.
 Visit the **[releases page](https://github.com/BlakeGardner/Keyloom/releases)**
 for downloads and release notes.
 
-Keyloom is in early development. It needs
-[xremap](https://github.com/xremap/xremap) installed; a guided first-run
-setup then takes care of the background service and input permissions.
+Keyloom is in early development. It does its remapping through
+[xremap](https://github.com/xremap/xremap): a guided first-run setup
+downloads it if it isn't installed, then takes care of the background
+service and input permissions.
 
 ## What's next
 

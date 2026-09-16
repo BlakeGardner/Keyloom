@@ -4,9 +4,11 @@
 mod app;
 mod apps;
 mod config;
+mod install;
 mod keyboard;
 mod monitor;
 mod service;
+mod session;
 mod setup;
 #[cfg(test)]
 mod testing;
