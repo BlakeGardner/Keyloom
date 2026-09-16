@@ -2215,6 +2215,10 @@ impl App {
         use evdev::KeyCode as K;
 
         let escape = scancode == K::KEY_ESC.0;
+        // Every press counts as held from here on, whatever the app is
+        // doing with it: a chord's modifiers are read from this set
+        // when its key arrives, and the tester lights held keys up.
+        self.pressed.insert((device.clone(), scancode));
         // evdev is global: never dismiss UI from this stream. Escape is
         // handled once by the focused window's on_escape callback instead.
         if self.about_open || self.confirm_reset_mappings.is_some() {
@@ -2260,7 +2264,6 @@ impl App {
                 },
             );
             self.recording = None;
-            self.pressed.insert((device.clone(), scancode));
             return;
         }
 
@@ -2269,7 +2272,6 @@ impl App {
             let Some(cap) = key_by_evdev(scancode) else {
                 return;
             };
-            self.pressed.insert((device.clone(), scancode));
             self.set_layer_trigger(cap.code);
             return;
         }
@@ -2282,7 +2284,6 @@ impl App {
             let Some(cap) = key_by_evdev(scancode) else {
                 return;
             };
-            self.pressed.insert((device.clone(), scancode));
             self.select_key(cap.code);
             return;
         }
@@ -2297,7 +2298,6 @@ impl App {
                 return;
             };
             self.capture = false;
-            self.pressed.insert((device.clone(), scancode));
             let action = key_name(cap.code);
             if self.layer.is_some() {
                 self.set_layer_job(selected, &action);
@@ -2309,7 +2309,6 @@ impl App {
             return;
         }
 
-        self.pressed.insert((device.clone(), scancode));
         if self.shows_input_from(device)
             && let Some(cap) = key_by_evdev(scancode)
         {
@@ -6374,5 +6373,35 @@ mod tests {
             app.last.as_ref().map(|last| last.code),
             Some("MediaPlayPause")
         );
+    }
+
+    /// A modifier pressed after Record was clicked counts for the
+    /// chord: every press is tracked as held, whatever the app is
+    /// doing with it, and the release lets go of it again.
+    #[test]
+    fn recording_sees_modifiers_pressed_after_record_starts() {
+        let mut app = app();
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::AddGroup);
+        let _ = app.update(Message::EditRule {
+            group: 0,
+            rule: None,
+        });
+        // A Command key the running remapper turns into Right Control
+        // arrives as Right Control from the remapper's own keyboard.
+        let device = PathBuf::from("/dev/input/event19");
+        app.phys_press(&device, evdev::KeyCode::KEY_RIGHTCTRL.0);
+        assert!(app.is_pressed(evdev::KeyCode::KEY_RIGHTCTRL.0));
+        app.phys_press(&device, evdev::KeyCode::KEY_W.0);
+        let rule = &app.groups()[0].rules[0];
+        assert_eq!(rule.from.mods, vec!["Ctrl".to_owned()]);
+        assert_eq!(rule.from.key, "W");
+        assert_eq!(app.recording, None);
+
+        let _ = app.update(Message::Monitor(monitor::Event::Key {
+            device,
+            event: monitor::KeyEvent::Released(evdev::KeyCode::KEY_RIGHTCTRL.0),
+        }));
+        assert!(!app.is_pressed(evdev::KeyCode::KEY_RIGHTCTRL.0));
     }
 }

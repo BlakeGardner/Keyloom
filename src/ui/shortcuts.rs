@@ -6,7 +6,7 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, EditRule, Message, Popover, Side};
-use crate::ui::model::{Chord, modifier_short};
+use crate::ui::model::{Chord, MODS, modifier_short};
 use crate::ui::theme::{
     ButtonStyle, accent, accent_button, accent_filled, ghost_button, muted, oklch, quiet, tint,
     white,
@@ -388,11 +388,18 @@ pub fn rule_editor<'a>(app: &'a App) -> Element<'a, Message> {
 
     let chord_box = |side: Side, chord: Option<&'a Chord>| {
         let recording = app.recording == Some(side);
-        container(match (side, chord) {
-            // The input chord's modifiers open the side chooser.
-            (Side::From, Some(chord)) => input_pills(app, chord),
-            (Side::To, Some(chord)) => chord_pills(chord),
-            (_, None) => chord_pills(&Chord::default()),
+        container(if recording {
+            // While listening, the modifiers held right now show up as
+            // they are pressed; the key that completes the chord is
+            // still to come.
+            held_pills(app)
+        } else {
+            match (side, chord) {
+                // The input chord's modifiers open the side chooser.
+                (Side::From, Some(chord)) => input_pills(app, chord),
+                (Side::To, Some(chord)) => chord_pills(chord),
+                (_, None) => chord_pills(&Chord::default()),
+            }
         })
         .width(Length::Fill)
         .padding([9, 11])
@@ -432,7 +439,7 @@ pub fn rule_editor<'a>(app: &'a App) -> Element<'a, Message> {
     };
 
     let hint = if app.recording.is_some() {
-        "Hold the modifiers, then press a key. Escape cancels."
+        "Hold the modifiers, then press a key; held modifiers show up as you press them. Escape cancels."
     } else if rule.is_some_and(crate::ui::model::Rule::is_complete) {
         if rule.is_some_and(|rule| rule.from.mods.iter().any(|m| m != "Any")) {
             "Both sides recorded. Click a modifier to match only its left or right key."
@@ -519,6 +526,21 @@ pub fn rule_editor<'a>(app: &'a App) -> Element<'a, Message> {
         .push(chords)
         .push(behaviour)
         .into()
+}
+
+/// The modifiers held at this moment, while a chord is being recorded,
+/// followed by the slot for the key that will complete it.
+fn held_pills(app: &App) -> Element<'_, Message> {
+    let held = app.held_mods();
+    let mut row = widget::row::with_capacity(MODS.len() + 1)
+        .spacing(4)
+        .align_y(Alignment::Center);
+    for (name, on) in MODS.iter().zip(held) {
+        if on {
+            row = row.push(pill(name, Pill::Mod));
+        }
+    }
+    row.push(pill("…", Pill::Empty)).into()
 }
 
 /// The input chord as pills, each modifier a button opening the
