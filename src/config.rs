@@ -11,13 +11,13 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry, cosmic_config_derive::Cosmi
 use serde::{Deserialize, Serialize};
 
 use crate::monitor::KeyboardId;
-use crate::ui::model::{Layer, Maps, Profile};
+use crate::ui::model::{AppScope, Group, Layer, Maps, Profile};
 
 /// The application id, shared with the `cosmic::Application` impl.
 pub const APP_ID: &str = "io.github.blakegardner.Keyloom";
 
-/// One stored profile: identity plus its ordered key mappings and
-/// layers.
+/// One stored profile: identity plus its ordered key mappings,
+/// layers, application scopes, and shortcut groups.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredProfile {
     pub id: String,
@@ -26,6 +26,12 @@ pub struct StoredProfile {
     /// Absent from stores written before layers existed.
     #[serde(default)]
     pub layers: Vec<Layer>,
+    /// Absent from stores written before application scopes existed.
+    #[serde(default)]
+    pub apps: Vec<AppScope>,
+    /// Absent from stores written before shortcut groups were kept.
+    #[serde(default)]
+    pub groups: Vec<Group>,
 }
 
 /// The app's in-memory profile state, as loaded from the store.
@@ -34,6 +40,8 @@ pub struct ProfileState {
     pub profiles: Vec<Profile>,
     pub maps: HashMap<String, Maps>,
     pub layers: HashMap<String, Vec<Layer>>,
+    pub apps: HashMap<String, Vec<AppScope>>,
+    pub groups: HashMap<String, Vec<Group>>,
     /// The active profile id, falling back to the first profile.
     pub active: String,
     pub custom_profiles: u32,
@@ -119,6 +127,8 @@ impl KeyloomConfig {
                     name: profile.name.clone(),
                     mappings: state.maps.get(&profile.id).cloned().unwrap_or_default(),
                     layers: state.layers.get(&profile.id).cloned().unwrap_or_default(),
+                    apps: state.apps.get(&profile.id).cloned().unwrap_or_default(),
+                    groups: state.groups.get(&profile.id).cloned().unwrap_or_default(),
                 })
                 .collect(),
             custom_profiles: state.custom_profiles,
@@ -139,7 +149,9 @@ impl KeyloomConfig {
                 name: stored.name,
             });
             state.maps.insert(stored.id.clone(), stored.mappings);
-            state.layers.insert(stored.id, stored.layers);
+            state.layers.insert(stored.id.clone(), stored.layers);
+            state.apps.insert(stored.id.clone(), stored.apps);
+            state.groups.insert(stored.id, stored.groups);
         }
         state.active = if state
             .profiles
@@ -160,7 +172,42 @@ impl KeyloomConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::model::{Mapping, navigation_layer};
+    use crate::ui::model::{AppRef, Chord, Mapping, Rule, navigation_layer};
+
+    /// A scope covering one application, for the tests.
+    fn terminal_scope() -> AppScope {
+        AppScope {
+            id: "app-1".to_owned(),
+            name: "COSMIC Terminal".to_owned(),
+            apps: vec![AppRef {
+                id: "com.system76.CosmicTerm".to_owned(),
+                name: "COSMIC Terminal".to_owned(),
+                aliases: Vec::new(),
+            }],
+        }
+    }
+
+    /// A shortcut group limited to [`terminal_scope`].
+    fn terminal_group() -> Group {
+        Group {
+            id: "g1".to_owned(),
+            name: "Terminals".to_owned(),
+            scope: "app-1".to_owned(),
+            enabled: true,
+            any_mod: false,
+            rules: vec![Rule {
+                from: Chord {
+                    mods: vec!["Super".to_owned()],
+                    key: "C".to_owned(),
+                },
+                to: Chord {
+                    mods: vec!["Ctrl".to_owned(), "Shift".to_owned()],
+                    key: "C".to_owned(),
+                },
+                note: "Copy".to_owned(),
+            }],
+        }
+    }
 
     #[test]
     fn snapshot_round_trips_through_state() {
@@ -187,10 +234,14 @@ mod tests {
             )],
         );
         let layers = HashMap::from([("custom-1".to_owned(), vec![navigation_layer()])]);
+        let apps = HashMap::from([("custom-1".to_owned(), vec![terminal_scope()])]);
+        let groups = HashMap::from([("custom-1".to_owned(), vec![terminal_group()])]);
         let state = ProfileState {
             profiles: profiles.clone(),
             maps: maps.clone(),
             layers: layers.clone(),
+            apps: apps.clone(),
+            groups: groups.clone(),
             active: "custom-1".to_owned(),
             custom_profiles: 1,
         };
@@ -219,6 +270,10 @@ mod tests {
             Some(&Vec::new()),
             "every profile gets a layer list"
         );
+        assert_eq!(restored.apps.get("custom-1"), apps.get("custom-1"));
+        assert_eq!(restored.groups.get("custom-1"), groups.get("custom-1"));
+        assert_eq!(restored.apps.get("default"), Some(&Vec::new()));
+        assert_eq!(restored.groups.get("default"), Some(&Vec::new()));
         assert_eq!(restored.active, "custom-1");
         assert_eq!(restored.custom_profiles, 1);
     }
@@ -230,8 +285,7 @@ mod tests {
             profiles: vec![StoredProfile {
                 id: "default".to_owned(),
                 name: "Default".to_owned(),
-                mappings: Vec::new(),
-                layers: Vec::new(),
+                ..StoredProfile::default()
             }],
             custom_profiles: 0,
             ..KeyloomConfig::default()
@@ -252,16 +306,30 @@ mod tests {
             profiles: vec![StoredProfile {
                 id: "laptop".to_owned(),
                 name: "Laptop".to_owned(),
-                mappings: vec![(
-                    "CapsLock".to_owned(),
-                    Mapping {
-                        tap: Some("Escape".to_owned()),
-                        hold: Some("Control".to_owned()),
-                        device: "all".to_owned(),
-                        swap: false,
-                    },
-                )],
+                mappings: vec![
+                    (
+                        "CapsLock".to_owned(),
+                        Mapping {
+                            tap: Some("Escape".to_owned()),
+                            hold: Some("Control".to_owned()),
+                            device: "all".to_owned(),
+                            ..Mapping::default()
+                        },
+                    ),
+                    // The same key, kept normal in the terminal.
+                    (
+                        "CapsLock".to_owned(),
+                        Mapping {
+                            device: "all".to_owned(),
+                            app: "app-1".to_owned(),
+                            normal: true,
+                            ..Mapping::default()
+                        },
+                    ),
+                ],
                 layers: vec![navigation_layer()],
+                apps: vec![terminal_scope()],
+                groups: vec![terminal_group()],
             }],
             custom_profiles: 3,
             keyboard_layouts: KeyboardLayouts {
@@ -301,8 +369,7 @@ mod tests {
         let profiles = vec![StoredProfile {
             id: "existing".to_owned(),
             name: "Existing profile".to_owned(),
-            mappings: Vec::new(),
-            layers: Vec::new(),
+            ..StoredProfile::default()
         }];
         handle.set("profiles", &profiles).unwrap();
         handle.set("active_profile", "existing").unwrap();
@@ -321,8 +388,9 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// Profiles saved before layers existed have no `layers` field;
-    /// they load with none rather than failing.
+    /// Profiles saved before layers, application scopes, and shortcut
+    /// groups existed lack those fields, and their mappings lack the
+    /// application scope; they load with none rather than failing.
     #[test]
     fn profiles_stored_without_layers_still_load() {
         use cosmic_config::ConfigSet;
@@ -334,20 +402,28 @@ mod tests {
             cosmic_config::Config::with_custom_path(APP_ID, KeyloomConfig::VERSION, dir.clone())
                 .unwrap();
         #[derive(Serialize)]
+        struct OldMapping {
+            tap: Option<String>,
+            hold: Option<String>,
+            device: String,
+            swap: bool,
+        }
+        #[derive(Serialize)]
         struct OldProfile {
             id: String,
             name: String,
-            mappings: Maps,
+            mappings: Vec<(String, OldMapping)>,
         }
         let old = vec![OldProfile {
             id: "laptop".to_owned(),
             name: "Laptop".to_owned(),
             mappings: vec![(
                 "CapsLock".to_owned(),
-                Mapping {
+                OldMapping {
                     tap: Some("Escape".to_owned()),
+                    hold: None,
                     device: "all".to_owned(),
-                    ..Mapping::default()
+                    swap: false,
                 },
             )],
         }];
@@ -356,8 +432,21 @@ mod tests {
         let loaded = KeyloomConfig::load(&handle);
         assert_eq!(loaded.profiles.len(), 1);
         assert_eq!(loaded.profiles[0].name, "Laptop");
-        assert_eq!(loaded.profiles[0].mappings.len(), 1);
+        assert_eq!(
+            loaded.profiles[0].mappings,
+            vec![(
+                "CapsLock".to_owned(),
+                Mapping {
+                    tap: Some("Escape".to_owned()),
+                    device: "all".to_owned(),
+                    ..Mapping::default()
+                },
+            )],
+            "an old mapping applies in every application"
+        );
         assert!(loaded.profiles[0].layers.is_empty());
+        assert!(loaded.profiles[0].apps.is_empty());
+        assert!(loaded.profiles[0].groups.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

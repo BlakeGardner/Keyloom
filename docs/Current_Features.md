@@ -5,14 +5,14 @@ What Keyloom does today. This is the counterpart to
 missing and defines the 0.1.0 release commitments.
 [Upcoming Features](Upcoming_Features.md) tracks plans beyond that release.
 
-**The big caveat:** shortcut groups are an in-memory preview and live only
-for the current session. Profiles and key mappings, however, are persisted
-via cosmic-config and translated into an xremap configuration file at
-`~/.config/xremap/keyloom.yml` on every change (see "Persistence and
-generated configuration" below). Keyloom applies changes by restarting the
-`xremap.service` systemd user unit automatically; first-run setup installs
-that unit and walks through the input permissions (see "First-run setup"
-below). Installing xremap itself is still up to the user.
+Profiles with their key mappings, layers, application scopes, and shortcut
+groups are persisted via cosmic-config and translated into an xremap
+configuration file at `~/.config/xremap/keyloom.yml` on every change (see
+"Persistence and generated configuration" below). Keyloom applies changes
+by restarting the `xremap.service` systemd user unit automatically;
+first-run setup installs that unit and walks through the input permissions
+(see "First-run setup" below). Installing xremap itself is still up to the
+user.
 
 ## Application shell
 
@@ -46,9 +46,17 @@ below). Installing xremap itself is still up to the user.
   and hold actions.
 - Layers: hold one key to give other keys a second job, edited right on the
   deck (see "Layers" below).
+- Applications: keys can act differently while one application is in
+  front, edited on the deck the same way (see "Applications" below).
+- The deck always shows what applies in the shown scope: the selected
+  keyboard (or all keyboards) in the shown application scope (or every
+  application). A mapping inherited from a more general scope is drawn
+  faded, a key kept normal in this scope says so on the cap, and a key
+  that is mapped differently in some other scope carries a small dot.
 - Mapping summary and remaps dialog for reviewing, editing, and removing
-  mappings in the active profile. Removal requires confirmation and is
-  undoable.
+  mappings in the active profile, each with the keyboard and application it
+  applies to. Selecting a row opens the mapping in its own scope. Removal
+  requires confirmation and is undoable.
 - "Applies to" device scope selector on the toolbar (see Devices below).
 
 ## Key editor
@@ -67,8 +75,13 @@ below). Installing xremap itself is still up to the user.
     Alt / Super chips on both input and output sides; these appear in the
     Shortcuts view under a "From the keyboard" group.
   - **Two-way swap** toggle between the key and its tap action.
-- "Restore original key" clears the mapping.
-- Existing combos for the key are listed and removable inline.
+- "Restore original key" clears the mapping. While a keyboard or an
+  application scope is shown, the button becomes "Same as all keyboards" or
+  "Same as all applications" and removes the key's own mapping in that
+  scope, and a "Normal key here" control keeps the key as it is there
+  instead of the remap it would inherit (see "Applications" below).
+- Existing combos for the key are listed and removable inline; while an
+  application scope is shown, only the combos that apply there are listed.
 
 ## Layers
 
@@ -97,10 +110,51 @@ below). Installing xremap itself is still up to the user.
 - Layers are stored with their profile and applied through the generated
   configuration like mappings (see "Persistence and generated configuration").
 
+## Applications
+
+- An application scope is one application, or a few (a "Terminals" scope
+  can hold two terminals), whose keys can differ from every other
+  application's. A key without a mapping in the scope keeps its
+  all-applications behavior, shown faded on the deck; mapping it there
+  starts from that behavior, so changing the tap in one application keeps
+  the key's hold action. Keys keep working normally in every other
+  application.
+- The Applications picker on the keyboard toolbar sits beside Layers and
+  switches the deck between every application and each scope of the
+  profile, with a count of what each holds. "+ Add application" opens the
+  application picker; the bar above the deck then offers changing the
+  scope's applications, renaming, and removing the scope (with
+  confirmation, undoable; its remaps and shortcuts go with it).
+- The application picker lists the applications open right now first,
+  named exactly as remapping sees them (Keyloom asks the installed xremap
+  with `--list-windows`, which exits before it touches any input device),
+  then the installed applications from their desktop entries with their
+  icons, with a search box, and a field to type an application id for
+  anything not listed. An application belongs to at most one scope per
+  profile. Installed entries also match their desktop entry's
+  `StartupWMClass`, which names the windows of applications running through
+  XWayland.
+- "Normal key here" in the key editor keeps the key as it is in the shown
+  scope, standing in for the remap it would inherit: the way to say "Caps
+  Lock is Escape everywhere except in this editor". It also keeps a layer
+  the key holds from activating in that application.
+- Precedence when several mappings of a key apply: the most specific wins.
+  An application's mapping beats a keyboard's (an exception made for an
+  application holds on every keyboard), and both beat the general one; a
+  mapping for one keyboard in one application beats all of them. Removing a
+  key's own mapping in a scope lets the next more general one apply again.
+- One context at a time: showing an application scope leaves the layer
+  and the other way round. Layer jobs behave the same in every application.
+- Application ids are matched exactly (case included), the way xremap
+  matches them. Matching needs an xremap build that can ask the desktop
+  which window is in front (the COSMIC build on COSMIC; GNOME and KDE need
+  xremap's extension or script); the picker explains when it could not ask
+  which applications are open.
+
 ## Profiles
 
-- Multiple named profiles, each with its own mappings, layers, and shortcut
-  groups.
+- Multiple named profiles, each with its own mappings, layers, application
+  scopes, and shortcut groups.
 - Profiles can be created, duplicated, renamed, and deleted. The active profile
   cannot be deleted, so at least one profile always remains; deletion is
   undoable.
@@ -109,8 +163,9 @@ below). Installing xremap itself is still up to the user.
   which holds a Caps Lock navigation layer). They are ordinary profiles from
   then on: renamed, edited, and stored like any other.
 - "Reset all mappings" asks for confirmation before clearing the active
-  profile's mappings and layers. Confirmed resets cannot be undone. Cancel,
-  Escape, or clicking outside the dialog keeps them.
+  profile's mappings, layers, application scopes, and shortcut groups.
+  Confirmed resets cannot be undone. Cancel, Escape, or clicking outside the
+  dialog keeps them.
 
 ## Devices
 
@@ -122,7 +177,11 @@ below). Installing xremap itself is still up to the user.
   devices whose event reader is replaced, including xremap's recreated virtual
   keyboard. Input during the reconnection gap is not captured, and unreadable
   devices are retried later.
-- Per-mapping device scope: "All keyboards" or one specific detected keyboard.
+- Per-mapping device scope: "All keyboards" or one specific detected
+  keyboard. A key can be mapped for all keyboards and differently for one
+  keyboard; with that keyboard selected in "Applies to", the deck shows its
+  own mapping, or the all-keyboards one faded, and edits made there apply to
+  that keyboard alone.
 - Best-effort form-factor and ANSI/ISO guesses per device from its name and
   reported keys, used for the selected keyboard's deck in both Keyboard and Tester.
   "All keyboards" uses an aggregate guess from connected keyboards (see
@@ -188,22 +247,32 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 ## Shortcuts view
 
 - Shortcut groups per profile, each with a name, enable/disable toggle, an
-  application scope label (all applications or named apps), and an
-  "any modifier" matching option.
+  application scope (every application, or one of the profile's application
+  scopes, chosen from the chip on the group; "New application…" opens the
+  application picker), and an "any modifier" matching option.
+- Groups are listed in sections per application scope, in the order their
+  rules apply: each scope of the profile, then every application.
 - Rules show modifiers + key → modifiers + key, and the editor can record both
-  sides of a chord from a physical keyboard.
-- Add group, delete rule, and edit existing rules.
+  sides of a chord from a physical keyboard. Rules with both sides recorded
+  apply; incomplete rules and paused groups generate nothing.
+- Add group, delete rule, and edit existing rules. Groups and rules are
+  stored with the profile and applied like mappings.
 - Groups start empty for every profile; combo mappings made in the key
-  editor appear under an automatic "From the keyboard" group.
+  editor appear under an automatic "From the keyboard" group, one for every
+  application and one per application scope shown while the combo was made.
+- "Any modifier" makes a group's shortcuts match while Shift, Ctrl, Alt, or
+  Super is held as well, releasing that modifier around the output; with two
+  unrelated modifiers held, only one of them is released.
 
 ## Persistence and generated configuration
 
-- Profiles with their mappings and layers (plus the active profile) are
-  stored via cosmic-config under
+- Profiles with their mappings, layers, application scopes, and shortcut
+  groups (plus the active profile) are stored via cosmic-config under
   `~/.config/cosmic/io.github.blakegardner.Keyloom/` and restored on launch;
   a fresh install seeds the Default profile and the starter profiles, which
-  persist like any other from then on. Profiles saved before layers existed
-  load with none.
+  persist like any other from then on. Profiles saved before layers,
+  application scopes, or stored shortcut groups existed load with none, and
+  their mappings apply in every application.
 - Keyboard size and ANSI/ISO overrides also persist across launches,
   independently of profiles. Identity uses the device's model identifiers
   plus its unique identifier, falling back to connection path or name.
@@ -211,25 +280,31 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   again; identical devices with matching names and no unique identifier or
   connection information share overrides.
   Display changes do not rewrite the remap configuration or restart xremap.
-- Every mapping, layer, or profile change regenerates the xremap document
-  from the internal rule model and writes it to
-  `$XDG_CONFIG_HOME/xremap/keyloom.yml` (usually `~/.config`).
-- The generator translates friendly action names into xremap `KEY_*` names,
-  emits one `modmap` block per device scope (`device.only`) followed by one
-  for unscoped mappings, renders tap/hold as `held`/`alone`, two-way swaps as
-  two entries, and Disabled keys as an empty output (`[]`).
+- Every mapping, layer, application scope, shortcut group, or profile
+  change regenerates the xremap document from the internal rule model and
+  writes it to `$XDG_CONFIG_HOME/xremap/keyloom.yml` (usually `~/.config`).
+- The generator translates friendly action names into xremap `KEY_*` names
+  and emits one `modmap` block per scope: filtered on the application scope's
+  ids (`application.only`), on the keyboard (`device.only`), on both, or on
+  neither. Blocks come most specific first, in the precedence order above,
+  because xremap uses the first block that mentions a key and whose filters
+  match. Tap/hold renders as `held`/`alone`, two-way swaps as two entries,
+  Disabled keys as an empty output (`[]`), and "normal here" as the key
+  mapped to itself.
 - Layers become xremap `virtual_modifiers` plus `keymap` rules. Each layer
   key is remapped to a stand-in virtual modifier (braille-dot key codes,
   which no keyboard emits and xremap never passes on), as the hold side of a
   tap/hold key when the key has a tap action; every job becomes a
   `<modifier>-<key>` rule, scoped per keyboard where the job is. A job on a
   key whose normal press is remapped targets what the key became, since
-  xremap applies mappings before rules.
+  xremap applies mappings before rules; a key remapped in one application
+  or on one keyboard gets its own rule for that scope.
+- Shortcut groups become `keymap` blocks after the layers', groups limited
+  to an application first: each complete rule is a `Mods-KEY: Mods-KEY`
+  entry, and "any modifier" adds an entry per other modifier held.
 - Files Keyloom generated carry a marker comment; a hand-written xremap
   config found at that path is backed up to `keyloom.yml.bak` before the
   first overwrite, and is never touched just for launching the app.
-- Shortcut groups are not yet part of the generated output or the stored
-  model.
 
 ## First-run setup
 

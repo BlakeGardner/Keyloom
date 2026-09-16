@@ -3,10 +3,11 @@
 use cosmic::iced::core::text::Wrapping;
 use cosmic::iced::widget::{rich_text, span};
 use cosmic::iced::{Alignment, Border, Color, Length, Padding};
-use cosmic::widget::{self, container, mouse_area};
+use cosmic::widget::{self, container, icon, mouse_area};
 use cosmic::{Element, theme as ctheme};
 
-use crate::app::{App, Message, Setup, SetupPage, Toast, View};
+use crate::app::{App, Message, Picker, PickerTarget, Setup, SetupPage, Toast, View};
+use crate::apps;
 use crate::keyboard;
 use crate::service;
 use crate::setup::{
@@ -105,6 +106,7 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
             .get(&profile.id)
             .map_or(0, |maps| maps.len());
         let layers = app.profile_layers.get(&profile.id).map_or(0, Vec::len);
+        let apps = app.profile_apps.get(&profile.id).map_or(0, Vec::len);
         let mut sub = if count == 0 {
             "no mappings yet".to_owned()
         } else {
@@ -114,6 +116,12 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
             sub.push_str(&format!(
                 " · {layers} layer{}",
                 if layers == 1 { "" } else { "s" }
+            ));
+        }
+        if apps > 0 {
+            sub.push_str(&format!(
+                " · {apps} app{}",
+                if apps == 1 { "" } else { "s" }
             ));
         }
         let row = popup_row(
@@ -414,15 +422,19 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
             muted(),
         ));
     }
-    for (code, mapping) in maps {
-        let Some(cap) = crate::ui::model::key(code) else {
+    for (index, (code, mapping)) in maps.iter().enumerate() {
+        if crate::ui::model::key(code).is_none() {
             continue;
+        }
+        let mut full_to = if mapping.normal {
+            format!("{} · normal here", key_name(code))
+        } else {
+            mapping.tap.clone().unwrap_or_else(|| key_name(code))
         };
-        let mut full_to = mapping.tap.clone().unwrap_or_else(|| key_name(code));
         if let Some(hold) = &mapping.hold {
             full_to.push_str(&format!(" · When held: {hold}"));
         }
-        let scope = app.device_label(&mapping.device);
+        let scope = app.scope_label(mapping);
 
         rows = rows.push(
             widget::row::with_capacity(2)
@@ -445,9 +457,9 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
                     .class(quiet(false))
                     .padding([12, 14])
                     .width(Length::Fill)
-                    .on_press(Message::SelectKey(cap.code)),
+                    .on_press(Message::EditMapping(index)),
                 )
-                .push(remove_button(Message::RemoveMapping(code.clone()))),
+                .push(remove_button(Message::RemoveMapping(index))),
         );
     }
 
@@ -539,10 +551,16 @@ pub fn capture_dialog(app: &App) -> Element<'_, Message> {
 
 /// Confirm removal while keeping the remaps list open underneath.
 pub fn remove_mapping_dialog(app: &App) -> Element<'_, Message> {
-    let name = app
+    let entry = app
         .confirm_remove_mapping
-        .as_deref()
-        .map_or_else(|| "this key".to_owned(), key_name);
+        .and_then(|index| app.maps().get(index));
+    let name = entry.map_or_else(|| "this key".to_owned(), |(code, _)| key_name(code));
+    let scope = entry
+        .map(|(_, mapping)| mapping)
+        .filter(|mapping| !mapping.is_general())
+        .map_or_else(String::new, |mapping| {
+            format!(" for {}", app.scope_label(mapping))
+        });
     let buttons = widget::row::with_capacity(3)
         .spacing(10)
         .push(crate::ui::hspace())
@@ -565,7 +583,7 @@ pub fn remove_mapping_dialog(app: &App) -> Element<'_, Message> {
             .push(txt_semibold(format!("Remove remap for {name}?"), 24.0, fg()))
             .push(txt(
                 format!(
-                    "This removes the remap from {} and restores the key's original behavior. You can undo right after removing.",
+                    "This removes the remap{scope} from {} and restores the key's behavior there. You can undo right after removing.",
                     app.profile_name()
                 ),
                 15.0,
@@ -630,6 +648,357 @@ pub fn delete_layer_dialog(app: &App) -> Element<'_, Message> {
     modal(card, Some(Message::DeleteLayerCancel))
 }
 
+/// The delete-application-scope confirmation dialog.
+pub fn delete_app_dialog(app: &App) -> Element<'_, Message> {
+    let scope = app
+        .confirm_delete_app
+        .as_ref()
+        .and_then(|id| app.app_scopes().iter().find(|scope| &scope.id == id));
+    let name = scope.map_or("this application", |scope| scope.name.as_str());
+    let body = scope.map_or_else(
+        || "You can undo right after removing.".to_owned(),
+        |scope| {
+            let keys = app
+                .maps()
+                .iter()
+                .filter(|(_, mapping)| mapping.app == scope.id)
+                .count();
+            let rules: usize = app
+                .groups()
+                .iter()
+                .filter(|group| group.scope == scope.id)
+                .map(|group| group.rules.len())
+                .sum();
+            let mut body = match keys {
+                0 => "No key differs there yet.".to_owned(),
+                1 => "Its 1 key works like everywhere else again.".to_owned(),
+                n => format!("Its {n} keys work like everywhere else again."),
+            };
+            match rules {
+                0 => {}
+                1 => body.push_str(" Its shortcut goes with it."),
+                n => body.push_str(&format!(" Its {n} shortcuts go with it.")),
+            }
+            body.push_str(" You can undo right after removing.");
+            body
+        },
+    );
+
+    let buttons = widget::row::with_capacity(3)
+        .spacing(10)
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(txt_semibold("Cancel", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::DeleteAppScopeCancel),
+        )
+        .push(
+            widget::button::custom(txt_semibold(
+                "Remove application",
+                12.5,
+                oklch(0.85, 0.06, 16.0),
+            ))
+            .class(quiet(false))
+            .padding([9, 18])
+            .on_press(Message::DeleteAppScopeConfirm),
+        );
+
+    let card = dialog_card(
+        widget::column::with_capacity(4)
+            .spacing(16)
+            .push(eyebrow("Remove application"))
+            .push(txt_semibold(format!("Remove {name}?"), 24.0, fg()))
+            .push(txt(body, 15.0, muted()))
+            .push(buttons)
+            .into(),
+    );
+
+    modal(card, Some(Message::DeleteAppScopeCancel))
+}
+
+/// The scope chooser of one shortcut group: every application, each
+/// application scope of the profile, or a new one.
+pub fn group_scope_popup(app: &App, index: usize) -> Element<'_, Message> {
+    let current = app
+        .groups()
+        .get(index)
+        .map_or("", |group| group.scope.as_str());
+    let mut column = widget::column::with_capacity(app.app_scopes().len() + 3).spacing(2);
+    column = column.push(popup_row(
+        "All applications".to_owned(),
+        None,
+        current.is_empty(),
+        Message::SetGroupScope {
+            group: index,
+            scope: String::new(),
+        },
+    ));
+    for scope in app.app_scopes() {
+        column = column.push(popup_row(
+            scope.name.clone(),
+            Some(txt(scope.members(), 10.5, muted()).into()),
+            current == scope.id,
+            Message::SetGroupScope {
+                group: index,
+                scope: scope.id.clone(),
+            },
+        ));
+    }
+    column = column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
+    column = column.push(popup_row(
+        "New application…".to_owned(),
+        None,
+        false,
+        Message::GroupAppScope(index),
+    ));
+    popover_panel(column).width(Length::Fixed(258.0)).into()
+}
+
+/// The application picker: the applications open right now, named
+/// exactly as remapping sees them, then the installed ones, and a way
+/// to type a name for anything else.
+#[allow(clippy::too_many_lines)]
+pub fn picker_dialog<'a>(app: &'a App, picker: &'a Picker) -> Element<'a, Message> {
+    let (title, confirm) = match &picker.target {
+        PickerTarget::Scope(_) => ("Change applications", "Save"),
+        PickerTarget::NewScope | PickerTarget::Group(_) => ("Add an application", "Add"),
+    };
+    let editing = match &picker.target {
+        PickerTarget::Scope(id) => Some(id.as_str()),
+        PickerTarget::NewScope | PickerTarget::Group(_) => None,
+    };
+    let query = picker.query.trim().to_lowercase();
+
+    let header = widget::row::with_capacity(3)
+        .align_y(Alignment::Center)
+        .push(txt_semibold(title, 24.0, fg()))
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(txt("Close", 14.0, oklch(0.95, 0.01, 152.0)))
+                .class(quiet(false))
+                .padding([10, 15])
+                .on_press(Message::PickerCancel),
+        );
+
+    let section = |label: &str, note: &str| -> Element<'a, Message> {
+        let mut row = widget::row::with_capacity(2)
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .push(eyebrow(label));
+        if !note.is_empty() {
+            row = row.push(txt(note.to_owned(), 11.0, muted()));
+        }
+        container(row)
+            .padding(Padding {
+                top: 8.0,
+                right: 10.0,
+                bottom: 2.0,
+                left: 10.0,
+            })
+            .into()
+    };
+
+    let mut list = widget::column::with_capacity(12).spacing(2);
+    match &picker.catalog {
+        None => {
+            list = list
+                .push(container(txt("Looking for applications…", 13.0, muted())).padding([12, 10]));
+        }
+        Some(catalog) => {
+            let matches = |known: &&apps::KnownApp| {
+                query.is_empty()
+                    || known.app.name.to_lowercase().contains(&query)
+                    || known.app.id.to_lowercase().contains(&query)
+            };
+            let open: Vec<&apps::KnownApp> = catalog
+                .apps
+                .iter()
+                .filter(|known| known.open)
+                .filter(matches)
+                .collect();
+            let installed: Vec<&apps::KnownApp> = catalog
+                .apps
+                .iter()
+                .filter(|known| !known.open)
+                .filter(matches)
+                .collect();
+            if !open.is_empty() {
+                list = list.push(section("Open now", "named exactly as remapping sees them"));
+                for known in open {
+                    list = list.push(app_row(app, picker, known, editing));
+                }
+            } else if let Some(error) = &catalog.windows_error {
+                list = list.push(
+                    container(
+                        txt(
+                            format!("Keyloom could not ask which applications are open: {error}"),
+                            12.0,
+                            muted(),
+                        )
+                        .width(Length::Fill),
+                    )
+                    .padding([6, 10]),
+                );
+            }
+            if !installed.is_empty() {
+                list = list.push(section("Installed", ""));
+                for known in installed {
+                    list = list.push(app_row(app, picker, known, editing));
+                }
+            }
+            if catalog.apps.is_empty()
+                || (!query.is_empty() && list_is_empty(&catalog.apps, &query))
+            {
+                list = list.push(
+                    container(txt("No application matches.", 13.0, muted())).padding([12, 10]),
+                );
+            }
+        }
+    }
+
+    // Anything not listed: open it and it shows under "Open now", or
+    // name it by the id its windows report.
+    let custom = widget::row::with_capacity(2)
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .push(
+            widget::text_input(
+                "Not listed? Type the id its windows report…",
+                &picker.custom,
+            )
+            .on_input(Message::PickerCustom)
+            .on_submit(|_| Message::PickerAddCustom),
+        )
+        .push(
+            widget::button::custom(txt_semibold("Add", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::PickerAddCustom),
+        );
+
+    let chosen: Vec<&str> = picker.chosen.iter().map(|app| app.name.as_str()).collect();
+    let chosen_line = if chosen.is_empty() {
+        txt("Choose one or more applications.", 12.5, muted())
+    } else {
+        txt(format!("Chosen: {}", chosen.join(", ")), 12.5, fg())
+    };
+    let mut done = widget::button::custom(txt_semibold(confirm, 12.5, tint(0.96, 0.02)))
+        .class(accent_button())
+        .padding([9, 18]);
+    if !picker.chosen.is_empty() {
+        done = done.on_press(Message::PickerConfirm);
+    }
+    let footer = widget::row::with_capacity(4)
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .push(chosen_line.width(Length::Fill))
+        .push(
+            widget::button::custom(txt_semibold("Cancel", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::PickerCancel),
+        )
+        .push(done);
+
+    // Kept short enough to fit the default window together with its
+    // footer.
+    let card = container(
+        widget::column::with_capacity(5)
+            .spacing(12)
+            .push(header)
+            .push(
+                widget::text_input("Search applications…", &picker.query)
+                    .on_input(Message::PickerQuery),
+            )
+            .push(
+                container(widget::scrollable(list).spacing(8))
+                    .max_height(230.0)
+                    .padding(4),
+            )
+            .push(custom)
+            .push(footer),
+    )
+    .width(Length::Fixed(600.0))
+    .padding(24)
+    .class(ctheme::Container::custom(|_| container::Style {
+        background: Some(crate::ui::theme::surface().into()),
+        border: Border {
+            color: border(),
+            width: 1.0,
+            radius: 14.0.into(),
+        },
+        ..container::Style::default()
+    }))
+    .into();
+
+    modal(card, Some(Message::PickerCancel))
+}
+
+/// Whether no application matches the picker's search.
+fn list_is_empty(apps: &[apps::KnownApp], query: &str) -> bool {
+    !apps.iter().any(|known| {
+        known.app.name.to_lowercase().contains(query) || known.app.id.to_lowercase().contains(query)
+    })
+}
+
+/// One application in the picker: icon, name, where it stands, and a
+/// check mark once chosen.
+fn app_row<'a>(
+    app: &'a App,
+    picker: &Picker,
+    known: &'a apps::KnownApp,
+    editing: Option<&str>,
+) -> Element<'a, Message> {
+    let chosen = picker.has(&known.app.id);
+    let elsewhere = app
+        .scope_of_app(&known.app.id)
+        .filter(|scope| Some(scope.id.as_str()) != editing)
+        .map(|scope| scope.name.clone());
+    let icon: Element<'a, Message> = match &known.icon {
+        Some(apps::Icon::Name(name)) => icon::from_name(name.as_str()).size(20).icon().into(),
+        Some(apps::Icon::Path(path)) => icon::icon(icon::from_path(path.clone())).size(20).into(),
+        None => widget::Space::new().width(20.0).height(20.0).into(),
+    };
+    let sub = elsewhere.as_ref().map_or_else(
+        || {
+            known
+                .title
+                .clone()
+                .filter(|_| known.open && known.app.name != known.app.id)
+                .unwrap_or_else(|| known.app.id.clone())
+        },
+        |scope| format!("already in {scope}"),
+    );
+    let labels = widget::column::with_capacity(2)
+        .spacing(2)
+        .push(txt_semibold(
+            known.app.name.clone(),
+            12.5,
+            if elsewhere.is_some() {
+                muted()
+            } else {
+                oklch(0.92, 0.01, 152.0)
+            },
+        ))
+        .push(txt(sub, 10.5, muted()));
+    let mut row = widget::row::with_capacity(4)
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .push(icon)
+        .push(labels)
+        .push(crate::ui::hspace());
+    if chosen {
+        row = row.push(txt("✓", 11.0, accent()));
+    }
+    widget::button::custom(row)
+        .class(menu_row(chosen))
+        .padding([8, 10])
+        .width(Length::Fill)
+        .on_press(Message::PickerToggle(known.app.clone()))
+        .into()
+}
+
 /// Confirm clearing all mappings and layers in the active profile.
 pub fn reset_mappings_dialog(app: &App) -> Element<'_, Message> {
     let buttons = widget::row::with_capacity(3)
@@ -658,7 +1027,7 @@ pub fn reset_mappings_dialog(app: &App) -> Element<'_, Message> {
             .push(txt_semibold("Reset all mappings?", 24.0, fg()))
             .push(txt(
                 format!(
-                    "This removes all mappings and layers from {} and restores the keys' original behavior.",
+                    "This removes all mappings, layers, applications, and shortcuts from {} and restores the keys' original behavior.",
                     app.profile_name()
                 ),
                 15.0,

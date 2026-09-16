@@ -681,19 +681,83 @@ pub fn auto_group(code: &str) -> &'static str {
     }
 }
 
-/// What a remapped key does in one profile.
+/// What a remapped key does in one profile, within one scope: a
+/// keyboard or every keyboard, an application scope or every
+/// application. A key can have one mapping per scope; the most specific
+/// one applies (see [`scope_rank`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mapping {
     pub tap: Option<String>,
     pub hold: Option<String>,
     /// Device scope id (`all` or a specific keyboard id).
     pub device: String,
+    /// Application scope id ([`AppScope::id`]); empty for every
+    /// application. Absent from stores written before application
+    /// scopes existed.
+    #[serde(default)]
+    pub app: String,
     /// Two-way swap with the tap action.
     pub swap: bool,
+    /// The key keeps its original behavior in this scope, standing in
+    /// for a remap it would otherwise inherit from a more general one
+    /// ("Normal key here"). Absent from older stores.
+    #[serde(default)]
+    pub normal: bool,
+}
+
+impl Mapping {
+    /// Whether this mapping applies on `device` in the application
+    /// scope `app`: its own scope, or a more general one.
+    pub fn applies_in(&self, device: &str, app: &str) -> bool {
+        (every_device(&self.device) || self.device == device)
+            && (self.app.is_empty() || self.app == app)
+    }
+
+    /// Whether this mapping's scope is exactly `device` and `app`.
+    pub fn scoped_to(&self, device: &str, app: &str) -> bool {
+        same_device(&self.device, device) && self.app == app
+    }
+
+    /// Whether the mapping applies on every keyboard in every
+    /// application.
+    pub fn is_general(&self) -> bool {
+        every_device(&self.device) && self.app.is_empty()
+    }
+
+    /// How specific the mapping's scope is; see [`scope_rank`].
+    pub fn rank(&self) -> u8 {
+        scope_rank(every_device(&self.device), self.app.is_empty())
+    }
 }
 
 /// Insertion-ordered key → mapping list, as the summary chips expect.
+/// A key appears once per scope it is mapped in.
 pub type Maps = Vec<(String, Mapping)>;
+
+/// Whether a device scope id means every keyboard.
+pub fn every_device(id: &str) -> bool {
+    matches!(id, "" | "all")
+}
+
+/// Whether two device scope ids name the same keyboard (or both every
+/// keyboard).
+pub fn same_device(a: &str, b: &str) -> bool {
+    (every_device(a) && every_device(b)) || a == b
+}
+
+/// Precedence of a scope, lowest first. Among the mappings of one key
+/// that apply somewhere, the most specific wins: an application's
+/// remap beats a keyboard's (an exception made for an application has
+/// to hold on every keyboard), and both beat the general one. The
+/// generated configuration lists blocks in the same order.
+pub fn scope_rank(every_device: bool, every_app: bool) -> u8 {
+    match (every_app, every_device) {
+        (false, false) => 0,
+        (false, true) => 1,
+        (true, false) => 2,
+        (true, true) => 3,
+    }
+}
 
 /// One key's job inside a layer.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -704,6 +768,10 @@ pub struct LayerKey {
     pub action: String,
     /// Device scope id (`all` or a specific keyboard id).
     pub device: String,
+    /// Application scope id; empty for every application. Absent from
+    /// older stores.
+    #[serde(default)]
+    pub app: String,
 }
 
 /// A layer: while its key is held, the keys listed here take on other
@@ -751,13 +819,69 @@ pub fn navigation_layer() -> Layer {
                 code: code.to_owned(),
                 action: action.to_owned(),
                 device: "all".to_owned(),
+                app: String::new(),
             })
             .collect(),
     }
 }
 
+/// One application as the compositor names it, for the picker and the
+/// generated filters.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppRef {
+    /// The application id of its windows (`com.system76.CosmicTerm`),
+    /// which xremap matches on.
+    pub id: String,
+    /// Display name from its desktop entry, or the id.
+    pub name: String,
+    /// Other ids the same application may report (a desktop entry's
+    /// `StartupWMClass`), matched as well.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+/// An application, or a few, whose keys can differ from every other
+/// application's: the "Applications" chips on the keyboard view. Keys
+/// without a mapping in the scope keep their all-applications
+/// behavior.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppScope {
+    pub id: String,
+    pub name: String,
+    pub apps: Vec<AppRef>,
+}
+
+impl AppScope {
+    /// Every id xremap should match for this scope, without repeats.
+    pub fn matchers(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = Vec::with_capacity(self.apps.len());
+        for app in &self.apps {
+            for id in std::iter::once(app.id.as_str()).chain(app.aliases.iter().map(String::as_str))
+            {
+                if !id.is_empty() && !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids
+    }
+
+    /// The applications by name ("COSMIC Terminal, Alacritty").
+    pub fn members(&self) -> String {
+        let names: Vec<&str> = self.apps.iter().map(|app| app.name.as_str()).collect();
+        names.join(", ")
+    }
+
+    /// Whether the scope covers the application with this id.
+    pub fn has_app(&self, id: &str) -> bool {
+        self.apps
+            .iter()
+            .any(|app| app.id == id || app.aliases.iter().any(|alias| alias == id))
+    }
+}
+
 /// One side of a shortcut rule: held modifiers plus a key.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Chord {
     pub mods: Vec<String>,
     pub key: String,
@@ -770,34 +894,34 @@ impl Chord {
 }
 
 /// One shortcut rule inside a group.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rule {
     pub from: Chord,
     pub to: Chord,
     pub note: String,
 }
 
-/// A group of shortcut rules, optionally scoped to applications.
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Rule {
+    /// Both sides have a key: the rule can be applied.
+    pub fn is_complete(&self) -> bool {
+        !self.from.key.is_empty() && !self.to.key.is_empty()
+    }
+}
+
+/// A group of shortcut rules, optionally limited to an application
+/// scope.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Group {
     pub id: String,
     pub name: String,
-    /// Application names this group is limited to; empty = all apps.
-    pub apps: Vec<String>,
+    /// Application scope id ([`AppScope::id`]) this group is limited
+    /// to; empty for every application.
+    #[serde(default)]
+    pub scope: String,
     pub enabled: bool,
     /// Match even while unrelated modifiers are held.
     pub any_mod: bool,
     pub rules: Vec<Rule>,
-}
-
-impl Group {
-    pub fn scope_label(&self) -> String {
-        if self.apps.is_empty() {
-            "All applications".to_owned()
-        } else {
-            self.apps.join(", ")
-        }
-    }
 }
 
 /// A named remapping profile.
@@ -813,6 +937,7 @@ fn mapping(tap: &str, hold: Option<&str>, device: &str, swap: bool) -> Mapping {
         hold: hold.map(str::to_owned),
         device: device.to_owned(),
         swap,
+        ..Mapping::default()
     }
 }
 

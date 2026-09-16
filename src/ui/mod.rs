@@ -103,6 +103,8 @@ pub enum Cap {
     Held,
     /// A remapped output: what a key now produces.
     Mapped,
+    /// A remap the shown scope inherits from a more general one.
+    Inherited,
 }
 
 /// Background, border, and text colors of a cap in one state, shared
@@ -121,6 +123,11 @@ pub fn cap_colors(cap: Cap) -> (Background, Color, Color) {
             vgradient(tint(0.34, 0.032), tint(0.285, 0.028)),
             tint(0.46, 0.075),
             accent(),
+        ),
+        Cap::Inherited => (
+            vgradient(tint(0.31, 0.018), tint(0.27, 0.016)),
+            tint(0.4, 0.04),
+            accent().scale_alpha(0.6),
         ),
     }
 }
@@ -163,6 +170,9 @@ pub enum Pill {
     Empty,
     /// The chord's key (input or output side).
     Key,
+    /// An application scope (teal, like the shortcut groups' scope
+    /// chip).
+    App,
 }
 
 /// One chord pill (`pillStyle` in the export).
@@ -176,6 +186,11 @@ pub fn pill(label: &str, kind: Pill) -> Element<'static, Message> {
         Pill::Mod => (Some(white(0.05)), white(0.10), oklch(0.78, 0.01, 152.0)),
         Pill::Empty => (None, white(0.18), theme::muted()),
         Pill::Key => (Some(tint(0.31, 0.04)), tint(0.44, 0.07), tint(0.95, 0.02)),
+        Pill::App => (
+            Some(oklch(0.3, 0.05, 196.0)),
+            oklch(0.44, 0.07, 196.0),
+            oklch(0.92, 0.03, 196.0),
+        ),
     };
     container(txt_semibold(label, 11.0, color).line_height(LineHeight::Absolute(12.0.into())))
         .padding([5, 8])

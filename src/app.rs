@@ -17,6 +17,7 @@ use cosmic::iced::Subscription;
 use cosmic::iced::futures::{Stream, StreamExt};
 use cosmic::prelude::*;
 
+use crate::apps;
 use crate::config::{
     self, KeyboardLayouts, KeyloomConfig, LayoutOverride, ProfileState, SetupState,
 };
@@ -26,7 +27,8 @@ use crate::service;
 use crate::setup;
 use crate::ui;
 use crate::ui::model::{
-    self, Chord, Group, Layer, LayerKey, Mapping, Maps, Profile, Rule, key_by_evdev, key_name,
+    self, AppRef, AppScope, Chord, Group, Layer, LayerKey, Mapping, Maps, Profile, Rule,
+    key_by_evdev, key_name,
 };
 use crate::xremap;
 
@@ -65,6 +67,8 @@ pub enum Popover {
     Devices,
     Size,
     Menu,
+    /// The application scope chooser of one shortcut group.
+    GroupScope(usize),
 }
 
 /// Which side of a shortcut rule is being recorded.
@@ -93,13 +97,21 @@ pub enum Undo {
         layers: HashMap<String, Vec<Layer>>,
         maps: HashMap<String, Maps>,
     },
-    /// A deleted profile: its list position, mappings, layers, and
-    /// groups.
+    /// Application scopes, with the mappings and shortcut groups they
+    /// hold.
+    Apps {
+        apps: HashMap<String, Vec<AppScope>>,
+        maps: HashMap<String, Maps>,
+        groups: HashMap<String, Vec<Group>>,
+    },
+    /// A deleted profile: its list position, mappings, layers,
+    /// application scopes, and groups.
     Profile {
         index: usize,
         profile: Profile,
         maps: Maps,
         layers: Vec<Layer>,
+        apps: Vec<AppScope>,
         groups: Vec<Group>,
     },
 }
@@ -124,6 +136,46 @@ enum ApplyStep {
 pub struct EditRule {
     pub group: usize,
     pub rule: Option<usize>,
+}
+
+/// What the application picker is choosing applications for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickerTarget {
+    /// A new application scope, shown on the deck once made.
+    NewScope,
+    /// The applications of an existing scope.
+    Scope(String),
+    /// A new application scope that limits a shortcut group.
+    Group(usize),
+}
+
+/// The application picker dialog while it is open.
+#[derive(Clone, Debug)]
+pub struct Picker {
+    pub target: PickerTarget,
+    pub query: String,
+    /// Applications chosen so far.
+    pub chosen: Vec<AppRef>,
+    /// A name typed for an application the lists do not offer.
+    pub custom: String,
+    /// What the desktop knows, once loaded.
+    pub catalog: Option<apps::Catalog>,
+}
+
+impl Picker {
+    /// Whether an application is among the chosen ones.
+    pub fn has(&self, id: &str) -> bool {
+        self.chosen.iter().any(|app| app.id == id)
+    }
+}
+
+/// A key's mapping in the shown scope: its own, or one inherited from
+/// a more general scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Effective<'a> {
+    pub mapping: &'a Mapping,
+    /// Whether the mapping's scope is exactly the shown one.
+    pub own: bool,
 }
 
 /// The key most recently observed by the tester.
@@ -227,6 +279,46 @@ pub enum Message {
     RenameLayerToggle,
     RenameLayerInput(String),
     RenameLayerCommit,
+    /// Show and edit one of the profile's application scopes on the
+    /// deck, or (`None`) every application.
+    SetAppScope(Option<String>),
+    ToggleApps,
+    /// Open the application picker for a new scope.
+    AddAppScope,
+    /// Open the application picker for the shown scope's applications.
+    ChangeApps,
+    /// Open the application picker for a new scope that limits a
+    /// shortcut group.
+    GroupAppScope(usize),
+    /// Limit a shortcut group to an application scope (empty: none).
+    SetGroupScope {
+        group: usize,
+        scope: String,
+    },
+    PickerQuery(String),
+    /// Choose, or unchoose, an application in the picker.
+    PickerToggle(AppRef),
+    PickerCustom(String),
+    /// Choose the application typed into the picker by name.
+    PickerAddCustom,
+    PickerCancel,
+    PickerConfirm,
+    /// The desktop's applications, for the picker.
+    AppsCatalog(apps::Catalog),
+    /// Ask for confirmation before deleting the shown application
+    /// scope with its remaps.
+    DeleteAppScope,
+    DeleteAppScopeConfirm,
+    DeleteAppScopeCancel,
+    /// Start (or cancel) renaming the shown application scope.
+    RenameAppToggle,
+    RenameAppInput(String),
+    RenameAppCommit,
+    /// Keep the selected key as it is in the shown scope, instead of
+    /// the remap it inherits from a more general one.
+    NormalKeyHere,
+    /// Open a mapping from the remaps list in the scope it belongs to.
+    EditMapping(usize),
     SelectKey(&'static str),
     Query(String),
     SetCategory(&'static str),
@@ -241,8 +333,9 @@ pub enum Message {
     },
     ToggleSwap,
     ClearKey,
-    /// Ask for confirmation before removing a mapping from the remaps list.
-    RemoveMapping(String),
+    /// Ask for confirmation before removing a mapping (by its position
+    /// in the active profile's list) from the remaps list.
+    RemoveMapping(usize),
     RemoveMappingConfirm,
     RemoveMappingCancel,
     ClosePanel,
@@ -321,8 +414,9 @@ pub struct App {
     pub toast: Option<Toast>,
     toast_seq: u64,
     pub remaps_open: bool,
-    /// Key code awaiting removal confirmation in the active profile.
-    pub confirm_remove_mapping: Option<String>,
+    /// Position of the mapping awaiting removal confirmation in the
+    /// active profile's list.
+    pub confirm_remove_mapping: Option<usize>,
     pub about_open: bool,
     /// First-run setup, while it is open.
     pub setup: Option<Setup>,
@@ -334,6 +428,7 @@ pub struct App {
     pub profile_maps: HashMap<String, Maps>,
     pub profile_groups: HashMap<String, Vec<Group>>,
     pub profile_layers: HashMap<String, Vec<Layer>>,
+    pub profile_apps: HashMap<String, Vec<AppScope>>,
     custom_profiles: usize,
     /// In-progress rename of the active profile (the edited text).
     pub rename: Option<String>,
@@ -359,6 +454,16 @@ pub struct App {
     pub rename_layer: Option<String>,
     /// Layer id awaiting delete confirmation in the modal dialog.
     pub confirm_delete_layer: Option<String>,
+    /// The application scope shown and edited on the deck (`None`:
+    /// every application).
+    pub app_scope: Option<String>,
+    pub apps_open: bool,
+    /// In-progress rename of the shown application scope.
+    pub rename_app: Option<String>,
+    /// Application scope id awaiting delete confirmation.
+    pub confirm_delete_app: Option<String>,
+    /// The application picker, while it is open.
+    pub picker: Option<Picker>,
     pub selected: Option<&'static str>,
     pub mode: Mode,
     pub query: String,
@@ -415,12 +520,134 @@ impl App {
         self.profile_maps.get(&self.profile).unwrap_or(&EMPTY)
     }
 
-    /// Look up the active profile's mapping for one key.
-    pub fn mapping(&self, code: &str) -> Option<&Mapping> {
+    /// The application scope shown on the deck, as mappings store it:
+    /// empty for every application.
+    pub fn app_id(&self) -> &str {
+        self.app_scope.as_deref().unwrap_or("")
+    }
+
+    /// Application scopes of the active profile.
+    pub fn app_scopes(&self) -> &[AppScope] {
+        self.profile_apps
+            .get(&self.profile)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The application scope shown on the deck, if one is.
+    pub fn active_app_scope(&self) -> Option<&AppScope> {
+        let id = self.app_scope.as_deref()?;
+        self.app_scopes().iter().find(|scope| scope.id == id)
+    }
+
+    /// Name of an application scope; every application for none.
+    pub fn app_scope_name(&self, id: &str) -> String {
+        self.app_scopes()
+            .iter()
+            .find(|scope| scope.id == id)
+            .map_or_else(|| "All applications".to_owned(), |scope| scope.name.clone())
+    }
+
+    /// The scope, if any, that already covers an application in the
+    /// active profile.
+    pub fn scope_of_app(&self, id: &str) -> Option<&AppScope> {
+        self.app_scopes().iter().find(|scope| scope.has_app(id))
+    }
+
+    /// The active profile's mapping for one key in the shown scope:
+    /// its own, or the most specific one it inherits (see
+    /// [`model::scope_rank`]).
+    pub fn effective_mapping(&self, code: &str) -> Option<Effective<'_>> {
+        let (device, app) = (self.device.as_str(), self.app_id());
         self.maps()
             .iter()
-            .find(|(key, _)| key == code)
-            .map(|(_, mapping)| mapping)
+            .filter(|(key, mapping)| key == code && mapping.applies_in(device, app))
+            .min_by_key(|(_, mapping)| mapping.rank())
+            .map(|(_, mapping)| Effective {
+                mapping,
+                own: mapping.scoped_to(device, app),
+            })
+    }
+
+    /// The mapping that applies to a key in the shown scope.
+    pub fn mapping(&self, code: &str) -> Option<&Mapping> {
+        self.effective_mapping(code)
+            .map(|effective| effective.mapping)
+    }
+
+    /// The key's own mapping in exactly the shown scope.
+    pub fn own_mapping(&self, code: &str) -> Option<&Mapping> {
+        self.effective_mapping(code)
+            .filter(|effective| effective.own)
+            .map(|effective| effective.mapping)
+    }
+
+    /// How many of a key's mappings belong to scopes other than the
+    /// one applying here: the deck marks such keys.
+    pub fn other_scopes(&self, code: &str) -> usize {
+        let total = self.maps().iter().filter(|(key, _)| key == code).count();
+        total - usize::from(self.effective_mapping(code).is_some())
+    }
+
+    /// Whether the deck shows a specific scope (an application scope,
+    /// or one keyboard) rather than every keyboard in every
+    /// application.
+    pub fn in_specific_scope(&self) -> bool {
+        self.app_scope.is_some() || !model::every_device(&self.device)
+    }
+
+    /// Where a mapping inherited in the shown scope comes from.
+    pub fn inherited_from(&self, mapping: &Mapping) -> &'static str {
+        if mapping.app != self.app_id() {
+            "all applications"
+        } else {
+            "all keyboards"
+        }
+    }
+
+    /// The shown scope as a place: `in COSMIC Terminal`, `on Keychron
+    /// K2 Pro`, or `everywhere`.
+    pub fn here_label(&self) -> String {
+        if let Some(scope) = self.active_app_scope() {
+            format!("in {}", scope.name)
+        } else if model::every_device(&self.device) {
+            "everywhere".to_owned()
+        } else {
+            format!("on {}", self.device_label(&self.device))
+        }
+    }
+
+    /// The shown scope for toasts: `all keyboards · in COSMIC Terminal`.
+    pub fn scope_summary(&self) -> String {
+        let mut summary = self.device_label(&self.device).to_lowercase();
+        if let Some(scope) = self.active_app_scope() {
+            summary.push_str(&format!(" · in {}", scope.name));
+        }
+        summary
+    }
+
+    /// A mapping's scope for lists: `All keyboards · COSMIC Terminal`.
+    pub fn scope_label(&self, mapping: &Mapping) -> String {
+        let mut label = self.device_label(&mapping.device);
+        if !mapping.app.is_empty() {
+            label.push_str(&format!(" · {}", self.app_scope_name(&mapping.app)));
+        }
+        label
+    }
+
+    /// How many mappings and shortcut rules an application scope holds.
+    pub fn scope_count(&self, id: &str) -> usize {
+        let mappings = self
+            .maps()
+            .iter()
+            .filter(|(_, mapping)| mapping.app == id)
+            .count();
+        let rules: usize = self
+            .groups()
+            .iter()
+            .filter(|group| group.scope == id)
+            .map(|group| group.rules.len())
+            .sum();
+        mappings + rules
     }
 
     /// Shortcut groups of the active profile.
@@ -428,6 +655,16 @@ impl App {
         self.profile_groups
             .get(&self.profile)
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// What the generator reads from the active profile.
+    pub fn rules(&self) -> xremap::Rules<'_> {
+        xremap::Rules {
+            maps: self.maps(),
+            layers: self.layers(),
+            apps: self.app_scopes(),
+            groups: self.groups(),
+        }
     }
 
     /// Layers of the active profile.
@@ -767,11 +1004,14 @@ impl App {
     }
 
     /// Modifier-plus-key shortcut rules that start from the given key
-    /// name, as `(group index, rule index, rule)`.
+    /// name and apply in the shown scope, as `(group index, rule index,
+    /// rule)`.
     pub fn combos_for(&self, key: &str) -> Vec<(usize, usize, &Rule)> {
+        let app = self.app_id();
         self.groups()
             .iter()
             .enumerate()
+            .filter(|(_, group)| group.scope.is_empty() || group.scope == app)
             .flat_map(|(gi, group)| {
                 group
                     .rules
@@ -881,7 +1121,7 @@ impl App {
     /// replaced only when `overwrite_foreign` is set (a user edit);
     /// startup leaves foreign files alone.
     fn write_xremap(&mut self, overwrite_foreign: bool) {
-        let yaml = xremap::generate(self.maps(), self.layers(), |id| self.device_label(id));
+        let yaml = xremap::generate(self.rules(), |id| self.device_label(id));
         match xremap::write(&yaml, overwrite_foreign) {
             // Only a real content change warrants a service restart.
             Ok(xremap::WriteOutcome::Written(_)) => self.schedule_apply(),
@@ -991,25 +1231,81 @@ impl App {
             }
         }
         self.undo = Some(Undo::Maps(self.profile_maps.clone()));
-        let maps = self.profile_maps.entry(self.profile.clone()).or_default();
-        let entry = if let Some(index) = maps.iter().position(|(key, _)| key == code) {
-            &mut maps[index].1
-        } else {
-            maps.push((code.to_owned(), Mapping::default()));
-            &mut maps.last_mut().unwrap().1
-        };
-        if self.mode == Mode::Hold {
+        let hold = self.mode == Mode::Hold;
+        let entry = self.scoped_entry(code);
+        if hold {
             entry.hold = Some(action.to_owned());
         } else {
             entry.tap = Some(action.to_owned());
         }
-        entry.device = self.device.clone();
+        entry.normal = false;
 
-        let held = if self.mode == Mode::Hold { " held" } else { "" };
-        let device = self.device_label(&self.device.clone()).to_lowercase();
+        let held = if hold { " held" } else { "" };
+        let scope = self.scope_summary();
         self.flash(
             format!("{}{held} → {action}", key_name(code)),
-            format!("applies automatically · {device}"),
+            format!("applies automatically · {scope}"),
+        );
+        self.persist();
+    }
+
+    /// The shown scope's own mapping for a key, made on demand as a
+    /// copy of the mapping the key inherits there, so that a change in
+    /// one application (or on one keyboard) keeps the rest of the
+    /// key's behavior.
+    fn scoped_entry(&mut self, code: &str) -> &mut Mapping {
+        let device = self.device.clone();
+        let app = self.app_id().to_owned();
+        let inherited = self
+            .effective_mapping(code)
+            .filter(|effective| !effective.own)
+            .map(|effective| effective.mapping.clone());
+        let maps = self.profile_maps.entry(self.profile.clone()).or_default();
+        let index = match maps
+            .iter()
+            .position(|(key, mapping)| key == code && mapping.scoped_to(&device, &app))
+        {
+            Some(index) => index,
+            None => {
+                let mut mapping = inherited.unwrap_or_default();
+                mapping.device = device;
+                mapping.app = app;
+                maps.push((code.to_owned(), mapping));
+                maps.len() - 1
+            }
+        };
+        &mut maps[index].1
+    }
+
+    /// Keep the selected key as it is in the shown scope, standing in
+    /// for the remap it inherits there.
+    fn set_normal_here(&mut self) {
+        if self.view != View::Keyboard || self.layer.is_some() || !self.in_specific_scope() {
+            return;
+        }
+        let Some(code) = self.selected else {
+            return;
+        };
+        let name = key_name(code);
+        if self.own_mapping(code).is_some_and(|mapping| mapping.normal) {
+            self.flash(
+                format!("{name} is already a normal key here"),
+                "Nothing remaps it in this scope.",
+            );
+            return;
+        }
+        self.undo = Some(Undo::Maps(self.profile_maps.clone()));
+        let entry = self.scoped_entry(code);
+        *entry = Mapping {
+            device: entry.device.clone(),
+            app: entry.app.clone(),
+            normal: true,
+            ..Mapping::default()
+        };
+        let scope = self.scope_summary();
+        self.flash(
+            format!("{name} stays {name}"),
+            format!("normal key · {scope} · applies automatically"),
         );
         self.persist();
     }
@@ -1021,6 +1317,8 @@ impl App {
             profiles: self.profiles.clone(),
             maps: self.profile_maps.clone(),
             layers: self.keyed_layers(),
+            apps: self.profile_apps.clone(),
+            groups: self.profile_groups.clone(),
             active: self.profile.clone(),
             custom_profiles: u32::try_from(self.custom_profiles).unwrap_or(u32::MAX),
         }
@@ -1058,6 +1356,265 @@ impl App {
         self.layer = None;
         self.rename_layer = None;
         self.confirm_delete_layer = None;
+    }
+
+    /// Show every application again, dropping any pending rename or
+    /// delete of the shown scope.
+    fn show_every_app(&mut self) {
+        self.app_scope = None;
+        self.rename_app = None;
+        self.confirm_delete_app = None;
+    }
+
+    /// Leave application editing altogether, picker included.
+    fn leave_apps(&mut self) {
+        self.show_every_app();
+        self.picker = None;
+    }
+
+    /// Remember the application scopes, mappings, and groups before an
+    /// application scope change, for Undo.
+    fn snapshot_apps(&mut self) {
+        self.undo = Some(Undo::Apps {
+            apps: self.profile_apps.clone(),
+            maps: self.profile_maps.clone(),
+            groups: self.profile_groups.clone(),
+        });
+    }
+
+    /// Open the application picker and ask the desktop what it knows.
+    fn open_picker(&mut self, target: PickerTarget) -> Task<Message> {
+        if self.view == View::Tester {
+            return Task::none();
+        }
+        let chosen = match &target {
+            PickerTarget::Scope(id) => self
+                .app_scopes()
+                .iter()
+                .find(|scope| &scope.id == id)
+                .map(|scope| scope.apps.clone())
+                .unwrap_or_default(),
+            PickerTarget::NewScope | PickerTarget::Group(_) => Vec::new(),
+        };
+        self.picker = Some(Picker {
+            target,
+            query: String::new(),
+            chosen,
+            custom: String::new(),
+            catalog: None,
+        });
+        self.popover = None;
+        self.rename_app = None;
+        self.close_sheet();
+        cosmic::task::future(async { Message::AppsCatalog(apps::catalog().await) })
+    }
+
+    /// Choose an application in the picker, or unchoose it. An
+    /// application already covered by another scope of the profile
+    /// stays there: one scope per application keeps precedence simple.
+    fn pick_app(&mut self, app: AppRef) {
+        let Some(picker) = &self.picker else {
+            return;
+        };
+        if picker.has(&app.id) {
+            if let Some(picker) = &mut self.picker {
+                picker.chosen.retain(|chosen| chosen.id != app.id);
+            }
+            return;
+        }
+        let editing = match &picker.target {
+            PickerTarget::Scope(id) => Some(id.as_str()),
+            PickerTarget::NewScope | PickerTarget::Group(_) => None,
+        };
+        if let Some(other) = self
+            .scope_of_app(&app.id)
+            .filter(|scope| Some(scope.id.as_str()) != editing)
+        {
+            let (name, scope) = (app.name.clone(), other.name.clone());
+            self.flash(
+                format!("{name} already has its own remaps"),
+                format!("It belongs to {scope}. Remove it there first."),
+            );
+            return;
+        }
+        if let Some(picker) = &mut self.picker {
+            picker.chosen.push(app);
+        }
+    }
+
+    /// Choose the application typed into the picker by name.
+    fn pick_custom_app(&mut self) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        let id = std::mem::take(&mut picker.custom).trim().to_owned();
+        if id.is_empty() {
+            return;
+        }
+        // The catalog may know the typed id under a friendlier name.
+        let app = picker
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.apps.iter().find(|known| known.app.id == id))
+            .map_or_else(
+                || AppRef {
+                    id: id.clone(),
+                    name: id.clone(),
+                    aliases: Vec::new(),
+                },
+                |known| known.app.clone(),
+            );
+        self.pick_app(app);
+    }
+
+    /// Apply the picker's choice to its target and close it.
+    fn confirm_picker(&mut self) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        if picker.chosen.is_empty() {
+            self.picker = Some(picker);
+            return;
+        }
+        match picker.target {
+            PickerTarget::NewScope => {
+                let id = self.add_app_scope(picker.chosen);
+                let name = self.app_scope_name(&id);
+                self.leave_layers();
+                self.app_scope = Some(id);
+                self.apps_open = true;
+                self.flash(
+                    format!("{name} added"),
+                    "Click a key to choose what it does while this app is in front.",
+                );
+            }
+            PickerTarget::Scope(id) => {
+                self.snapshot_apps();
+                if let Some(scope) = self
+                    .profile_apps
+                    .entry(self.profile.clone())
+                    .or_default()
+                    .iter_mut()
+                    .find(|scope| scope.id == id)
+                {
+                    scope.apps = picker.chosen;
+                }
+                let name = self.app_scope_name(&id);
+                self.flash(format!("{name} updated"), "applies automatically");
+                self.persist();
+            }
+            PickerTarget::Group(index) => {
+                let id = self.add_app_scope(picker.chosen);
+                self.set_group_scope(index, id);
+            }
+        }
+    }
+
+    /// Add an application scope to the active profile, named after
+    /// its first application, and return its id.
+    fn add_app_scope(&mut self, apps: Vec<AppRef>) -> String {
+        self.snapshot_apps();
+        // Number past every id ever used here, so ids stay unique.
+        let number = self
+            .app_scopes()
+            .iter()
+            .filter_map(|scope| scope.id.strip_prefix("app-")?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let id = format!("app-{number}");
+        let name = match apps.as_slice() {
+            [first] => first.name.clone(),
+            [first, rest @ ..] => format!("{} + {}", first.name, rest.len()),
+            [] => format!("Application {number}"),
+        };
+        self.profile_apps
+            .entry(self.profile.clone())
+            .or_default()
+            .push(AppScope {
+                id: id.clone(),
+                name,
+                apps,
+            });
+        self.persist();
+        id
+    }
+
+    /// Delete an application scope of the active profile with its
+    /// mappings and shortcut groups, once confirmed.
+    fn delete_app_scope(&mut self, id: &str) {
+        if self.view != View::Keyboard {
+            return;
+        }
+        let Some(index) = self.app_scopes().iter().position(|scope| scope.id == id) else {
+            return;
+        };
+        self.snapshot_apps();
+        let scope = self
+            .profile_apps
+            .get_mut(&self.profile)
+            .map(|scopes| scopes.remove(index));
+        if let Some(maps) = self.profile_maps.get_mut(&self.profile) {
+            maps.retain(|(_, mapping)| mapping.app != id);
+        }
+        if let Some(groups) = self.profile_groups.get_mut(&self.profile) {
+            groups.retain(|group| group.scope != id);
+        }
+        if self.app_scope.as_deref() == Some(id) {
+            self.show_every_app();
+            self.clear_sheet();
+        }
+        let name = scope.map(|scope| scope.name).unwrap_or_default();
+        self.flash(
+            format!("{name} removed"),
+            "Its keys work like everywhere else again. Undo restores it.",
+        );
+        self.persist();
+    }
+
+    /// Apply the pending rename to the shown application scope.
+    fn commit_app_rename(&mut self) {
+        let Some(name) = self.rename_app.take() else {
+            return;
+        };
+        let name = name.trim().to_owned();
+        let Some(scope) = self.active_app_scope() else {
+            return;
+        };
+        if name.is_empty() || name == scope.name {
+            return;
+        }
+        let id = scope.id.clone();
+        self.snapshot_apps();
+        if let Some(scope) = self
+            .profile_apps
+            .get_mut(&self.profile)
+            .and_then(|scopes| scopes.iter_mut().find(|scope| scope.id == id))
+        {
+            scope.name.clone_from(&name);
+        }
+        self.flash("Application renamed", format!("now called {name}"));
+        self.persist();
+    }
+
+    /// Limit a shortcut group to an application scope, or (empty) to
+    /// none.
+    fn set_group_scope(&mut self, index: usize, scope: String) {
+        if !scope.is_empty() && !self.app_scopes().iter().any(|known| known.id == scope) {
+            return;
+        }
+        let mut name = None;
+        self.mutate_groups(|groups| {
+            if let Some(group) = groups.get_mut(index) {
+                group.scope.clone_from(&scope);
+                name = Some(group.name.clone());
+            }
+        });
+        self.popover = None;
+        if let Some(name) = name {
+            let scope = self.app_scope_name(&scope);
+            self.flash(format!("{name} · {scope}"), "applies automatically");
+        }
     }
 
     /// Stop choosing a layer key. A new layer that never got its key
@@ -1111,6 +1668,7 @@ impl App {
                 trigger: String::new(),
                 keys: Vec::new(),
             });
+        self.show_every_app();
         self.layer = Some(id);
         self.layers_open = true;
         self.choosing_layer_key = true;
@@ -1146,13 +1704,12 @@ impl App {
         }
         self.snapshot_layers();
         let mut hold_removed = false;
-        if let Some(maps) = self.profile_maps.get_mut(&self.profile)
-            && let Some(index) = maps.iter().position(|(key, _)| key == code)
-        {
-            hold_removed = maps[index].1.hold.take().is_some();
-            if maps[index].1.tap.is_none() {
-                maps.remove(index);
+        if let Some(maps) = self.profile_maps.get_mut(&self.profile) {
+            for (_, mapping) in maps.iter_mut().filter(|(key, _)| key == code) {
+                hold_removed |= mapping.hold.take().is_some();
             }
+            // A mapping left with nothing to do is dropped.
+            maps.retain(|(key, mapping)| key != code || mapping.tap.is_some() || mapping.normal);
         }
         let mut layer_name = String::new();
         if let Some(layers) = self.profile_layers.get_mut(&self.profile) {
@@ -1217,6 +1774,7 @@ impl App {
                     code: code.to_owned(),
                     action: action.to_owned(),
                     device: device.clone(),
+                    app: String::new(),
                 });
             }
         }
@@ -1303,13 +1861,15 @@ impl App {
         self.persist();
     }
 
-    /// Snapshot, then mutate the active profile's shortcut groups.
+    /// Snapshot, then mutate the active profile's shortcut groups, and
+    /// save the result.
     fn mutate_groups(&mut self, mutate: impl FnOnce(&mut Vec<Group>)) {
         if self.view == View::Tester {
             return;
         }
         self.undo = Some(Undo::Groups(self.profile_groups.clone()));
         mutate(self.profile_groups.entry(self.profile.clone()).or_default());
+        self.persist();
     }
 
     /// Add (or replace) a modifier combo on the selected key.
@@ -1344,15 +1904,23 @@ impl App {
             },
             note: String::new(),
         };
+        // Combos land in a "From the keyboard" group of the shown
+        // application scope (or of every application).
+        let app = self.app_id().to_owned();
+        let group_id = if app.is_empty() {
+            "kb".to_owned()
+        } else {
+            format!("kb:{app}")
+        };
         self.mutate_groups(|groups| {
-            let index = groups.iter().position(|group| group.id == "kb");
+            let index = groups.iter().position(|group| group.id == group_id);
             let index = index.unwrap_or_else(|| {
                 groups.insert(
                     0,
                     Group {
-                        id: "kb".to_owned(),
+                        id: group_id.clone(),
                         name: "From the keyboard".to_owned(),
-                        apps: Vec::new(),
+                        scope: app.clone(),
                         enabled: true,
                         any_mod: false,
                         rules: Vec::new(),
@@ -1374,14 +1942,18 @@ impl App {
         } else {
             format!("{}+{action}", to_mods.join("+"))
         };
+        let scope = self
+            .active_app_scope()
+            .map_or_else(|| "all applications".to_owned(), |scope| scope.name.clone());
         self.flash(
             format!("{}+{key} → {output}", from_mods.join("+")),
-            "updated in preview · all applications",
+            format!("applies automatically · {scope}"),
         );
     }
 
-    /// Restore the selected key to its default behavior — in the
-    /// active layer while one is shown, otherwise in the profile.
+    /// Restore the selected key — in the active layer while one is
+    /// shown, otherwise in the shown scope: its own mapping there goes,
+    /// and whatever a more general scope says applies again.
     fn clear_mapping(&mut self) {
         if self.view == View::Tester {
             return;
@@ -1391,21 +1963,47 @@ impl App {
         };
         if self.layer.is_some() {
             self.remove_layer_job(code);
-        } else {
-            self.remove_mapping(code);
+            return;
+        }
+        let (device, app) = (self.device.clone(), self.app_id().to_owned());
+        let own = self
+            .maps()
+            .iter()
+            .position(|(key, mapping)| key == code && mapping.scoped_to(&device, &app));
+        match own {
+            Some(index) => self.remove_mapping_at(index),
+            None => {
+                let name = key_name(code);
+                let sub = match self.mapping(code) {
+                    Some(inherited) => {
+                        format!("It follows {} here.", self.inherited_from(inherited))
+                    }
+                    None => "Nothing remaps it.".to_owned(),
+                };
+                self.flash(format!("{name} has no remap of its own here"), sub);
+            }
         }
     }
 
-    /// Remove one key's mapping from the active profile.
-    fn remove_mapping(&mut self, code: &str) {
+    /// Remove one mapping, by its position in the active profile's
+    /// list.
+    fn remove_mapping_at(&mut self, index: usize) {
+        let Some((code, mapping)) = self.maps().get(index).cloned() else {
+            return;
+        };
         self.undo = Some(Undo::Maps(self.profile_maps.clone()));
         if let Some(maps) = self.profile_maps.get_mut(&self.profile) {
-            maps.retain(|(key, _)| key != code);
+            maps.remove(index);
         }
-        self.flash(
-            format!("{} back to default", key_name(code)),
-            "applies automatically",
-        );
+        let name = key_name(&code);
+        let text = if mapping.is_general() {
+            format!("{name} back to default")
+        } else if mapping.app.is_empty() {
+            format!("{name} same as all keyboards")
+        } else {
+            format!("{name} same as all applications")
+        };
+        self.flash(text, "applies automatically");
         self.persist();
     }
 
@@ -1476,7 +2074,13 @@ impl App {
         } else {
             Vec::new()
         };
+        let apps = if duplicate {
+            self.app_scopes().to_vec()
+        } else {
+            Vec::new()
+        };
         self.leave_layers();
+        self.leave_apps();
         self.profiles.push(Profile {
             id: id.clone(),
             name: name.clone(),
@@ -1484,6 +2088,7 @@ impl App {
         self.profile_maps.insert(id.clone(), maps);
         self.profile_groups.insert(id.clone(), groups);
         self.profile_layers.insert(id.clone(), layers);
+        self.profile_apps.insert(id.clone(), apps);
         self.profile = id;
         self.confirm_remove_mapping = None;
         self.confirm_reset_mappings = None;
@@ -1492,7 +2097,7 @@ impl App {
         self.clear_sheet();
         self.undo = None;
         let sub = if duplicate {
-            "A separate copy of your mappings, layers and shortcuts."
+            "A separate copy of your mappings, layers, applications and shortcuts."
         } else {
             "Click a key to add your first mapping."
         };
@@ -1513,6 +2118,7 @@ impl App {
         let profile = self.profiles.remove(index);
         let maps = self.profile_maps.remove(id).unwrap_or_default();
         let layers = self.profile_layers.remove(id).unwrap_or_default();
+        let apps = self.profile_apps.remove(id).unwrap_or_default();
         let groups = self.profile_groups.remove(id).unwrap_or_default();
         let name = profile.name.clone();
         self.undo = Some(Undo::Profile {
@@ -1520,6 +2126,7 @@ impl App {
             profile,
             maps,
             layers,
+            apps,
             groups,
         });
         self.popover = None;
@@ -1703,7 +2310,7 @@ impl cosmic::Application for App {
                     layers: HashMap::from([(default.id.clone(), Vec::new())]),
                     active: default.id.clone(),
                     profiles: vec![default],
-                    custom_profiles: 0,
+                    ..ProfileState::default()
                 };
                 for starter in model::starter_profiles() {
                     state.maps.insert(starter.profile.id.clone(), starter.maps);
@@ -1719,11 +2326,12 @@ impl cosmic::Application for App {
             profiles,
             maps: profile_maps,
             layers: profile_layers,
+            apps: profile_apps,
+            groups: profile_groups,
             active: profile,
             custom_profiles,
         } = state;
         let custom_profiles = usize::try_from(custom_profiles).unwrap_or(usize::MAX);
-        let profile_groups: HashMap<String, Vec<Group>> = HashMap::new();
 
         let mut app = App {
             core,
@@ -1741,6 +2349,7 @@ impl cosmic::Application for App {
             profile_maps,
             profile_groups,
             profile_layers,
+            profile_apps,
             custom_profiles,
             rename: None,
             confirm_delete: None,
@@ -1755,6 +2364,11 @@ impl cosmic::Application for App {
             choosing_layer_key: false,
             rename_layer: None,
             confirm_delete_layer: None,
+            app_scope: None,
+            apps_open: false,
+            rename_app: None,
+            confirm_delete_app: None,
+            picker: None,
             selected: None,
             mode: Mode::Tap,
             query: String::new(),
@@ -1823,6 +2437,7 @@ impl cosmic::Application for App {
                 self.sheet_closing = None;
                 self.view = view;
                 self.leave_layers();
+                self.leave_apps();
                 self.confirm_reset_mappings = None;
                 self.popover = None;
                 self.recording = None;
@@ -1857,6 +2472,7 @@ impl cosmic::Application for App {
             }
             Message::SelectProfile(id) => {
                 self.leave_layers();
+                self.leave_apps();
                 self.confirm_reset_mappings = None;
                 self.profile = id;
                 self.toast = None;
@@ -1956,6 +2572,11 @@ impl cosmic::Application for App {
                     self.cancel_layer_key();
                     self.layer =
                         layer.filter(|id| self.layers().iter().any(|layer| &layer.id == id));
+                    // One context at a time: a layer shows the same
+                    // jobs in every application.
+                    if self.layer.is_some() {
+                        self.show_every_app();
+                    }
                     self.rename_layer = None;
                     self.remaps_open = false;
                     self.confirm_remove_mapping = None;
@@ -1963,6 +2584,126 @@ impl cosmic::Application for App {
                 }
             }
             Message::ToggleLayers => self.layers_open = !self.layers_open,
+            Message::SetAppScope(scope) => {
+                if self.view == View::Keyboard {
+                    let scope = scope.filter(|id| self.app_scopes().iter().any(|s| &s.id == id));
+                    if scope.is_some() {
+                        self.leave_layers();
+                    }
+                    self.app_scope = scope;
+                    self.rename_app = None;
+                    self.remaps_open = false;
+                    self.confirm_remove_mapping = None;
+                    self.close_sheet();
+                }
+            }
+            Message::ToggleApps => self.apps_open = !self.apps_open,
+            Message::AddAppScope => {
+                if self.view == View::Keyboard {
+                    return self.open_picker(PickerTarget::NewScope);
+                }
+            }
+            Message::ChangeApps => {
+                if self.view == View::Keyboard
+                    && let Some(scope) = self.active_app_scope()
+                {
+                    let id = scope.id.clone();
+                    return self.open_picker(PickerTarget::Scope(id));
+                }
+            }
+            Message::GroupAppScope(index) => {
+                if self.view == View::Shortcuts && index < self.groups().len() {
+                    return self.open_picker(PickerTarget::Group(index));
+                }
+            }
+            Message::SetGroupScope { group, scope } => {
+                if self.view == View::Shortcuts {
+                    self.set_group_scope(group, scope);
+                }
+            }
+            Message::PickerQuery(query) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.query = query;
+                }
+            }
+            Message::PickerToggle(app) => self.pick_app(app),
+            Message::PickerCustom(text) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.custom = text;
+                }
+            }
+            Message::PickerAddCustom => self.pick_custom_app(),
+            Message::PickerCancel => self.picker = None,
+            Message::PickerConfirm => self.confirm_picker(),
+            Message::AppsCatalog(catalog) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.catalog = Some(catalog);
+                }
+            }
+            Message::DeleteAppScope => {
+                if self.view == View::Keyboard
+                    && let Some(scope) = self.active_app_scope()
+                {
+                    self.confirm_delete_app = Some(scope.id.clone());
+                }
+            }
+            Message::DeleteAppScopeConfirm => {
+                if let Some(id) = self.confirm_delete_app.take() {
+                    self.delete_app_scope(&id);
+                }
+            }
+            Message::DeleteAppScopeCancel => self.confirm_delete_app = None,
+            Message::RenameAppToggle => {
+                if self.view == View::Keyboard
+                    && let Some(scope) = self.active_app_scope()
+                {
+                    self.rename_app = if self.rename_app.is_some() {
+                        None
+                    } else {
+                        Some(scope.name.clone())
+                    };
+                    if self.rename_app.is_some() {
+                        let id = ui::keyboard_view::app_rename_input_id();
+                        return Task::batch([
+                            cosmic::widget::text_input::focus(id.clone()),
+                            cosmic::widget::text_input::select_all(id),
+                        ]);
+                    }
+                }
+            }
+            Message::RenameAppInput(text) => {
+                if self.rename_app.is_some() {
+                    self.rename_app = Some(text);
+                }
+            }
+            Message::RenameAppCommit => self.commit_app_rename(),
+            Message::NormalKeyHere => self.set_normal_here(),
+            Message::EditMapping(index) => {
+                if self.view != View::Keyboard {
+                    return Task::none();
+                }
+                let Some((code, mapping)) = self.maps().get(index).cloned() else {
+                    return Task::none();
+                };
+                let Some(cap) = model::key(&code) else {
+                    return Task::none();
+                };
+                // Show the mapping's own scope, so the editor changes
+                // it rather than adding an override of it.
+                self.leave_layers();
+                self.leave_apps();
+                self.app_scope = (!mapping.app.is_empty()).then(|| mapping.app.clone());
+                self.apps_open |= self.app_scope.is_some();
+                if !model::same_device(&mapping.device, &self.device) {
+                    self.device = if model::every_device(&mapping.device) {
+                        "all".to_owned()
+                    } else {
+                        mapping.device.clone()
+                    };
+                    self.refresh_layout();
+                }
+                return self.update(Message::SelectKey(cap.code));
+            }
             Message::AddLayer => self.add_layer(),
             Message::ChooseLayerKey => {
                 if self.view == View::Keyboard && self.active_layer().is_some() {
@@ -2084,26 +2825,22 @@ impl cosmic::Application for App {
                         group.rules.remove(rule);
                     }
                 });
-                self.flash("Combination removed", "applied instantly");
+                self.flash("Combination removed", "applies automatically");
             }
             Message::ToggleSwap => {
                 let Some(selected) = self.selected else {
                     return Task::none();
                 };
-                let Some(mapping) = self.mapping(selected) else {
-                    return Task::none();
-                };
-                let Some(tap) = mapping.tap.clone() else {
+                let Some(tap) = self
+                    .mapping(selected)
+                    .and_then(|mapping| mapping.tap.clone())
+                else {
                     return Task::none();
                 };
                 self.undo = Some(Undo::Maps(self.profile_maps.clone()));
-                let mut swapped = false;
-                if let Some(maps) = self.profile_maps.get_mut(&self.profile)
-                    && let Some((_, entry)) = maps.iter_mut().find(|(key, _)| key == selected)
-                {
-                    entry.swap = !entry.swap;
-                    swapped = entry.swap;
-                }
+                let entry = self.scoped_entry(selected);
+                entry.swap = !entry.swap;
+                let swapped = entry.swap;
                 self.flash(
                     if swapped {
                         "Two-way swap on"
@@ -2115,19 +2852,18 @@ impl cosmic::Application for App {
                 self.persist();
             }
             Message::ClearKey => self.clear_mapping(),
-            Message::RemoveMapping(code) => {
-                if self.view == View::Keyboard && self.remaps_open && self.mapping(&code).is_some()
-                {
-                    self.confirm_remove_mapping = Some(code);
+            Message::RemoveMapping(index) => {
+                if self.view == View::Keyboard && self.remaps_open && index < self.maps().len() {
+                    self.confirm_remove_mapping = Some(index);
                 }
             }
             Message::RemoveMappingConfirm => {
-                if let Some(code) = self.confirm_remove_mapping.take()
+                if let Some(index) = self.confirm_remove_mapping.take()
                     && self.view == View::Keyboard
                     && self.remaps_open
-                    && self.mapping(&code).is_some()
+                    && index < self.maps().len()
                 {
-                    self.remove_mapping(&code);
+                    self.remove_mapping_at(index);
                 }
             }
             Message::RemoveMappingCancel => self.confirm_remove_mapping = None,
@@ -2147,13 +2883,16 @@ impl cosmic::Application for App {
                     groups.push(Group {
                         id: format!("g{}", count + 1),
                         name: "New group".to_owned(),
-                        apps: Vec::new(),
+                        scope: String::new(),
                         enabled: true,
                         any_mod: false,
                         rules: Vec::new(),
                     });
                 });
-                self.flash("Group added", "");
+                self.flash(
+                    "Group added",
+                    "Add shortcuts, or limit it to an application.",
+                );
             }
             Message::ToggleGroup(index) => {
                 let mut label = None;
@@ -2166,7 +2905,7 @@ impl cosmic::Application for App {
                 if let Some((name, enabled)) = label {
                     self.flash(
                         format!("{name} {}", if enabled { "active" } else { "paused" }),
-                        "applied instantly",
+                        "applies automatically",
                     );
                 }
             }
@@ -2203,7 +2942,7 @@ impl cosmic::Application for App {
                             group.rules.remove(index);
                         }
                     });
-                    self.flash("Shortcut removed", "applied instantly");
+                    self.flash("Shortcut removed", "applies automatically");
                     self.recording = None;
                     self.close_sheet();
                 }
@@ -2229,6 +2968,19 @@ impl cosmic::Application for App {
                         self.sheet_opened = None;
                         self.sheet_closing = None;
                         self.toast = None;
+                        self.persist();
+                    }
+                    Some(Undo::Apps { apps, maps, groups }) => {
+                        self.profile_apps = apps;
+                        self.profile_maps = maps;
+                        self.profile_groups = groups;
+                        self.rename_app = None;
+                        self.picker = None;
+                        if self.active_app_scope().is_none() {
+                            self.app_scope = None;
+                        }
+                        self.toast = None;
+                        self.persist();
                     }
                     Some(Undo::Layers { layers, maps }) => {
                         self.profile_layers = layers;
@@ -2246,10 +2998,12 @@ impl cosmic::Application for App {
                         profile,
                         maps,
                         layers,
+                        apps,
                         groups,
                     }) => {
                         self.profile_maps.insert(profile.id.clone(), maps);
                         self.profile_layers.insert(profile.id.clone(), layers);
+                        self.profile_apps.insert(profile.id.clone(), apps);
                         self.profile_groups.insert(profile.id.clone(), groups);
                         self.profiles
                             .insert(index.min(self.profiles.len()), profile);
@@ -2398,8 +3152,11 @@ impl cosmic::Application for App {
                 {
                     self.undo = None;
                     self.leave_layers();
+                    self.leave_apps();
                     self.profile_maps.insert(id.clone(), Vec::new());
-                    self.profile_layers.insert(id, Vec::new());
+                    self.profile_layers.insert(id.clone(), Vec::new());
+                    self.profile_apps.insert(id.clone(), Vec::new());
+                    self.profile_groups.insert(id, Vec::new());
                     self.clear_sheet();
                     self.flash("Profile cleared", "nothing is remapped");
                     self.persist();
@@ -2506,11 +3263,17 @@ impl cosmic::Application for App {
         if self.confirm_delete_layer.is_some() {
             return Some(ui::overlays::delete_layer_dialog(self));
         }
+        if self.confirm_delete_app.is_some() {
+            return Some(ui::overlays::delete_app_dialog(self));
+        }
         if self.confirm_reset_mappings.is_some() {
             return Some(ui::overlays::reset_mappings_dialog(self));
         }
         if self.confirm_remove_mapping.is_some() {
             return Some(ui::overlays::remove_mapping_dialog(self));
+        }
+        if let Some(picker) = &self.picker {
+            return Some(ui::overlays::picker_dialog(self, picker));
         }
         if self.view == View::Keyboard && self.selected.is_some() && self.capture {
             return Some(ui::overlays::capture_dialog(self));
@@ -2537,10 +3300,14 @@ impl cosmic::Application for App {
             self.confirm_delete = None;
         } else if self.confirm_delete_layer.is_some() {
             self.confirm_delete_layer = None;
+        } else if self.confirm_delete_app.is_some() {
+            self.confirm_delete_app = None;
         } else if self.confirm_reset_mappings.is_some() {
             self.confirm_reset_mappings = None;
         } else if self.confirm_remove_mapping.is_some() {
             self.confirm_remove_mapping = None;
+        } else if self.picker.is_some() {
+            self.picker = None;
         } else if self.capture {
             self.capture = false;
         } else if self.remaps_open {
@@ -2553,6 +3320,8 @@ impl cosmic::Application for App {
             self.recording = None;
         } else if self.rename_layer.is_some() {
             self.rename_layer = None;
+        } else if self.rename_app.is_some() {
+            self.rename_app = None;
         } else if self.choosing_layer_key {
             self.cancel_layer_key();
         } else {
@@ -2606,7 +3375,7 @@ mod tests {
         app.selected = Some("CapsLock");
         app.about_open = true;
         app.confirm_delete = Some("laptop".to_owned());
-        app.confirm_remove_mapping = Some("CapsLock".to_owned());
+        app.confirm_remove_mapping = Some(0);
         app.capture = true;
         app.remaps_open = true;
         app.setup = Some(Setup::new());
@@ -2844,7 +3613,7 @@ mod tests {
         assert_eq!(app.apply_seq, 1, "a mapping change schedules an apply");
 
         let _ = app.update(Message::OpenRemaps);
-        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        let _ = app.update(Message::RemoveMapping(0));
         assert!(
             app.mapping("CapsLock").is_some(),
             "request keeps the mapping"
@@ -3130,7 +3899,7 @@ mod tests {
         assert!(app.mapping("CapsLock").is_some());
 
         let _ = app.update(Message::OpenRemaps);
-        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        let _ = app.update(Message::RemoveMapping(0));
         assert!(
             app.mapping("CapsLock").is_some(),
             "request keeps the mapping"
@@ -3152,8 +3921,8 @@ mod tests {
             let _ = app.update(Message::OpenRemaps);
             let apply_seq = app.apply_seq;
             let toast_id = app.toast.as_ref().unwrap().id;
-            let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
-            assert_eq!(app.confirm_remove_mapping.as_deref(), Some("CapsLock"));
+            let _ = app.update(Message::RemoveMapping(0));
+            assert_eq!(app.confirm_remove_mapping, Some(0));
             assert_eq!(app.apply_seq, apply_seq, "request does not apply changes");
 
             if escape {
@@ -3187,7 +3956,7 @@ mod tests {
         let _ = app.update(Message::SelectKey("CapsLock"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
         let _ = app.update(Message::OpenRemaps);
-        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        let _ = app.update(Message::RemoveMapping(0));
         let _ = app.update(Message::RemoveMappingConfirm);
         assert!(app.confirm_remove_mapping.is_none());
         assert!(app.remaps_open);
@@ -3211,7 +3980,7 @@ mod tests {
             let _ = app.update(Message::SelectKey("CapsLock"));
             let _ = app.update(Message::PickAction("Escape".to_owned()));
             let _ = app.update(Message::OpenRemaps);
-            let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+            let _ = app.update(Message::RemoveMapping(0));
             let _ = app.update(message);
             assert!(app.confirm_remove_mapping.is_none());
             let before = app.profile_maps.clone();
@@ -3224,19 +3993,19 @@ mod tests {
     fn remap_removal_requires_an_existing_mapping_and_open_list() {
         let mut app = app();
         let _ = app.update(Message::OpenRemaps);
-        let _ = app.update(Message::RemoveMapping("missing".to_owned()));
+        let _ = app.update(Message::RemoveMapping(0));
         assert!(app.confirm_remove_mapping.is_none());
 
         let _ = app.update(Message::SelectKey("CapsLock"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
-        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        let _ = app.update(Message::RemoveMapping(0));
         assert!(
             app.confirm_remove_mapping.is_none(),
             "closed list ignores removal"
         );
 
         let _ = app.update(Message::SetView(View::Tester));
-        let _ = app.update(Message::RemoveMapping("CapsLock".to_owned()));
+        let _ = app.update(Message::RemoveMapping(0));
         let _ = app.update(Message::RemoveMappingConfirm);
         assert!(app.confirm_remove_mapping.is_none());
         assert!(app.mapping("CapsLock").is_some());
@@ -3254,7 +4023,7 @@ mod tests {
         ));
         let _ = app.update(Message::SelectKey("Numpad7"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
-        let yaml = crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned());
+        let yaml = crate::xremap::generate(app.rules(), |id| id.to_owned());
         let apply_seq = app.apply_seq;
 
         // Numpad7 is absent from the 60% deck; the rule must survive
@@ -3267,7 +4036,7 @@ mod tests {
             Some("Escape")
         );
         assert_eq!(
-            crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned()),
+            crate::xremap::generate(app.rules(), |id| id.to_owned()),
             yaml
         );
 
@@ -3281,7 +4050,7 @@ mod tests {
             let _ = app.update(Message::SetForm(app.detected_form().unwrap()));
             let _ = app.update(Message::SetVariant(app.detected_iso().unwrap()));
             assert_eq!(
-                crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned()),
+                crate::xremap::generate(app.rules(), |id| id.to_owned()),
                 yaml
             );
         }
@@ -4570,7 +5339,7 @@ mod tests {
     }
 
     fn yaml(app: &App) -> String {
-        crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned())
+        crate::xremap::generate(app.rules(), |id| id.to_owned())
     }
 
     fn toast_text(app: &App) -> &str {
@@ -4887,7 +5656,7 @@ mod tests {
             "/dev/input/event1"
         );
         assert!(
-            crate::xremap::generate(app.maps(), app.layers(), |id| app.device_label(id)).contains(
+            crate::xremap::generate(app.rules(), |id| app.device_label(id)).contains(
                 "    device:\n      only: ['Laptop']\n    remap:\n      KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"
             )
         );
@@ -4916,5 +5685,468 @@ mod tests {
         assert!(!app.choosing_layer_key);
         let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
         assert_eq!(app.layer, None);
+    }
+
+    // --- Application scopes ----------------------------------------------
+
+    /// Add an application scope through the picker by typing an id:
+    /// tests cannot ask the desktop.
+    fn add_terminal(app: &mut App) -> String {
+        let _ = app.update(Message::AddAppScope);
+        assert!(app.picker.is_some());
+        let _ = app.update(Message::PickerCustom("com.system76.CosmicTerm".to_owned()));
+        let _ = app.update(Message::PickerAddCustom);
+        let _ = app.update(Message::PickerConfirm);
+        app.app_scope.clone().expect("the new scope is shown")
+    }
+
+    #[test]
+    fn an_application_scope_is_added_from_the_picker_and_shown_on_the_deck() {
+        let mut app = app();
+        // Nothing chosen: the picker stays open until cancelled.
+        let _ = app.update(Message::AddAppScope);
+        let _ = app.update(Message::PickerConfirm);
+        assert!(app.picker.is_some());
+        let _ = app.on_escape();
+        assert!(app.picker.is_none());
+
+        let id = add_terminal(&mut app);
+        assert_eq!(id, "app-1");
+        assert!(app.picker.is_none());
+        assert!(app.apps_open);
+        let scope = &app.app_scopes()[0];
+        assert_eq!(scope.name, "com.system76.CosmicTerm");
+        assert_eq!(scope.apps[0].id, "com.system76.CosmicTerm");
+        assert_eq!(toast_text(&app), "com.system76.CosmicTerm added");
+        assert_eq!(app.here_label(), "in com.system76.CosmicTerm");
+        assert!(app.in_specific_scope());
+
+        // The tester has no use for the picker.
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::AddAppScope);
+        assert!(app.picker.is_none());
+    }
+
+    #[test]
+    fn a_mapping_in_an_application_overrides_the_general_one_only_there() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let _ = app.update(Message::SetMode(Mode::Hold));
+        let _ = app.update(Message::PickAction("Left Control".to_owned()));
+        let _ = app.update(Message::ClosePanel);
+
+        let id = add_terminal(&mut app);
+        // The general remap shows through, inherited.
+        let inherited = app.effective_mapping("CapsLock").expect("inherited");
+        assert!(!inherited.own);
+        assert_eq!(inherited.mapping.tap.as_deref(), Some("Escape"));
+        assert!(app.own_mapping("CapsLock").is_none());
+        assert_eq!(app.inherited_from(inherited.mapping), "all applications");
+        assert_eq!(app.other_scopes("CapsLock"), 0);
+
+        // An override starts from the inherited mapping, so the hold
+        // action survives the change of the tap.
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Tab".to_owned()));
+        let own = app
+            .own_mapping("CapsLock")
+            .expect("own mapping in the terminal");
+        assert_eq!(own.tap.as_deref(), Some("Tab"));
+        assert_eq!(own.hold.as_deref(), Some("Left Control"));
+        assert_eq!(own.app, id);
+        assert_eq!(toast_text(&app), "Caps Lock → Tab");
+        assert!(
+            app.toast
+                .as_ref()
+                .unwrap()
+                .sub
+                .contains("in com.system76.CosmicTerm")
+        );
+        assert_eq!(app.maps().len(), 2, "the general mapping is untouched");
+
+        // Back to every application: the general mapping applies, and
+        // the key is marked as differing elsewhere.
+        let _ = app.update(Message::SetAppScope(None));
+        assert_eq!(
+            app.mapping("CapsLock").and_then(|m| m.tap.as_deref()),
+            Some("Escape")
+        );
+        assert_eq!(app.other_scopes("CapsLock"), 1);
+
+        let yaml = yaml(&app);
+        assert!(
+            yaml.contains(
+                "    application:\n      only: ['com.system76.CosmicTerm']\n    remap:\n      KEY_CAPSLOCK:\n        held: KEY_LEFTCTRL\n        alone: KEY_TAB\n"
+            ),
+            "{yaml}"
+        );
+    }
+
+    #[test]
+    fn a_normal_key_in_an_application_stands_in_for_the_general_remap() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        // Not in a specific scope: nothing to keep normal.
+        let _ = app.update(Message::NormalKeyHere);
+        assert!(app.maps().iter().all(|(_, m)| !m.normal));
+        let _ = app.update(Message::ClosePanel);
+
+        add_terminal(&mut app);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::NormalKeyHere);
+        let own = app.own_mapping("CapsLock").expect("normal here");
+        assert!(own.normal);
+        assert_eq!(own.tap, None);
+        assert_eq!(toast_text(&app), "Caps Lock stays Caps Lock");
+        assert!(yaml(&app).contains("      KEY_CAPSLOCK: KEY_CAPSLOCK\n"));
+        let apply_seq = app.apply_seq;
+        let _ = app.update(Message::NormalKeyHere);
+        assert_eq!(app.apply_seq, apply_seq, "nothing to change");
+        assert_eq!(toast_text(&app), "Caps Lock is already a normal key here");
+
+        // Choosing an action replaces the exception; clearing the key
+        // drops the override and the general remap shows through again.
+        let _ = app.update(Message::PickAction("Tab".to_owned()));
+        assert!(!app.own_mapping("CapsLock").unwrap().normal);
+        let _ = app.update(Message::ClearKey);
+        assert!(app.own_mapping("CapsLock").is_none());
+        assert_eq!(
+            app.mapping("CapsLock").and_then(|m| m.tap.as_deref()),
+            Some("Escape")
+        );
+        assert_eq!(toast_text(&app), "Caps Lock same as all applications");
+        // Nothing of its own left: clearing again only explains, and
+        // the earlier removal stays undoable.
+        let _ = app.update(Message::ClearKey);
+        assert_eq!(toast_text(&app), "Caps Lock has no remap of its own here");
+        let _ = app.update(Message::Undo);
+        assert_eq!(
+            app.own_mapping("CapsLock").and_then(|m| m.tap.as_deref()),
+            Some("Tab")
+        );
+    }
+
+    #[test]
+    fn removing_an_application_takes_its_remaps_and_is_undoable() {
+        let mut app = app();
+        add_terminal(&mut app);
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("B".to_owned()));
+        let _ = app.update(Message::SetMode(Mode::Combo));
+        let _ = app.update(Message::PickAction("C".to_owned()));
+        assert_eq!(app.groups().len(), 1);
+        assert_eq!(app.groups()[0].id, "kb:app-1");
+        assert_eq!(app.groups()[0].scope, "app-1");
+        assert_eq!(app.scope_count("app-1"), 2);
+
+        let _ = app.update(Message::DeleteAppScope);
+        assert_eq!(app.confirm_delete_app.as_deref(), Some("app-1"));
+        let _ = app.on_escape();
+        assert!(app.confirm_delete_app.is_none());
+        assert_eq!(app.app_scopes().len(), 1);
+
+        let _ = app.update(Message::DeleteAppScope);
+        let _ = app.update(Message::DeleteAppScopeConfirm);
+        assert!(app.app_scopes().is_empty());
+        assert!(app.maps().is_empty());
+        assert!(app.groups().is_empty());
+        assert_eq!(app.app_scope, None);
+        assert_eq!(toast_text(&app), "com.system76.CosmicTerm removed");
+
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.app_scopes().len(), 1);
+        assert_eq!(app.maps().len(), 1);
+        assert_eq!(app.groups().len(), 1);
+    }
+
+    #[test]
+    fn one_scope_per_application_and_the_picker_edits_a_scope() {
+        let mut app = app();
+        add_terminal(&mut app);
+        // A second scope cannot take the same application.
+        let _ = app.update(Message::SetAppScope(None));
+        let _ = app.update(Message::AddAppScope);
+        let _ = app.update(Message::PickerCustom("com.system76.CosmicTerm".to_owned()));
+        let _ = app.update(Message::PickerAddCustom);
+        assert!(app.picker.as_ref().unwrap().chosen.is_empty());
+        assert_eq!(
+            toast_text(&app),
+            "com.system76.CosmicTerm already has its own remaps"
+        );
+        let _ = app.update(Message::PickerCustom("firefox".to_owned()));
+        let _ = app.update(Message::PickerAddCustom);
+        let _ = app.update(Message::PickerConfirm);
+        assert_eq!(app.app_scopes().len(), 2);
+        assert_eq!(app.app_scope.as_deref(), Some("app-2"));
+
+        // Renaming and changing the shown scope's applications.
+        let _ = app.update(Message::RenameAppToggle);
+        let _ = app.update(Message::RenameAppInput("Browsers".to_owned()));
+        let _ = app.update(Message::RenameAppCommit);
+        assert_eq!(app.active_app_scope().unwrap().name, "Browsers");
+        let _ = app.update(Message::ChangeApps);
+        let picker = app.picker.as_ref().unwrap();
+        assert_eq!(picker.target, PickerTarget::Scope("app-2".to_owned()));
+        assert_eq!(picker.chosen.len(), 1);
+        let _ = app.update(Message::PickerCustom("chromium".to_owned()));
+        let _ = app.update(Message::PickerAddCustom);
+        // Choosing an application again unchooses it.
+        let _ = app.update(Message::PickerToggle(AppRef {
+            id: "firefox".to_owned(),
+            name: "firefox".to_owned(),
+            aliases: Vec::new(),
+        }));
+        assert_eq!(app.picker.as_ref().unwrap().chosen.len(), 1);
+        let _ = app.update(Message::PickerConfirm);
+        let scope = app.active_app_scope().unwrap();
+        assert_eq!(scope.name, "Browsers", "the name is kept");
+        assert_eq!(scope.apps.len(), 1);
+        assert_eq!(scope.apps[0].id, "chromium");
+        assert_eq!(toast_text(&app), "Browsers updated");
+    }
+
+    #[test]
+    fn layers_and_applications_are_shown_one_at_a_time_and_leave_with_the_view() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("navigation".to_owned()));
+        add_terminal(&mut app);
+        let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
+        assert_eq!(
+            app.app_scope, None,
+            "a layer shows the same jobs in every application"
+        );
+        assert!(app.layer.is_some());
+        let _ = app.update(Message::SetAppScope(Some("app-1".to_owned())));
+        assert_eq!(app.layer, None);
+        assert_eq!(app.app_scope.as_deref(), Some("app-1"));
+        let _ = app.update(Message::AddLayer);
+        assert_eq!(app.app_scope, None);
+        let _ = app.update(Message::CancelLayerKey);
+
+        let _ = app.update(Message::SetAppScope(Some("app-1".to_owned())));
+        let _ = app.update(Message::SetView(View::Tester));
+        assert_eq!(app.app_scope, None);
+        let _ = app.update(Message::SetView(View::Keyboard));
+        let _ = app.update(Message::SetAppScope(Some("app-1".to_owned())));
+        let _ = app.update(Message::SelectProfile("default".to_owned()));
+        assert_eq!(app.app_scope, None);
+        // An unknown scope is not shown.
+        let _ = app.update(Message::SetAppScope(Some("app-9".to_owned())));
+        assert_eq!(app.app_scope, None);
+    }
+
+    #[test]
+    fn profiles_carry_their_applications_through_duplicate_reset_and_delete() {
+        let mut app = app();
+        add_terminal(&mut app);
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("B".to_owned()));
+        let _ = app.update(Message::NewProfile { duplicate: true });
+        assert_eq!(app.app_scopes().len(), 1);
+        assert_eq!(app.app_scope, None);
+        assert_eq!(app.maps().len(), 1);
+
+        let _ = app.update(Message::MenuReset);
+        let _ = app.update(Message::ResetMappingsConfirm);
+        assert!(app.app_scopes().is_empty());
+        assert!(app.maps().is_empty());
+
+        let _ = app.update(Message::SelectProfile("default".to_owned()));
+        assert_eq!(app.app_scopes().len(), 1, "the original keeps its scope");
+        let _ = app.update(Message::DeleteProfile("custom-1".to_owned()));
+        let _ = app.update(Message::DeleteConfirm);
+        assert!(!app.profile_apps.contains_key("custom-1"));
+        let _ = app.update(Message::Undo);
+        assert!(app.profile_apps.contains_key("custom-1"));
+
+        let state = app.profile_state();
+        assert_eq!(state.apps.get("default").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn the_remaps_list_opens_a_mapping_in_its_own_scope() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let _ = app.update(Message::ClosePanel);
+        add_terminal(&mut app);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Tab".to_owned()));
+        let _ = app.update(Message::ClosePanel);
+        let _ = app.update(Message::SetAppScope(None));
+        assert_eq!(app.maps().len(), 2);
+        let terminal = app
+            .maps()
+            .iter()
+            .position(|(_, m)| m.app == "app-1")
+            .unwrap();
+
+        let _ = app.update(Message::OpenRemaps);
+        let _ = app.update(Message::EditMapping(terminal));
+        assert_eq!(app.app_scope.as_deref(), Some("app-1"));
+        assert_eq!(app.selected, Some("CapsLock"));
+        assert!(!app.remaps_open);
+        assert_eq!(
+            app.own_mapping("CapsLock").and_then(|m| m.tap.as_deref()),
+            Some("Tab")
+        );
+
+        // Removing from the list takes exactly that entry.
+        let _ = app.update(Message::ClosePanel);
+        let _ = app.update(Message::OpenRemaps);
+        let _ = app.update(Message::RemoveMapping(terminal));
+        let _ = app.update(Message::RemoveMappingConfirm);
+        assert_eq!(app.maps().len(), 1);
+        assert!(app.maps()[0].1.app.is_empty());
+        assert_eq!(toast_text(&app), "Caps Lock same as all applications");
+    }
+
+    #[test]
+    fn a_layer_key_kept_normal_in_an_application_switches_the_layer_off_there() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("navigation".to_owned()));
+        add_terminal(&mut app);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::NormalKeyHere);
+        let yaml = yaml(&app);
+        let normal = yaml
+            .find("      KEY_CAPSLOCK: KEY_CAPSLOCK\n")
+            .expect("normal in the terminal");
+        let held = yaml
+            .find("      KEY_CAPSLOCK:\n        held: KEY_BRL_DOT1\n        alone: KEY_ESC\n")
+            .expect("holds the layer elsewhere");
+        assert!(normal < held);
+    }
+
+    #[test]
+    fn a_keyboard_inherits_the_general_remap_and_can_override_it() {
+        let mut app = app();
+        let _ = app.update(connected(
+            "/dev/input/event1",
+            "Laptop",
+            keyboard::FORM_SIXTY_FIVE,
+            false,
+        ));
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        let _ = app.update(Message::ClosePanel);
+        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        let inherited = app.effective_mapping("CapsLock").unwrap();
+        assert!(!inherited.own);
+        assert_eq!(app.inherited_from(inherited.mapping), "all keyboards");
+        assert_eq!(app.here_label(), "on Laptop");
+
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Tab".to_owned()));
+        assert_eq!(app.maps().len(), 2);
+        assert_eq!(
+            app.own_mapping("CapsLock").unwrap().device,
+            "/dev/input/event1"
+        );
+        let _ = app.update(Message::SelectDevice("all".to_owned()));
+        assert_eq!(
+            app.mapping("CapsLock").unwrap().tap.as_deref(),
+            Some("Escape")
+        );
+        assert_eq!(app.other_scopes("CapsLock"), 1);
+    }
+
+    #[test]
+    fn shortcut_groups_take_an_application_scope_and_persist_with_the_profile() {
+        let mut app = app();
+        add_terminal(&mut app);
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::AddGroup);
+        let apply_seq = app.apply_seq;
+        assert_eq!(app.groups().len(), 1);
+        let _ = app.update(Message::SetGroupScope {
+            group: 0,
+            scope: "app-1".to_owned(),
+        });
+        assert_eq!(app.groups()[0].scope, "app-1");
+        assert_eq!(toast_text(&app), "New group · com.system76.CosmicTerm");
+        // An unknown scope is refused.
+        let _ = app.update(Message::SetGroupScope {
+            group: 0,
+            scope: "app-9".to_owned(),
+        });
+        assert_eq!(app.groups()[0].scope, "app-1");
+
+        // Recording a complete rule generates a scoped keymap block.
+        let _ = app.update(Message::EditRule {
+            group: 0,
+            rule: None,
+        });
+        let device = PathBuf::from("/dev/input/test");
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_LEFTMETA.0));
+        app.phys_press(&device, evdev::KeyCode::KEY_C.0);
+        let _ = app.update(Message::SetRecording(Some(Side::To)));
+        app.pressed
+            .remove(&(device.clone(), evdev::KeyCode::KEY_LEFTMETA.0));
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_LEFTCTRL.0));
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_LEFTSHIFT.0));
+        app.phys_press(&device, evdev::KeyCode::KEY_C.0);
+        let rule = &app.groups()[0].rules[0];
+        assert_eq!(rule.from.mods, vec!["Super".to_owned()]);
+        assert_eq!(rule.to.mods, vec!["Ctrl".to_owned(), "Shift".to_owned()]);
+        assert!(app.apply_seq > apply_seq, "shortcut changes apply");
+        let yaml = yaml(&app);
+        assert!(
+            yaml.contains(
+                "  - name: 'Keyloom shortcuts: New group (com.system76.CosmicTerm)'\n    application:\n      only: ['com.system76.CosmicTerm']\n    remap:\n      Super-KEY_C: Ctrl-Shift-KEY_C\n"
+            ),
+            "{yaml}"
+        );
+
+        // Groups are saved with the profile.
+        let state = app.profile_state();
+        assert_eq!(state.groups.get("default").map(Vec::len), Some(1));
+
+        // A new application for a group is made from the picker.
+        let _ = app.update(Message::GroupAppScope(0));
+        assert_eq!(app.picker.as_ref().unwrap().target, PickerTarget::Group(0));
+        let _ = app.update(Message::PickerCustom("firefox".to_owned()));
+        let _ = app.update(Message::PickerAddCustom);
+        let _ = app.update(Message::PickerConfirm);
+        assert_eq!(app.groups()[0].scope, "app-2");
+        assert_eq!(app.app_scopes().len(), 2);
+    }
+
+    #[test]
+    fn combos_follow_the_shown_application_scope() {
+        let mut app = app();
+        let _ = app.update(Message::SelectKey("KeyC"));
+        let _ = app.update(Message::SetMode(Mode::Combo));
+        let _ = app.update(Message::PickAction("Copy".to_owned()));
+        let _ = app.update(Message::ClosePanel);
+        add_terminal(&mut app);
+        assert_eq!(
+            app.combos_for("C").len(),
+            1,
+            "general combos apply in the terminal too"
+        );
+        let _ = app.update(Message::SelectKey("KeyC"));
+        let _ = app.update(Message::SetMode(Mode::Combo));
+        let _ = app.update(Message::PickAction("Paste".to_owned()));
+        assert_eq!(app.groups().len(), 2);
+        assert_eq!(app.combos_for("C").len(), 2);
+        assert!(
+            app.toast
+                .as_ref()
+                .unwrap()
+                .sub
+                .contains("com.system76.CosmicTerm")
+        );
+        let _ = app.update(Message::SetAppScope(None));
+        assert_eq!(
+            app.combos_for("C").len(),
+            1,
+            "the terminal's combo is not shown everywhere"
+        );
     }
 }

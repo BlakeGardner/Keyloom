@@ -18,7 +18,9 @@ any key when you want its original behavior back.
 
 Need one key to do more? Set it to **Escape when tapped and Control when held**,
 or give it a whole **layer**: hold Caps Lock and H/J/K/L become arrow keys,
-while every other key keeps working normally.
+while every other key keeps working normally. Keys can also act differently
+**in one application**: keep Caps Lock as it is in your editor, or send the
+terminal's copy shortcut when you press Super+C there.
 
 > **Screenshot placeholder — Visual remapping**
 >
@@ -54,8 +56,6 @@ for downloads and release notes.
 Keyloom is in early development. It needs
 [xremap](https://github.com/xremap/xremap) installed; a guided first-run
 setup then takes care of the background service and input permissions.
-Application-specific remaps are planned for the first public release,
-0.1.0.
 
 ## What's next
 

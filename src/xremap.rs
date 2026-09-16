@@ -6,9 +6,11 @@
 //! Generation is deterministic: identical mappings always produce
 //! byte-identical YAML, with sources sorted by their xremap key name.
 //!
-//! Mappings become `modmap` entries. Layers become `keymap` rules
-//! guarded by a virtual modifier that stands in for the held layer key
-//! (see [`LAYER_MODIFIERS`]).
+//! Mappings become `modmap` entries, one block per scope (an
+//! application scope, a keyboard, both, or neither), most specific
+//! first. Layers become `keymap` rules guarded by a virtual modifier
+//! that stands in for the held layer key (see [`LAYER_MODIFIERS`]), and
+//! shortcut groups become `keymap` rules of their own.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -17,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use evdev::KeyCode;
 
-use crate::ui::model::{self, Layer, Mapping, Maps};
+use crate::ui::model::{self, AppScope, Chord, Group, Layer, Mapping, Maps};
 
 /// First line of every file Keyloom generates. Files that don't start
 /// with this marker are treated as foreign and never silently replaced.
@@ -114,6 +116,142 @@ fn evdev_name(scancode: u16) -> Option<String> {
     name.starts_with("KEY_").then_some(name)
 }
 
+/// Everything of one profile the generator reads.
+#[derive(Clone, Copy, Debug)]
+pub struct Rules<'a> {
+    pub maps: &'a Maps,
+    pub layers: &'a [Layer],
+    pub apps: &'a [AppScope],
+    pub groups: &'a [Group],
+}
+
+/// An application scope as a block filter: the scope's name and id,
+/// and every application id xremap should match.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct AppAxis {
+    name: String,
+    id: String,
+    matchers: Vec<String>,
+}
+
+/// A keyboard as a block filter: xremap matches on the resolved name.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct DeviceAxis {
+    name: String,
+    id: String,
+}
+
+/// Where a block applies: an application scope or every application,
+/// and one keyboard or every keyboard.
+///
+/// Scopes order most specific first (see [`model::scope_rank`]), which
+/// is the order blocks are written in: xremap uses the first block that
+/// mentions a key and whose filters match, so an application's block
+/// has to come before a keyboard's, and both before the general one.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Scope {
+    rank: u8,
+    app: Option<AppAxis>,
+    device: Option<DeviceAxis>,
+}
+
+impl Scope {
+    fn new(app: Option<AppAxis>, device: Option<DeviceAxis>) -> Self {
+        Self {
+            rank: model::scope_rank(device.is_none(), app.is_none()),
+            app,
+            device,
+        }
+    }
+
+    /// Every keyboard in every application.
+    fn general() -> Self {
+        Self::new(None, None)
+    }
+
+    /// Where both scopes apply, or `None` when they never overlap.
+    fn intersect(&self, other: &Self) -> Option<Self> {
+        fn axis<T: Clone + PartialEq>(a: &Option<T>, b: &Option<T>) -> Option<Option<T>> {
+            match (a, b) {
+                (None, either) | (either, None) => Some(either.clone()),
+                (Some(a), Some(b)) => (a == b).then(|| Some(a.clone())),
+            }
+        }
+        Some(Self::new(
+            axis(&self.app, &other.app)?,
+            axis(&self.device, &other.device)?,
+        ))
+    }
+
+    /// The scope's places, for block titles:
+    /// ` (COSMIC Terminal, Keychron K2 Pro)`.
+    fn suffix(&self) -> String {
+        let names: Vec<&str> = self
+            .app
+            .iter()
+            .map(|app| app.name.as_str())
+            .chain(self.device.iter().map(|device| device.name.as_str()))
+            .collect();
+        if names.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", names.join(", "))
+        }
+    }
+
+    /// The block's `application` and `device` filters.
+    fn filters(&self) -> String {
+        let mut filters = String::new();
+        if let Some(app) = &self.app {
+            let ids: Vec<String> = app.matchers.iter().map(|id| quote(id)).collect();
+            filters.push_str(&format!(
+                "    application:\n      only: [{}]\n",
+                ids.join(", ")
+            ));
+        }
+        if let Some(device) = &self.device {
+            filters.push_str(&format!(
+                "    device:\n      only: [{}]\n",
+                quote(&device.name)
+            ));
+        }
+        filters
+    }
+}
+
+/// Resolves the scope ids stored with mappings, jobs, and groups.
+struct Places<'a, F> {
+    apps: &'a [AppScope],
+    device_name: F,
+}
+
+impl<F: Fn(&str) -> String> Places<'_, F> {
+    /// The scope for a device id and an application scope id, or
+    /// `None` when nothing can apply there: the application scope no
+    /// longer exists, or it has no applications.
+    fn scope(&self, device: &str, app: &str) -> Option<Scope> {
+        let app = if app.is_empty() {
+            None
+        } else {
+            let scope = self.apps.iter().find(|scope| scope.id == app)?;
+            let matchers: Vec<String> = scope.matchers().into_iter().map(str::to_owned).collect();
+            if matchers.is_empty() {
+                return None;
+            }
+            Some(AppAxis {
+                name: scope.name.clone(),
+                id: scope.id.clone(),
+                matchers,
+            })
+        };
+        let device = (!model::every_device(device)).then(|| DeviceAxis {
+            name: (self.device_name)(device),
+            id: device.to_owned(),
+        });
+        Some(Scope::new(app, device))
+    }
+}
+
 /// What a source key produces in the generated modmap.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Output {
@@ -142,6 +280,10 @@ fn slot(action: Option<&str>) -> Option<Option<String>> {
 /// Resolve one mapping into `(source symbol, output)`, or `None` when
 /// nothing about it can be expressed as an xremap rule.
 ///
+/// A "normal here" mapping maps the key to itself: listed ahead of the
+/// more general blocks, that keeps the key as it is in its scope, and
+/// keeps a layer the key holds from activating there.
+///
 /// A key that holds a layer produces the layer's modifier while held:
 /// its tap action keeps working through a tap/hold key, and any hold
 /// action is superseded by the layer.
@@ -151,6 +293,9 @@ fn resolve(
     layer_modifier: Option<&str>,
 ) -> Option<(String, Output)> {
     let source = key_symbol(code)?;
+    if mapping.normal {
+        return Some((source.clone(), Output::Key(source)));
+    }
     let tap = slot(mapping.tap.as_deref());
     let output = if let Some(modifier) = layer_modifier {
         match tap {
@@ -181,10 +326,11 @@ fn resolve(
 /// Layer key code → the modifier standing in for it.
 type Triggers<'a> = HashMap<&'a str, &'static str>;
 
-/// Entries for one device scope, sorted by source symbol.
+/// Entries for one scope, sorted by source symbol.
 fn scope_entries(mappings: &[&(String, Mapping)], triggers: &Triggers) -> BTreeMap<String, Output> {
     let mut entries = BTreeMap::new();
-    // Explicit mappings first; the model keeps one mapping per key.
+    // Explicit mappings first; the model keeps one mapping per key and
+    // scope.
     for (code, mapping) in mappings {
         let modifier = triggers.get(code.as_str()).copied();
         if let Some((source, output)) = resolve(code, mapping, modifier) {
@@ -194,7 +340,7 @@ fn scope_entries(mappings: &[&(String, Mapping)], triggers: &Triggers) -> BTreeM
     // Two-way swaps add the reverse entry unless the reverse source
     // already has an explicit mapping.
     for (code, mapping) in mappings {
-        if !mapping.swap || mapping.hold.is_some() {
+        if !mapping.swap || mapping.hold.is_some() || mapping.normal {
             continue;
         }
         let (Some(source), Some(tap)) = (key_symbol(code), mapping.tap.as_deref()) else {
@@ -214,37 +360,14 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// A device scope: `None` is every keyboard (`all`), `Some((resolved
-/// name, id))` a specific one.
-type Scope = Option<(String, String)>;
-
-fn scope_of(device: &str, device_name: &impl Fn(&str) -> String) -> Scope {
-    match device {
-        "" | "all" => None,
-        id => Some((device_name(id), id.to_owned())),
-    }
-}
-
-/// Blocks for specific keyboards, sorted by name, then the block for
-/// every keyboard. xremap uses the first block that mentions a key, so
-/// the general block must not shadow a keyboard's own entry.
-fn ordered<T>(by_scope: &BTreeMap<Scope, T>) -> impl Iterator<Item = (&Scope, &T)> {
-    let specific = by_scope.iter().filter(|(scope, _)| scope.is_some());
-    let general = by_scope.iter().filter(|(scope, _)| scope.is_none());
-    specific.chain(general)
-}
-
-/// The `name:` line of a block, plus its device filter for a specific
-/// keyboard.
+/// The `name:` line of a block, plus its filters for a specific
+/// application scope or keyboard.
 fn block_header(title: &str, scope: &Scope) -> String {
-    match scope {
-        None => format!("  - name: {}\n", quote(title)),
-        Some((name, _)) => format!(
-            "  - name: {}\n    device:\n      only: [{}]\n",
-            quote(&format!("{title} ({name})")),
-            quote(name)
-        ),
-    }
+    format!(
+        "  - name: {}\n{}",
+        quote(&format!("{title}{}", scope.suffix())),
+        scope.filters()
+    )
 }
 
 /// One `modmap` block.
@@ -291,48 +414,80 @@ fn resolve_layers(layers: &[Layer]) -> Vec<ResolvedLayer<'_>> {
         .collect()
 }
 
-/// The symbol a key's press reaches the rules with, per scope a layer
-/// job applies to. Mappings run first, so a key whose tap is remapped
-/// arrives as its tap action; a key whose tap is disabled never arrives
-/// at all. A mapping scoped to one keyboard while the job applies
-/// everywhere adds a refined source for that keyboard.
-fn rule_sources(
+/// The symbol a key arrives at the rules as once its mapping ran:
+/// `None` when the tap is disabled and the key never arrives. A
+/// hold-only, untranslatable, or "normal here" mapping leaves the key
+/// as itself.
+fn arrives_as(source: &str, mapping: &Mapping) -> Option<String> {
+    if mapping.normal {
+        return Some(source.to_owned());
+    }
+    match slot(mapping.tap.as_deref()) {
+        Some(None) => None,
+        Some(Some(key)) => Some(key),
+        None => Some(source.to_owned()),
+    }
+}
+
+/// The symbol a job's key arrives at the rules with, in the job's scope
+/// and in every narrower scope where a mapping changes it. Mappings run
+/// first, so a job on a remapped key has to match what the key became:
+/// the most specific mapping covering the whole job scope sets the base
+/// rule, and a mapping overlapping only part of it (the key remapped on
+/// one keyboard, or in one application) adds a rule for that part. A
+/// symbol of `None` means the key never arrives there.
+fn rule_sources<F: Fn(&str) -> String>(
     code: &str,
-    scope: &Scope,
+    job: &Scope,
     maps: &Maps,
-    device_name: &impl Fn(&str) -> String,
-) -> Vec<(Scope, String)> {
+    places: &Places<'_, F>,
+) -> Vec<(Scope, Option<String>)> {
     let Some(source) = key_symbol(code) else {
         return Vec::new();
     };
-    let Some((_, mapping)) = maps.iter().find(|(key, _)| key == code) else {
-        return vec![(scope.clone(), source)];
-    };
-    let mapped = match slot(mapping.tap.as_deref()) {
-        Some(None) => None,
-        Some(Some(key)) => Some(key),
-        // Hold-only and dropped mappings leave the tap as the key itself.
-        None => Some(source.clone()),
-    };
-    let mapping_scope = scope_of(&mapping.device, device_name);
-    if mapping_scope.is_none() || mapping_scope == *scope {
-        return mapped.map(|key| (scope.clone(), key)).into_iter().collect();
+    // The most specific mapping covering the job's whole scope, as
+    // (rank, symbol).
+    let mut base: Option<(u8, Option<String>)> = None;
+    // Per partial overlap, the most specific mapping there.
+    let mut refinements: BTreeMap<Scope, (u8, Option<String>)> = BTreeMap::new();
+    for (_, mapping) in maps.iter().filter(|(key, _)| key == code) {
+        let Some(scope) = places.scope(&mapping.device, &mapping.app) else {
+            continue;
+        };
+        let Some(overlap) = scope.intersect(job) else {
+            continue;
+        };
+        let symbol = arrives_as(&source, mapping);
+        if overlap == *job {
+            if base.as_ref().is_none_or(|(rank, _)| scope.rank < *rank) {
+                base = Some((scope.rank, symbol));
+            }
+        } else {
+            let entry = refinements.entry(overlap).or_insert((u8::MAX, None));
+            if scope.rank < entry.0 {
+                *entry = (scope.rank, symbol);
+            }
+        }
     }
-    let mut sources = vec![(scope.clone(), source)];
-    if scope.is_none()
-        && let Some(key) = mapped
-    {
-        sources.push((mapping_scope, key));
-    }
+    let base = base.map_or_else(|| Some(source.clone()), |(_, symbol)| symbol);
+    let mut sources = vec![(job.clone(), base.clone())];
+    // A part where the key arrives as it does in the base rule, or not
+    // at all, needs no rule of its own.
+    sources.extend(
+        refinements
+            .into_iter()
+            .filter(|(_, (_, symbol))| symbol.is_some() && *symbol != base)
+            .map(|(scope, (_, symbol))| (scope, symbol)),
+    );
     sources
 }
 
-/// The `keymap` blocks for one layer, one per device scope.
-fn layer_blocks(
+/// The `keymap` blocks for one layer, one per scope.
+fn layer_blocks<F: Fn(&str) -> String>(
     layer: &ResolvedLayer<'_>,
     maps: &Maps,
     triggers: &Triggers,
-    device_name: &impl Fn(&str) -> String,
+    places: &Places<'_, F>,
 ) -> Vec<String> {
     // Source symbol → output (`None` emits nothing), per scope.
     let mut rules: BTreeMap<Scope, BTreeMap<String, Option<String>>> = BTreeMap::new();
@@ -349,8 +504,13 @@ fn layer_blocks(
                 None => continue,
             },
         };
-        let scope = scope_of(&key.device, device_name);
-        for (scope, source) in rule_sources(&key.code, &scope, maps, device_name) {
+        let Some(scope) = places.scope(&key.device, &key.app) else {
+            continue;
+        };
+        for (scope, source) in rule_sources(&key.code, &scope, maps, places) {
+            let Some(source) = source else {
+                continue;
+            };
             rules
                 .entry(scope)
                 .or_default()
@@ -364,7 +524,8 @@ fn layer_blocks(
         layer.layer.name,
         model::key_name(&layer.layer.trigger)
     );
-    ordered(&rules)
+    rules
+        .iter()
         .filter(|(_, rules)| !rules.is_empty())
         .map(|(scope, rules)| {
             let mut block = block_header(&title, scope);
@@ -381,43 +542,123 @@ fn layer_blocks(
         .collect()
 }
 
-/// Render the active profile's mappings and layers as a complete xremap
-/// document.
+/// xremap's name for one of the editor's modifier chips; unknown
+/// modifiers (the design's "Any") are left out of a chord.
+fn modifier_symbol(name: &str) -> Option<&'static str> {
+    match name {
+        "Ctrl" => Some("Ctrl"),
+        "Shift" => Some("Shift"),
+        "Alt" => Some("Alt"),
+        "Super" => Some("Super"),
+        _ => None,
+    }
+}
+
+/// A chord in xremap's `Mod-Mod-KEY` form, or `None` when its key has
+/// no xremap name (an empty chord, or `Hyper`).
+fn chord_symbol(chord: &Chord) -> Option<String> {
+    let key = action_symbol(&chord.key)?;
+    let mut parts: Vec<&str> = chord
+        .mods
+        .iter()
+        .filter_map(|name| modifier_symbol(name))
+        .collect();
+    parts.push(&key);
+    Some(parts.join("-"))
+}
+
+/// The `keymap` blocks for the shortcut groups: groups limited to an
+/// application first, then the general ones, each in profile order, so
+/// a shortcut made for an application wins over the same shortcut made
+/// for every application. Paused groups, incomplete rules, and rules
+/// with keys xremap cannot name generate nothing.
+fn group_blocks<F: Fn(&str) -> String>(groups: &[Group], places: &Places<'_, F>) -> Vec<String> {
+    let mut blocks: Vec<(u8, String)> = Vec::new();
+    for group in groups.iter().filter(|group| group.enabled) {
+        let Some(scope) = places.scope("all", &group.scope) else {
+            continue;
+        };
+        let mut lines = String::new();
+        // The same chord twice in a group would be a duplicate YAML key.
+        let mut seen: Vec<String> = Vec::new();
+        let mut rule_line = |from: String, to: &str| {
+            if !seen.contains(&from) {
+                lines.push_str(&format!("      {from}: {to}\n"));
+                seen.push(from);
+            }
+        };
+        for rule in group.rules.iter().filter(|rule| rule.is_complete()) {
+            let (Some(from), Some(to)) = (chord_symbol(&rule.from), chord_symbol(&rule.to)) else {
+                continue;
+            };
+            // "Any modifier": the chord also matches with each other
+            // modifier held, which xremap then releases around the
+            // output instead of passing it through.
+            if group.any_mod {
+                for modifier in model::MODS {
+                    if !rule.from.mods.iter().any(|held| held == modifier) {
+                        rule_line(format!("{modifier}-{from}"), &to);
+                    }
+                }
+            }
+            rule_line(from, &to);
+        }
+        if lines.is_empty() {
+            continue;
+        }
+        let mut block = block_header(&format!("Keyloom shortcuts: {}", group.name), &scope);
+        block.push_str("    remap:\n");
+        block.push_str(&lines);
+        blocks.push((scope.rank, block));
+    }
+    blocks.sort_by_key(|(rank, _)| *rank);
+    blocks.into_iter().map(|(_, block)| block).collect()
+}
+
+/// Render a profile's mappings, layers, and shortcut groups as a
+/// complete xremap document.
 ///
 /// `device_name` resolves a device scope id to the display name xremap
-/// should match on. Blocks for specific keyboards come first, sorted by
-/// resolved name, then the block for every keyboard.
-pub fn generate(maps: &Maps, layers: &[Layer], device_name: impl Fn(&str) -> String) -> String {
-    let layers = resolve_layers(layers);
+/// should match on. Blocks are written most specific scope first: an
+/// application scope's block, then a keyboard's, then the general one
+/// (see [`Scope`]).
+pub fn generate(rules: Rules<'_>, device_name: impl Fn(&str) -> String) -> String {
+    let places = Places {
+        apps: rules.apps,
+        device_name,
+    };
+    let layers = resolve_layers(rules.layers);
     let triggers: Triggers = layers
         .iter()
         .map(|layer| (layer.layer.trigger.as_str(), layer.modifier))
         .collect();
 
-    // Group mappings by device scope.
+    // Group mappings by scope. A mapping whose application scope is
+    // gone applies nowhere and is left out.
     let mut scopes: BTreeMap<Scope, Vec<&(String, Mapping)>> = BTreeMap::new();
-    for entry in maps {
-        scopes
-            .entry(scope_of(&entry.1.device, &device_name))
-            .or_default()
-            .push(entry);
+    for entry in rules.maps {
+        let Some(scope) = places.scope(&entry.1.device, &entry.1.app) else {
+            continue;
+        };
+        scopes.entry(scope).or_default().push(entry);
     }
     let mut modmaps: BTreeMap<Scope, BTreeMap<String, Output>> = scopes
         .iter()
         .map(|(scope, mappings)| (scope.clone(), scope_entries(mappings, &triggers)))
         .collect();
-    // A layer key produces its modifier on every keyboard; a mapping
-    // of that key scoped to one keyboard refines it there.
+    // A layer key produces its modifier everywhere; a mapping of that
+    // key in a narrower scope refines it there.
     for layer in &layers {
         modmaps
-            .entry(None)
+            .entry(Scope::general())
             .or_default()
             .entry(layer.trigger.clone())
             .or_insert(Output::Key(layer.modifier.to_owned()));
     }
 
     let mut yaml = format!("{MARKER}\n");
-    let blocks: Vec<String> = ordered(&modmaps)
+    let blocks: Vec<String> = modmaps
+        .iter()
         .filter(|(_, entries)| !entries.is_empty())
         .map(|(scope, entries)| modmap_block(scope, entries))
         .collect();
@@ -438,7 +679,8 @@ pub fn generate(maps: &Maps, layers: &[Layer], device_name: impl Fn(&str) -> Str
     }
     let blocks: Vec<String> = layers
         .iter()
-        .flat_map(|layer| layer_blocks(layer, maps, &triggers, &device_name))
+        .flat_map(|layer| layer_blocks(layer, rules.maps, &triggers, &places))
+        .chain(group_blocks(rules.groups, &places))
         .collect();
     if !blocks.is_empty() {
         yaml.push_str("keymap:\n");
@@ -544,7 +786,7 @@ mod tests {
 
     use super::*;
     use crate::testing::TempDir;
-    use crate::ui::model::LayerKey;
+    use crate::ui::model::{AppRef, LayerKey, Rule};
 
     fn map(
         code: &str,
@@ -560,6 +802,33 @@ mod tests {
                 hold: hold.map(str::to_owned),
                 device: device.to_owned(),
                 swap,
+                ..Mapping::default()
+            },
+        )
+    }
+
+    /// A mapping in an application scope.
+    fn map_in(app: &str, code: &str, tap: Option<&str>, device: &str) -> (String, Mapping) {
+        (
+            code.to_owned(),
+            Mapping {
+                tap: tap.map(str::to_owned),
+                device: device.to_owned(),
+                app: app.to_owned(),
+                ..Mapping::default()
+            },
+        )
+    }
+
+    /// A "normal key here" mapping in an application scope.
+    fn normal_in(app: &str, code: &str, device: &str) -> (String, Mapping) {
+        (
+            code.to_owned(),
+            Mapping {
+                device: device.to_owned(),
+                app: app.to_owned(),
+                normal: true,
+                ..Mapping::default()
             },
         )
     }
@@ -576,8 +845,54 @@ mod tests {
                     code: (*code).to_owned(),
                     action: (*action).to_owned(),
                     device: (*device).to_owned(),
+                    app: String::new(),
                 })
                 .collect(),
+        }
+    }
+
+    /// An application scope with the given application ids.
+    fn scope(id: &str, name: &str, apps: &[&str]) -> AppScope {
+        AppScope {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            apps: apps
+                .iter()
+                .map(|app| AppRef {
+                    id: (*app).to_owned(),
+                    name: (*app).to_owned(),
+                    aliases: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The terminal scope used throughout: id `term`.
+    fn terminal() -> AppScope {
+        scope("term", "COSMIC Terminal", &["com.system76.CosmicTerm"])
+    }
+
+    /// A shortcut rule from `Mods+Key` on both sides.
+    fn rule(from: &[&str], from_key: &str, to: &[&str], to_key: &str) -> Rule {
+        let chord = |mods: &[&str], key: &str| Chord {
+            mods: mods.iter().map(|m| (*m).to_owned()).collect(),
+            key: key.to_owned(),
+        };
+        Rule {
+            from: chord(from, from_key),
+            to: chord(to, to_key),
+            note: String::new(),
+        }
+    }
+
+    fn group(name: &str, app: &str, any_mod: bool, rules: Vec<Rule>) -> Group {
+        Group {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            scope: app.to_owned(),
+            enabled: true,
+            any_mod,
+            rules,
         }
     }
 
@@ -593,20 +908,72 @@ mod tests {
         }
     }
 
+    /// Generate from mappings and layers alone, in every application.
+    fn generate(maps: &Maps, layers: &[Layer], device_name: impl Fn(&str) -> String) -> String {
+        super::generate(
+            Rules {
+                maps,
+                layers,
+                apps: &[],
+                groups: &[],
+            },
+            device_name,
+        )
+    }
+
     /// Generate without layers.
     fn without_layers(maps: &Maps) -> String {
         generate(maps, &[], no_devices)
     }
 
-    /// Tap/hold, swap, disabled, and device-scoped mappings in one
-    /// document — every mapping construct the generator can emit.
+    /// Tap/hold, swap, disabled, device-scoped, and application-scoped
+    /// mappings in one document — every mapping construct the
+    /// generator can emit.
     fn representative_maps() -> Maps {
         vec![
             map("CapsLock", Some("Escape"), Some("Control"), "all", false),
             map("ControlLeft", Some("Left Alt"), None, "all", true),
             map("MetaLeft", Some("Disabled"), None, "all", false),
             map("F12", Some("Play/Pause"), None, "kb1", false),
+            // In the terminal: Caps Lock stays itself, A types B, and
+            // on the Keychron alone F12 mutes.
+            normal_in("term", "CapsLock", "all"),
+            map_in("term", "KeyA", Some("B"), "all"),
+            map_in("term", "F12", Some("Mute"), "kb1"),
         ]
+    }
+
+    /// A group for every application and one for the terminal, the
+    /// latter ignoring held modifiers.
+    fn representative_groups() -> Vec<Group> {
+        vec![
+            group(
+                "Desktop",
+                "",
+                false,
+                vec![rule(&["Super"], "C", &["Ctrl"], "C")],
+            ),
+            group(
+                "Terminals",
+                "term",
+                true,
+                vec![rule(&["Super"], "C", &["Ctrl", "Shift"], "C")],
+            ),
+        ]
+    }
+
+    /// Everything [`representative_maps`], [`representative_layers`],
+    /// and [`representative_groups`] hold, with the terminal scope.
+    fn representative() -> String {
+        super::generate(
+            Rules {
+                maps: &representative_maps(),
+                layers: &representative_layers(),
+                apps: &[terminal()],
+                groups: &representative_groups(),
+            },
+            kb1_named,
+        )
     }
 
     /// A layer on the tap/hold Caps Lock of [`representative_maps`],
@@ -783,13 +1150,27 @@ mod tests {
 
     /// Golden document covering every generated construct at once; the
     /// same content is validated against a real xremap release by
-    /// `generated_documents_parse_with_real_xremap`.
+    /// `generated_documents_parse_with_real_xremap`. Blocks run from
+    /// the most specific scope to the general one: the terminal on the
+    /// Keychron, the terminal, the Keychron, everywhere.
     #[test]
     fn representative_document_matches_golden_output() {
-        let yaml = generate(&representative_maps(), &representative_layers(), kb1_named);
         let expected = format!(
             "{MARKER}\n\
              modmap:\n\
+             \x20 - name: 'Keyloom mappings (COSMIC Terminal, Keychron K2 Pro)'\n\
+             \x20   application:\n\
+             \x20     only: ['com.system76.CosmicTerm']\n\
+             \x20   device:\n\
+             \x20     only: ['Keychron K2 Pro']\n\
+             \x20   remap:\n\
+             \x20     KEY_F12: KEY_MUTE\n\
+             \x20 - name: 'Keyloom mappings (COSMIC Terminal)'\n\
+             \x20   application:\n\
+             \x20     only: ['com.system76.CosmicTerm']\n\
+             \x20   remap:\n\
+             \x20     KEY_A: KEY_B\n\
+             \x20     KEY_CAPSLOCK: KEY_CAPSLOCK\n\
              \x20 - name: 'Keyloom mappings (Keychron K2 Pro)'\n\
              \x20   device:\n\
              \x20     only: ['Keychron K2 Pro']\n\
@@ -814,7 +1195,239 @@ mod tests {
              \x20 - name: 'Keyloom layer: Navigation, hold Caps Lock'\n\
              \x20   remap:\n\
              \x20     KEY_BRL_DOT1-KEY_H: KEY_LEFT\n\
-             \x20     KEY_BRL_DOT1-KEY_Y: []\n"
+             \x20     KEY_BRL_DOT1-KEY_Y: []\n\
+             \x20 - name: 'Keyloom shortcuts: Terminals (COSMIC Terminal)'\n\
+             \x20   application:\n\
+             \x20     only: ['com.system76.CosmicTerm']\n\
+             \x20   remap:\n\
+             \x20     Ctrl-Super-KEY_C: Ctrl-Shift-KEY_C\n\
+             \x20     Shift-Super-KEY_C: Ctrl-Shift-KEY_C\n\
+             \x20     Alt-Super-KEY_C: Ctrl-Shift-KEY_C\n\
+             \x20     Super-KEY_C: Ctrl-Shift-KEY_C\n\
+             \x20 - name: 'Keyloom shortcuts: Desktop'\n\
+             \x20   remap:\n\
+             \x20     Super-KEY_C: Ctrl-KEY_C\n"
+        );
+        assert_eq!(representative(), expected);
+    }
+
+    // --- Application scopes ------------------------------------------
+
+    /// A mapping in an application scope becomes a block filtered on
+    /// the scope's application ids (and aliases), ahead of the general
+    /// block; "normal here" maps the key to itself there.
+    #[test]
+    fn application_scopes_become_filtered_blocks_ahead_of_the_general_one() {
+        let mut code = scope("code", "VS Code", &["code"]);
+        code.apps[0].aliases = vec!["Code".to_owned()];
+        let maps = vec![
+            map("CapsLock", Some("Escape"), None, "all", false),
+            normal_in("code", "CapsLock", "all"),
+            map_in("code", "KeyA", Some("B"), "all"),
+        ];
+        let yaml = super::generate(
+            Rules {
+                maps: &maps,
+                layers: &[],
+                apps: &[code],
+                groups: &[],
+            },
+            no_devices,
+        );
+        let expected = format!(
+            "{MARKER}\n\
+             modmap:\n\
+             \x20 - name: 'Keyloom mappings (VS Code)'\n\
+             \x20   application:\n\
+             \x20     only: ['code', 'Code']\n\
+             \x20   remap:\n\
+             \x20     KEY_A: KEY_B\n\
+             \x20     KEY_CAPSLOCK: KEY_CAPSLOCK\n\
+             \x20 - name: 'Keyloom mappings'\n\
+             \x20   remap:\n\
+             \x20     KEY_CAPSLOCK: KEY_ESC\n"
+        );
+        assert_eq!(yaml, expected);
+    }
+
+    /// An application's block comes before a keyboard's: an exception
+    /// made for an application holds on every keyboard.
+    #[test]
+    fn an_application_scope_outranks_a_keyboard_scope() {
+        let maps = vec![
+            map("CapsLock", Some("Escape"), None, "kb1", false),
+            normal_in("term", "CapsLock", "all"),
+            map_in("term", "CapsLock", Some("Tab"), "kb1"),
+        ];
+        let yaml = super::generate(
+            Rules {
+                maps: &maps,
+                layers: &[],
+                apps: &[terminal()],
+                groups: &[],
+            },
+            kb1_named,
+        );
+        let both = yaml
+            .find("'Keyloom mappings (COSMIC Terminal, Keychron K2 Pro)'")
+            .expect("block for the terminal on the keyboard");
+        let app = yaml
+            .find("'Keyloom mappings (COSMIC Terminal)'")
+            .expect("block for the terminal");
+        let device = yaml
+            .find("'Keyloom mappings (Keychron K2 Pro)'")
+            .expect("block for the keyboard");
+        assert!(both < app && app < device, "{yaml}");
+    }
+
+    /// A mapping whose application scope is gone, or whose scope has no
+    /// applications, can apply nowhere and generates nothing.
+    #[test]
+    fn mappings_in_missing_or_empty_application_scopes_generate_nothing() {
+        let maps = vec![
+            map_in("gone", "KeyA", Some("B"), "all"),
+            map_in("empty", "KeyA", Some("C"), "all"),
+        ];
+        let yaml = super::generate(
+            Rules {
+                maps: &maps,
+                layers: &[],
+                apps: &[scope("empty", "Nothing", &[])],
+                groups: &[],
+            },
+            no_devices,
+        );
+        assert_eq!(yaml, without_layers(&Vec::new()));
+    }
+
+    /// Layer jobs follow a key remapped in one application, the way
+    /// they follow one remapped on one keyboard; a key kept normal or
+    /// disabled there adds no rule of its own.
+    #[test]
+    fn layer_rules_refine_per_application() {
+        let layers = vec![layer(
+            "nav",
+            "CapsLock",
+            &[("KeyH", "Arrow Left", "all"), ("KeyJ", "Arrow Down", "all")],
+        )];
+        let maps = vec![
+            map("KeyJ", Some("K"), None, "all", false),
+            map_in("term", "KeyH", Some("J"), "all"),
+            normal_in("term", "KeyJ", "all"),
+        ];
+        let yaml = super::generate(
+            Rules {
+                maps: &maps,
+                layers: &layers,
+                apps: &[terminal()],
+                groups: &[],
+            },
+            no_devices,
+        );
+        assert!(
+            yaml.contains(
+                "  - name: 'Keyloom layer: nav, hold Caps Lock (COSMIC Terminal)'\n\
+             \x20   application:\n\
+             \x20     only: ['com.system76.CosmicTerm']\n\
+             \x20   remap:\n\
+             \x20     KEY_BRL_DOT1-KEY_J: KEY_LEFT\n\
+             \x20 - name: 'Keyloom layer: nav, hold Caps Lock'\n\
+             \x20   remap:\n\
+             \x20     KEY_BRL_DOT1-KEY_H: KEY_LEFT\n\
+             \x20     KEY_BRL_DOT1-KEY_K: KEY_DOWN\n"
+            ),
+            "{yaml}"
+        );
+        // J arrives as itself in the terminal, where nothing maps it
+        // to Down: the general rule matches K, so the job is lost
+        // there, and no rule pretends otherwise.
+        assert!(!yaml.contains("KEY_BRL_DOT1-KEY_J: KEY_DOWN"));
+
+        // A key disabled in the terminal never reaches the rules there,
+        // so the layer gets no block for the terminal.
+        let maps = vec![map_in("term", "KeyH", Some("Disabled"), "all")];
+        let yaml = super::generate(
+            Rules {
+                maps: &maps,
+                layers: &layers,
+                apps: &[terminal()],
+                groups: &[],
+            },
+            no_devices,
+        );
+        assert!(yaml.contains("      KEY_H: []\n"), "{yaml}");
+        assert!(
+            !yaml.contains("Keyloom layer: nav, hold Caps Lock (COSMIC Terminal)"),
+            "{yaml}"
+        );
+    }
+
+    /// A layer key kept normal in an application maps to itself there,
+    /// ahead of the entry that holds the layer everywhere: the layer
+    /// never activates in that application.
+    #[test]
+    fn a_normal_key_keeps_its_layer_off_in_that_application() {
+        let layers = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "all")])];
+        let maps = vec![normal_in("term", "CapsLock", "all")];
+        let yaml = super::generate(
+            Rules {
+                maps: &maps,
+                layers: &layers,
+                apps: &[terminal()],
+                groups: &[],
+            },
+            no_devices,
+        );
+        let normal = yaml
+            .find("      KEY_CAPSLOCK: KEY_CAPSLOCK\n")
+            .expect("the key stays itself in the terminal");
+        let held = yaml
+            .find("      KEY_CAPSLOCK: KEY_BRL_DOT1\n")
+            .expect("the key holds the layer elsewhere");
+        assert!(normal < held);
+    }
+
+    // --- Shortcut groups ---------------------------------------------
+
+    /// Paused groups, incomplete rules, and keys xremap cannot name
+    /// generate nothing; a chord repeated in a group is written once.
+    #[test]
+    fn shortcut_groups_skip_what_cannot_apply() {
+        let mut paused = group("Paused", "", false, vec![rule(&["Ctrl"], "A", &[], "B")]);
+        paused.enabled = false;
+        let groups = vec![
+            paused,
+            group(
+                "Odd",
+                "",
+                false,
+                vec![
+                    rule(&["Ctrl"], "", &[], "B"),
+                    rule(&["Ctrl"], "A", &[], ""),
+                    rule(&["Ctrl"], "Hyper", &[], "B"),
+                    rule(&["Ctrl"], "A", &["Any"], "Hyper"),
+                    rule(&["Ctrl"], "A", &["Any"], "B"),
+                    rule(&["Ctrl"], "A", &[], "C"),
+                ],
+            ),
+            group("Gone", "gone", false, vec![rule(&["Ctrl"], "A", &[], "B")]),
+        ];
+        let yaml = super::generate(
+            Rules {
+                maps: &Vec::new(),
+                layers: &[],
+                apps: &[],
+                groups: &groups,
+            },
+            no_devices,
+        );
+        let expected = format!(
+            "{MARKER}\n\
+             modmap: []\n\
+             keymap:\n\
+             \x20 - name: 'Keyloom shortcuts: Odd'\n\
+             \x20   remap:\n\
+             \x20     Ctrl-KEY_A: KEY_B\n"
         );
         assert_eq!(yaml, expected);
     }
@@ -1046,9 +1659,10 @@ mod tests {
         );
     }
 
-    /// Write the layer documents that `scripts/verify-layers-with-xremap.sh`
-    /// runs through xremap's own event-handler tests into
-    /// `$KEYLOOM_HARNESS_DIR`; the expectations live beside the script.
+    /// Write the layer and application documents that
+    /// `scripts/verify-layers-with-xremap.sh` runs through xremap's own
+    /// event-handler tests into `$KEYLOOM_HARNESS_DIR`; the expectations
+    /// live beside the script.
     #[test]
     #[ignore = "writes files for the xremap harness script"]
     fn dump_documents_for_the_xremap_harness() {
@@ -1084,6 +1698,36 @@ mod tests {
         // A job on a key whose normal press is remapped (H types J).
         let h_types_j = vec![map("KeyH", Some("J"), None, "all", false)];
         let nav_only = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "all")])];
+        // Caps Lock taps Escape and holds a navigation layer everywhere
+        // except the terminal, where it stays Caps Lock; A types B only
+        // in the terminal; Super+C copies the terminal's way there and
+        // the usual way elsewhere.
+        let app_scoped = super::generate(
+            Rules {
+                maps: &vec![
+                    map("CapsLock", Some("Escape"), None, "all", false),
+                    normal_in("term", "CapsLock", "all"),
+                    map_in("term", "KeyA", Some("B"), "all"),
+                ],
+                layers: &nav_only,
+                apps: &[terminal()],
+                groups: &[
+                    group(
+                        "Desktop",
+                        "",
+                        false,
+                        vec![rule(&["Super"], "C", &["Ctrl"], "C")],
+                    ),
+                    group(
+                        "Terminals",
+                        "term",
+                        false,
+                        vec![rule(&["Super"], "C", &["Ctrl", "Shift"], "C")],
+                    ),
+                ],
+            },
+            no_devices,
+        );
         for (name, yaml) in [
             (
                 "navigation.yml",
@@ -1097,6 +1741,7 @@ mod tests {
                 "remapped-key.yml",
                 generate(&h_types_j, &nav_only, no_devices),
             ),
+            ("app-scoped.yml", app_scoped),
         ] {
             fs::write(dir.join(name), yaml).expect("harness directory is writable");
         }
@@ -1223,10 +1868,7 @@ mod tests {
 
         let mut documents = vec![
             ("empty".to_owned(), without_layers(&Vec::new())),
-            (
-                "representative".to_owned(),
-                generate(&representative_maps(), &representative_layers(), kb1_named),
-            ),
+            ("representative".to_owned(), representative()),
             ("all-sources".to_owned(), without_layers(&all_sources)),
             (
                 "all-layers".to_owned(),

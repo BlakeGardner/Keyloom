@@ -1,5 +1,6 @@
-//! The keyboard workspace: device toolbar, layer picker, the layer bar,
-//! the rendered deck of key caps, and the mapping summary underneath.
+//! The keyboard workspace: device toolbar, the layer and application
+//! pickers, the bar for the shown layer or application, the rendered
+//! deck of key caps, and the mapping summary underneath.
 
 use cosmic::iced::widget::stack;
 use cosmic::iced::{Alignment, Background, Color, Font, Length, Padding, font::Weight};
@@ -13,7 +14,9 @@ use crate::ui::theme::{
     ButtonStyle, accent, accent_button, chip, fg, ghost_button, muted, oklch, tint, vgradient,
     white,
 };
-use crate::ui::{Cap, cap_colors, eyebrow, keycap_chip, legend, panel, tester, txt, txt_semibold};
+use crate::ui::{
+    Cap, Pill, cap_colors, eyebrow, keycap_chip, legend, panel, pill, tester, txt, txt_semibold,
+};
 use crate::xremap;
 
 /// The device scope (or tester input filter) and the layer picker.
@@ -103,24 +106,27 @@ pub fn device_toolbar(app: &App) -> Element<'_, Message> {
         size.into()
     };
 
-    // Layers are edited on the deck, so the tester has no use for them.
-    let mut layers = widget::column::with_capacity(3)
+    // Layers and applications are edited on the deck, so the tester
+    // has no use for them.
+    let mut layers = widget::column::with_capacity(5)
         .spacing(8)
         .align_x(Alignment::End);
     if app.view == View::Keyboard {
-        layers = layers.push(
+        let toggle = |open: bool, label: &'static str, message: Message| {
             widget::button::custom(txt(
-                if app.layers_open {
-                    "▾ Layers"
-                } else {
-                    "▸ Layers"
-                },
+                format!("{} {label}", if open { "▾" } else { "▸" }),
                 13.0,
                 fg(),
             ))
             .class(ctheme::Button::Transparent)
             .padding([8, 4])
-            .on_press(Message::ToggleLayers),
+            .on_press(message)
+        };
+        layers = layers.push(
+            widget::row::with_capacity(2)
+                .spacing(10)
+                .push(toggle(app.layers_open, "Layers", Message::ToggleLayers))
+                .push(toggle(app.apps_open, "Applications", Message::ToggleApps)),
         );
         if app.layers_open {
             layers = layers.push(txt(
@@ -129,6 +135,14 @@ pub fn device_toolbar(app: &App) -> Element<'_, Message> {
                 muted(),
             ));
             layers = layers.push(layer_chips(app));
+        }
+        if app.apps_open {
+            layers = layers.push(txt(
+                "Keys can act differently while one application is in front. Other applications keep the normal keys.",
+                13.0,
+                muted(),
+            ));
+            layers = layers.push(app_chips(app));
         }
     }
 
@@ -198,10 +212,127 @@ fn layer_chips(app: &App) -> Element<'_, Message> {
         .into()
 }
 
+/// The application picker chips: every application, each application
+/// scope of the profile with how much it holds, and the way to add one.
+fn app_chips(app: &App) -> Element<'_, Message> {
+    let mut chips: Vec<Element<'_, Message>> = Vec::with_capacity(app.app_scopes().len() + 2);
+    let every = app.app_scope.is_none();
+    chips.push(
+        widget::button::custom(txt_semibold("All applications", 11.5, chip_text(every)))
+            .class(chip(every))
+            .padding([7, 12])
+            .on_press(Message::SetAppScope(None))
+            .into(),
+    );
+    for scope in app.app_scopes() {
+        let active = app.app_scope.as_deref() == Some(scope.id.as_str());
+        let count = app.scope_count(&scope.id);
+        chips.push(
+            widget::button::custom(
+                widget::row::with_capacity(2)
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(txt_semibold(scope.name.clone(), 11.5, chip_text(active)))
+                    .push(txt(format!("· {count}"), 11.5, muted())),
+            )
+            .class(chip(active))
+            .padding([7, 12])
+            .on_press(Message::SetAppScope(Some(scope.id.clone())))
+            .into(),
+        );
+    }
+    chips.push(
+        widget::button::custom(txt_semibold("+ Add application", 11.5, tint(0.93, 0.02)))
+            .class(accent_button())
+            .padding([7, 12])
+            .on_press(Message::AddAppScope)
+            .into(),
+    );
+    widget::flex_row(chips)
+        .row_spacing(8)
+        .column_spacing(8)
+        .into()
+}
+
 /// Stable widget id for the layer rename input so it can be focused
 /// when rename mode is entered.
 pub fn layer_rename_input_id() -> widget::Id {
     widget::Id::new("layer-rename-input")
+}
+
+/// Stable widget id for the application scope rename input so it can
+/// be focused when rename mode is entered.
+pub fn app_rename_input_id() -> widget::Id {
+    widget::Id::new("app-rename-input")
+}
+
+/// The strip above the deck while an application scope is shown: its
+/// name, its applications, and what to do next.
+fn app_bar(app: &App) -> Option<Element<'_, Message>> {
+    let scope = app.active_app_scope()?;
+    let action = |label: &'static str, message: Message| {
+        widget::button::custom(txt(label, 12.5, oklch(0.9, 0.01, 152.0)))
+            .class(ghost_button())
+            .padding([7, 12])
+            .on_press(message)
+    };
+    let name: Element<'_, Message> = if let Some(text) = &app.rename_app {
+        widget::text_input("Application name", text)
+            .id(app_rename_input_id())
+            .on_input(Message::RenameAppInput)
+            .on_submit(|_| Message::RenameAppCommit)
+            .width(Length::Fixed(220.0))
+            .into()
+    } else {
+        txt_semibold(scope.name.clone(), 15.0, fg()).into()
+    };
+    let members = scope.members();
+    let differ = app
+        .maps()
+        .iter()
+        .filter(|(_, mapping)| mapping.app == scope.id)
+        .count();
+    let hint = format!(
+        "Click a key to choose what it does while {} is in front. Tinted: keys that differ here. Faded: the all-applications remap still applies · {differ} key{} differ{}",
+        scope.name,
+        if differ == 1 { "" } else { "s" },
+        if differ == 1 { "s" } else { "" }
+    );
+    let mut heading = widget::row::with_capacity(9)
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .push(eyebrow("Application"))
+        .push(name);
+    if !members.is_empty() && members != scope.name {
+        heading = heading.push(pill(&members, Pill::App));
+    }
+    let content = widget::column::with_capacity(2)
+        .spacing(8)
+        .push(
+            heading
+                .push(action("Change apps", Message::ChangeApps))
+                .push(crate::ui::hspace())
+                .push(action(
+                    if app.rename_app.is_some() {
+                        "Cancel"
+                    } else {
+                        "Rename"
+                    },
+                    Message::RenameAppToggle,
+                ))
+                .push(
+                    widget::button::custom(txt(
+                        "Remove application",
+                        12.5,
+                        oklch(0.85, 0.06, 16.0),
+                    ))
+                    .class(ghost_button())
+                    .padding([7, 12])
+                    .on_press(Message::DeleteAppScope),
+                ),
+        )
+        .push(txt(hint, 12.5, muted()));
+    Some(panel(content).padding([12, 16]).width(Length::Fill).into())
 }
 
 /// The strip above the deck while a layer is shown: its name, the key
@@ -317,7 +448,7 @@ pub fn area(app: &App) -> Element<'_, Message> {
         column = column.push(tester::panels(app));
     }
     if app.view == View::Keyboard
-        && let Some(bar) = layer_bar(app)
+        && let Some(bar) = layer_bar(app).or_else(|| app_bar(app))
     {
         column = column.push(bar);
     }
@@ -464,7 +595,17 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
     } else {
         app.layer_held_by(cap.code)
     };
-    let mapping = app.mapping(cap.code);
+    // The mapping applying in the shown scope: the key's own, or one
+    // it inherits from a more general scope (drawn faded).
+    let effective = if nav_active {
+        None
+    } else {
+        app.effective_mapping(cap.code)
+    };
+    let mapping = effective.map(|effective| effective.mapping);
+    let inherited = effective.is_some_and(|effective| !effective.own);
+    // "Normal key here": the key stays itself in this scope.
+    let normal_here = mapping.is_some_and(|mapping| mapping.normal);
     let selected = app.selected == Some(cap.code);
     let pressed = app.highlights_key(cap.evdev);
 
@@ -490,6 +631,8 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         border = tint(0.5, 0.085);
     } else if is_trigger {
         (bg, border, color) = cap_colors(Cap::Held);
+    } else if inherited {
+        (bg, border, _) = cap_colors(Cap::Inherited);
     } else if (mapping.is_some() || holds_layer.is_some()) && !nav_active {
         (bg, border, _) = cap_colors(Cap::Mapped);
     }
@@ -512,6 +655,13 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         .filter(|_| !nav_active)
         .and_then(|m| m.tap.as_deref())
         .map(short);
+    let mapped_color = if pressed {
+        oklch(0.99, 0.01, 152.0)
+    } else if inherited {
+        accent().scale_alpha(0.6)
+    } else {
+        accent()
+    };
     let (main, main_size, main_color, main_weight): (String, f32, Color, Weight) =
         if let Some(label) = layer_label {
             (
@@ -535,11 +685,7 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
             (
                 tap.to_owned(),
                 if tap.len() > 4 { 10.0 } else { 12.0 },
-                if pressed {
-                    oklch(0.99, 0.01, 152.0)
-                } else {
-                    accent()
-                },
+                mapped_color,
                 Weight::Semibold,
             )
         } else {
@@ -552,7 +698,9 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         };
 
     let show_orig = tap_short.is_some() || layer_label.is_some();
-    let hold_line = if holds_layer.is_some() {
+    let hold_line = if normal_here {
+        Some("normal here".to_owned())
+    } else if holds_layer.is_some() {
         Some("layer key".to_owned())
     } else if is_trigger {
         Some("held".to_owned())
@@ -578,6 +726,10 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
     if let Some(hold) = hold_line {
         let hold_color = if is_trigger {
             tint(0.97, 0.02)
+        } else if normal_here {
+            oklch(0.8, 0.06, 196.0)
+        } else if inherited {
+            oklch(0.72, 0.13, 16.0).scale_alpha(0.6)
         } else {
             oklch(0.72, 0.13, 16.0)
         };
@@ -590,41 +742,72 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         .align_x(Alignment::Center)
         .align_y(Alignment::Center);
 
-    // Shortcut badge in the top-right corner of the cap.
+    // Badges: the shortcut count in the top-right corner, and a dot in
+    // the top-left when the key differs in another scope (a keyboard
+    // or an application the deck is not showing).
     let combos = if nav_active {
         0
     } else {
         app.combos_for(&key_name(cap.code)).len()
     };
-    let content: Element<'_, Message> = if combos > 0 {
+    let elsewhere = !nav_active && app.other_scopes(cap.code) > 0;
+    let mut badges: Vec<Element<'_, Message>> = Vec::with_capacity(2);
+    if combos > 0 {
         let badge = if combos > 1 {
             format!("{combos}⌘")
         } else {
             "⌘".to_owned()
         };
-        let badge = container(txt_semibold(
-            badge,
-            7.0,
-            if pressed {
-                oklch(0.99, 0.01, 152.0)
-            } else {
-                oklch(0.72, 0.1, 196.0)
-            },
-        ))
-        .width(Length::Fill)
-        .align_x(Alignment::End)
-        .padding(Padding {
-            top: 2.0,
-            right: 3.0,
-            bottom: 0.0,
-            left: 0.0,
-        });
-        stack([centered.into(), badge.into()])
+        badges.push(
+            container(txt_semibold(
+                badge,
+                7.0,
+                if pressed {
+                    oklch(0.99, 0.01, 152.0)
+                } else {
+                    oklch(0.72, 0.1, 196.0)
+                },
+            ))
+            .width(Length::Fill)
+            .align_x(Alignment::End)
+            .padding(Padding {
+                top: 2.0,
+                right: 3.0,
+                bottom: 0.0,
+                left: 0.0,
+            })
+            .into(),
+        );
+    }
+    if elsewhere {
+        let dot = container(widget::Space::new().width(5.0).height(5.0)).class(
+            ctheme::Container::custom(|_| container::Style {
+                background: Some(oklch(0.72, 0.1, 196.0).into()),
+                border: cosmic::iced::Border {
+                    radius: 3.0.into(),
+                    ..cosmic::iced::Border::default()
+                },
+                ..container::Style::default()
+            }),
+        );
+        badges.push(
+            container(dot)
+                .padding(Padding {
+                    top: 4.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 4.0,
+                })
+                .into(),
+        );
+    }
+    let content: Element<'_, Message> = if badges.is_empty() {
+        centered.into()
+    } else {
+        stack(std::iter::once(centered.into()).chain(badges))
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-    } else {
-        centered.into()
     };
 
     widget::button::custom(content)

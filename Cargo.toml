@@ -16,6 +16,7 @@ default-features = false
 features = [
     "a11y",
     "dbus-config",
+    "desktop",
     "multi-window",
     "process",
     "tokio",

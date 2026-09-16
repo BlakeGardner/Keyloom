@@ -146,7 +146,8 @@ workflow is not planned.
 
 - [x] **Persist profiles and mappings between sessions** via cosmic-config
   (`src/config.rs`; the rule model stays the source of truth and YAML remains
-  generated output). Shortcut groups are not persisted yet.
+  generated output). Layers, application scopes, and shortcut groups are
+  stored with their profile too.
 - [ ] **Remember selected device scope** across launches. The active profile
   is already remembered; setup completion is covered by the next task.
 - [x] **First-run setup lifecycle (0.1.0 blocker).** Setup opens on the first
@@ -205,24 +206,51 @@ workflow is not planned.
 
 ## 7. Advanced remapping in generated config ("Expand" iteration)
 
-Everything here is already editable in the UI; the unchecked items are
-still only previewed in memory. The tasks below are 0.1.0 blockers.
+Everything here is edited in the UI, stored with the profile, and applied
+through the generated configuration. The tasks below are 0.1.0 blockers.
 
 - [x] **Tap/hold mappings** → xremap `held`/`alone` output.
 - [x] **Two-way swaps** → two explicit generated entries.
 - [x] **Disabled keys** → generated no-op mapping (empty output list).
 - [x] **Device-scoped mappings** → per-device `modmap` sections keyed to the
   selected keyboard.
-- [ ] **Persist shortcut groups.** Save and restore groups, their rules, and
-  application scopes with profiles so remaps survive relaunch.
-- [ ] **Working shortcut groups (chord → chord rules).** Generate xremap
-  `keymap` blocks, including the "any modifier" matching option, and apply
-  edits through the existing automatic configuration workflow.
-- [ ] **Application-specific remaps.** Provide an application picker and
-  generate application filters so rules affect only the selected applications.
-  Verify matching on the supported desktop environments and explain any
-  unsupported setup. Confirm a rule works in its target app and does not
-  affect another app, including after relaunch.
+- [x] **Persist shortcut groups.** Groups, their rules, and their
+  application scope are stored with the profile (`src/config.rs`) and
+  restored on launch; stores from before load with none.
+- [x] **Working shortcut groups (chord → chord rules).** Enabled groups
+  with complete rules become xremap `keymap` blocks (`Mods-KEY: Mods-KEY`),
+  application-scoped groups first, and every edit applies through the
+  automatic configuration workflow. "Any modifier" adds an entry per other
+  modifier held, which xremap releases around the output. Limits: with two
+  unrelated modifiers held only one is released, and chords record
+  modifiers without their side (Ctrl, not Right Control).
+- [x] **Application-specific remaps.** Application scopes are edited on
+  the deck like layers (a picker on the toolbar, a bar for the scope's
+  applications, name, and removal, and the key editor showing inherited
+  mappings and "Normal key here"), stored with the profile, and generated as
+  `application.only` filters on `modmap` blocks, layer rule blocks, and
+  shortcut `keymap` blocks, most specific scope first. The application
+  picker asks the installed xremap for the open windows (`--list-windows`,
+  which exits before device selection) and reads desktop entries for names
+  and icons. Verified with xremap's own event-handling harness
+  (`scripts/verify-layers-with-xremap.sh`): a mapping applying in its
+  application only, a key kept normal there switching its layer off, and a
+  shortcut differing between an application and elsewhere; relaunch is
+  covered by the store round-trip tests. Limits: ids match exactly, one
+  scope per application, layer jobs are the same in every application, and
+  matching depends on an xremap build that can ask the desktop (COSMIC's
+  build on COSMIC; GNOME and KDE need xremap's extension or script), which
+  setup does not check.
+- [ ] **Explain unsupported desktops for application matching.** Setup's
+  xremap step could tell whether the installed build can ask this desktop
+  which window is in front, instead of leaving the picker's "could not ask"
+  note as the only hint.
+- [ ] **Application-scoped layer jobs.** The model carries an application
+  scope per job, but the deck shows one context at a time; letting a layer
+  differ per application needs the deck to show a layer inside an
+  application scope.
+- [ ] **Show application differences in the Tester.** "Becomes" reports the
+  all-applications outcome only.
 - [x] **Working layers.** Layers are edited on the deck (a picker on the
   toolbar, a bar for the layer's key, name, and deletion, and the key editor
   in layer mode), stored with their profile, and generated as xremap

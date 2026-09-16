@@ -11,10 +11,11 @@ use crate::ui::theme::{
     ButtonStyle, accent, accent_filled, black, border, fg, flat_button, flat_tab, keycap, muted,
     oklch, outline_button, quiet, tint, white,
 };
-use crate::ui::{Cap, keycap_chip, legend, mono, txt, txt_semibold};
+use crate::ui::{Cap, Pill, keycap_chip, legend, mono, pill, txt, txt_semibold};
 
 /// The sheet title: the key being edited and, in a layer, the key
-/// held for it, drawn as the deck draws them.
+/// held for it, drawn as the deck draws them; in an application scope,
+/// the scope.
 pub fn key_editor_title(app: &App) -> Element<'_, Message> {
     let Some(selected) = app.selected else {
         return widget::Space::new().into();
@@ -23,12 +24,16 @@ pub fn key_editor_title(app: &App) -> Element<'_, Message> {
     let mut title = widget::row::with_capacity(5)
         .spacing(8)
         .align_y(Alignment::Center);
-    title = match app.active_layer() {
-        Some(layer) => title
+    title = match (app.active_layer(), app.active_app_scope()) {
+        (Some(layer), _) => title
             .push(word("While holding"))
             .push(keycap_chip(legend(&layer.trigger), Cap::Held))
             .push(word("make")),
-        None => title.push(word("Make")),
+        (None, Some(scope)) => title
+            .push(word("In"))
+            .push(pill(&scope.name, Pill::App))
+            .push(word("make")),
+        (None, None) => title.push(word("Make")),
     };
     title
         .push(keycap_chip(legend(selected), Cap::Selected))
@@ -43,17 +48,22 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
     let Some(selected) = app.selected else {
         return widget::Space::new().into();
     };
-    let mapping = app.mapping(selected);
+    // The mapping applying in the shown scope: the key's own, or one
+    // inherited from a more general scope.
+    let effective = app.effective_mapping(selected);
+    let mapping = effective.map(|effective| effective.mapping);
+    let inherited = effective.is_some_and(|effective| !effective.own);
+    let normal_here = mapping.is_some_and(|mapping| mapping.normal);
     // While a layer is shown, the editor sets the key's job in it.
     let layer = app.active_layer();
     let job = layer.and_then(|layer| layer.key(selected));
 
-    let mut section = widget::column::with_capacity(9).spacing(14);
+    let mut section = widget::column::with_capacity(10).spacing(14);
 
     // Current behavior summary (the sheet title names the key): what
     // the key produces now, as keycaps like the deck's.
     let note = |text: String| txt(text, 13.0, oklch(0.78, 0.01, 152.0));
-    let mut summary = widget::row::with_capacity(6)
+    let mut summary = widget::row::with_capacity(8)
         .spacing(8)
         .align_y(Alignment::Center)
         .push(note("Now:".to_owned()));
@@ -66,21 +76,74 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         };
         summary = summary.push(note(format!("· in {}", layer.name)));
     } else {
-        summary = match mapping.and_then(|m| m.tap.as_deref()) {
-            Some(tap) => summary.push(keycap_chip(short(tap), Cap::Mapped)),
+        let cap = if inherited {
+            Cap::Inherited
+        } else {
+            Cap::Mapped
+        };
+        summary = match mapping.filter(|m| !m.normal).and_then(|m| m.tap.as_deref()) {
+            Some(tap) => summary.push(keycap_chip(short(tap), cap)),
             None => summary
                 .push(keycap_chip(legend(selected), Cap::Plain))
-                .push(note("default".to_owned())),
+                .push(note(
+                    if normal_here {
+                        "normal here"
+                    } else {
+                        "default"
+                    }
+                    .to_owned(),
+                )),
         };
-        if let Some(hold) = mapping.and_then(|m| m.hold.as_deref()) {
+        if let Some(hold) = mapping
+            .filter(|m| !m.normal)
+            .and_then(|m| m.hold.as_deref())
+        {
             summary = summary
                 .push(note("· When held:".to_owned()))
-                .push(keycap_chip(short(hold), Cap::Mapped));
-        } else if let Some(held) = app.layer_held_by(selected) {
+                .push(keycap_chip(short(hold), cap));
+        } else if !normal_here && let Some(held) = app.layer_held_by(selected) {
             summary = summary.push(note(format!("· When held: the {} layer", held.name)));
+        }
+        // Where the behavior comes from, when the deck shows a scope.
+        if let Some(effective) = effective
+            && !effective.own
+        {
+            summary = summary.push(note(format!(
+                "· from {}",
+                app.inherited_from(effective.mapping)
+            )));
+        } else if effective.is_some() && app.in_specific_scope() {
+            summary = summary.push(note(format!("· {}", app.here_label())));
         }
     }
     section = section.push(summary);
+
+    // In a scope, the key can stay itself: an exception to the remap it
+    // would inherit, made without choosing an action.
+    let own_normal = normal_here && !inherited;
+    if layer.is_none() && app.in_specific_scope() && !own_normal {
+        let here = app.here_label();
+        let why = match mapping.filter(|m| !m.normal).and_then(|m| m.tap.as_deref()) {
+            Some(tap) => format!(
+                "Keeps {} as it is {here}, even though it is {} elsewhere.",
+                key_name(selected),
+                short(tap)
+            ),
+            None => format!("Keeps {} as it is {here}.", key_name(selected)),
+        };
+        section = section.push(
+            widget::row::with_capacity(2)
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(
+                    widget::button::custom(txt(format!("Normal key {here}"), 13.0, fg()))
+                        .class(quiet(false))
+                        .padding([9, 14])
+                        .on_press(Message::NormalKeyHere),
+                )
+                .push(txt(why, 12.5, muted())),
+        );
+    }
 
     // Search plus key recording, side by side in the wide sheet.
     section = section.push(
@@ -234,11 +297,12 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         }
         .to_owned()
     };
+    let mut applies = format!("Applies to {}", app.device_label(&app.device));
+    if let Some(scope) = app.active_app_scope() {
+        applies.push_str(&format!(" in {}", scope.name));
+    }
     section = section.push(txt(
-        format!(
-            "{hint} · Applies to {}. Changes save and apply automatically.",
-            app.device_label(&app.device)
-        ),
+        format!("{hint} · {applies}. Changes save and apply automatically."),
         13.0,
         oklch(0.78, 0.01, 152.0),
     ));
@@ -278,19 +342,28 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
 }
 
 /// The drawer footer: restore and done actions for the key editor.
+/// In a scope, restoring means giving up the key's own mapping there,
+/// so it is offered only while the key has one.
 pub fn key_editor_footer(app: &App) -> Element<'_, Message> {
-    let restore = if app.layer.is_some() {
-        "Back to normal in this layer"
+    let own = app
+        .selected
+        .is_some_and(|code| app.own_mapping(code).is_some());
+    let (restore, enabled) = if app.layer.is_some() {
+        ("Back to normal in this layer", true)
+    } else if app.app_scope.is_some() {
+        ("Same as all applications", own)
+    } else if !crate::ui::model::every_device(&app.device) {
+        ("Same as all keyboards", own)
     } else {
-        "Restore original key"
+        ("Restore original key", true)
     };
     widget::row::with_capacity(3)
         .spacing(12)
         .push(
-            widget::button::custom(txt(restore, 14.0, fg()))
+            widget::button::custom(txt(restore, 14.0, if enabled { fg() } else { muted() }))
                 .class(flat_button())
                 .padding([10, 15])
-                .on_press(Message::ClearKey),
+                .on_press_maybe(enabled.then_some(Message::ClearKey)),
         )
         .push(crate::ui::hspace())
         .push(

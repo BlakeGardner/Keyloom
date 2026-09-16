@@ -2,6 +2,7 @@
 //! with libcosmic.
 
 mod app;
+mod apps;
 mod config;
 mod keyboard;
 mod monitor;

@@ -1,17 +1,18 @@
-//! Keyloom's generated layer configurations, run through xremap's own
-//! event handler. This file is compiled inside a checkout of xremap by
-//! `scripts/verify-layers-with-xremap.sh`, which also dumps the
-//! documents it reads from `keyloom/` next to it.
+//! Keyloom's generated layer and application configurations, run
+//! through xremap's own event handler. This file is compiled inside a
+//! checkout of xremap by `scripts/verify-layers-with-xremap.sh`, which
+//! also dumps the documents it reads from `keyloom/` next to it.
 
 use crate::action::Action;
 use crate::event::{Event, KeyEvent, KeyValue};
-use crate::tests::assert_actions;
+use crate::tests::{assert_actions, assert_actions_with_current_application};
 use evdev::KeyCode as Key;
 use std::time::Duration;
 
 const NAVIGATION: &str = include_str!("keyloom/navigation.yml");
 const TWO_LAYERS: &str = include_str!("keyloom/two-layers.yml");
 const REMAPPED_KEY: &str = include_str!("keyloom/remapped-key.yml");
+const APP_SCOPED: &str = include_str!("keyloom/app-scoped.yml");
 
 fn press(key: Key) -> Action {
     Action::KeyEvent(KeyEvent::new(key, KeyValue::Press))
@@ -225,6 +226,132 @@ fn keyloom_layer_job_on_a_remapped_key() {
             delay(),
             delay(),
             release(Key::KEY_J),
+        ],
+    );
+}
+
+/// The application scope of the app-scoped document, as the compositor
+/// reports it.
+fn terminal() -> Option<String> {
+    Some(String::from("com.system76.CosmicTerm"))
+}
+
+/// A key remapped in one application only: A types B in the terminal
+/// and stays A everywhere else, other applications included.
+#[test]
+fn keyloom_app_scope_applies_in_its_application_only() {
+    let typed = vec![Event::key_press(Key::KEY_A), Event::key_release(Key::KEY_A)];
+    assert_actions_with_current_application(
+        APP_SCOPED,
+        terminal(),
+        typed.clone(),
+        vec![press(Key::KEY_B), release(Key::KEY_B)],
+    );
+    assert_actions(
+        APP_SCOPED,
+        typed.clone(),
+        vec![press(Key::KEY_A), release(Key::KEY_A)],
+    );
+    assert_actions_with_current_application(
+        APP_SCOPED,
+        Some(String::from("firefox")),
+        typed,
+        vec![press(Key::KEY_A), release(Key::KEY_A)],
+    );
+}
+
+/// Caps Lock, kept normal in the terminal, is plain Caps Lock there;
+/// its Escape tap and its navigation layer work everywhere else.
+#[test]
+fn keyloom_normal_key_switches_the_layer_off_in_its_application() {
+    let held = vec![
+        Event::key_press(Key::KEY_CAPSLOCK),
+        Event::key_press(Key::KEY_H),
+        Event::key_release(Key::KEY_H),
+        Event::key_release(Key::KEY_CAPSLOCK),
+    ];
+    assert_actions_with_current_application(
+        APP_SCOPED,
+        terminal(),
+        held.clone(),
+        vec![
+            press(Key::KEY_CAPSLOCK),
+            press(Key::KEY_H),
+            release(Key::KEY_H),
+            release(Key::KEY_CAPSLOCK),
+        ],
+    );
+    assert_actions(
+        APP_SCOPED,
+        held,
+        vec![
+            press(Key::KEY_LEFT),
+            release(Key::KEY_LEFT),
+            delay(),
+            delay(),
+            release(Key::KEY_H),
+        ],
+    );
+
+    let tap = vec![
+        Event::key_press(Key::KEY_CAPSLOCK),
+        Event::key_release(Key::KEY_CAPSLOCK),
+    ];
+    assert_actions_with_current_application(
+        APP_SCOPED,
+        terminal(),
+        tap.clone(),
+        vec![press(Key::KEY_CAPSLOCK), release(Key::KEY_CAPSLOCK)],
+    );
+    assert_actions(APP_SCOPED, tap, vec![press(Key::KEY_ESC), release(Key::KEY_ESC)]);
+}
+
+/// Super+C copies the terminal's way there (Ctrl+Shift+C) and the usual
+/// way elsewhere (Ctrl+C); xremap releases the held Super around the
+/// output either way.
+#[test]
+fn keyloom_shortcut_differs_between_an_application_and_elsewhere() {
+    let chord = vec![
+        Event::key_press(Key::KEY_LEFTMETA),
+        Event::key_press(Key::KEY_C),
+        Event::key_release(Key::KEY_C),
+        Event::key_release(Key::KEY_LEFTMETA),
+    ];
+    assert_actions_with_current_application(
+        APP_SCOPED,
+        terminal(),
+        chord.clone(),
+        vec![
+            press(Key::KEY_LEFTMETA),
+            press(Key::KEY_LEFTCTRL),
+            press(Key::KEY_LEFTSHIFT),
+            release(Key::KEY_LEFTMETA),
+            press(Key::KEY_C),
+            release(Key::KEY_C),
+            delay(),
+            press(Key::KEY_LEFTMETA),
+            delay(),
+            release(Key::KEY_LEFTCTRL),
+            release(Key::KEY_LEFTSHIFT),
+            release(Key::KEY_C),
+            release(Key::KEY_LEFTMETA),
+        ],
+    );
+    assert_actions(
+        APP_SCOPED,
+        chord,
+        vec![
+            press(Key::KEY_LEFTMETA),
+            press(Key::KEY_LEFTCTRL),
+            release(Key::KEY_LEFTMETA),
+            press(Key::KEY_C),
+            release(Key::KEY_C),
+            delay(),
+            press(Key::KEY_LEFTMETA),
+            delay(),
+            release(Key::KEY_LEFTCTRL),
+            release(Key::KEY_C),
+            release(Key::KEY_LEFTMETA),
         ],
     );
 }

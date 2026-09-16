@@ -1,11 +1,11 @@
-//! The shortcuts view: rule groups, plus the rule editor shown in the
-//! app's context drawer.
+//! The shortcuts view: rule groups in sections per application scope,
+//! plus the rule editor shown in the app's context drawer.
 
 use cosmic::iced::{Alignment, Background, Border, Length, Padding};
 use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
-use crate::app::{App, EditRule, Message, Side};
+use crate::app::{App, EditRule, Message, Popover, Side};
 use crate::ui::theme::{
     ButtonStyle, accent, accent_button, accent_filled, ghost_button, muted, oklch, quiet, tint,
     white,
@@ -13,6 +13,7 @@ use crate::ui::theme::{
 use crate::ui::{chord_pills, eyebrow, txt, txt_semibold};
 
 /// The shortcuts tab content.
+#[allow(clippy::too_many_lines)]
 pub fn view(app: &App) -> Element<'_, Message> {
     let groups = app.groups();
     let mut column = widget::column::with_capacity(groups.len() + 2).spacing(12);
@@ -21,7 +22,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let note = if groups.is_empty() {
         String::new()
     } else {
-        "Rules match top to bottom — the first group that matches wins.".to_owned()
+        "Rules match top to bottom — the first group that matches wins, and a group limited to an application comes before the rest.".to_owned()
     };
     column = column.push(
         widget::row::with_capacity(3)
@@ -69,189 +70,46 @@ pub fn view(app: &App) -> Element<'_, Message> {
         );
     }
 
-    for (gi, group) in groups.iter().enumerate() {
-        // Group heading.
-        let mut heading = widget::row::with_capacity(6)
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .push(txt_semibold(
-                group.name.clone(),
-                13.5,
-                oklch(0.95, 0.01, 152.0),
-            ));
-
-        let scoped = !group.apps.is_empty();
-        heading = heading.push(
-            container(txt_semibold(
-                group.scope_label(),
-                10.5,
-                if scoped {
-                    oklch(0.92, 0.03, 196.0)
-                } else {
-                    muted()
-                },
-            ))
-            .padding([4, 9])
-            .class(ctheme::Container::custom(move |_| container::Style {
-                background: Some(if scoped {
-                    oklch(0.3, 0.05, 196.0).into()
-                } else {
-                    white(0.05).into()
-                }),
-                border: Border {
-                    color: if scoped {
-                        oklch(0.44, 0.07, 196.0)
-                    } else {
-                        white(0.08)
-                    },
-                    width: 1.0,
-                    radius: 7.0.into(),
-                },
-                ..container::Style::default()
-            })),
-        );
-        if group.any_mod {
-            heading = heading.push(
-                container(txt_semibold("Any modifier", 10.5, oklch(0.86, 0.08, 16.0)))
-                    .padding([4, 9])
-                    .class(ctheme::Container::custom(|_| container::Style {
-                        background: Some(oklch(0.27, 0.03, 16.0).into()),
-                        border: Border {
-                            color: oklch(0.6, 0.1, 16.0),
-                            width: 1.0,
-                            radius: 7.0.into(),
-                        },
-                        ..container::Style::default()
-                    })),
-            );
+    // Groups in sections per application scope, in the order their
+    // rules apply: each scope of the profile, then every application.
+    let mut sections: Vec<(String, Vec<usize>)> = Vec::with_capacity(app.app_scopes().len() + 1);
+    for scope in app.app_scopes() {
+        let members: Vec<usize> = groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| group.scope == scope.id)
+            .map(|(gi, _)| gi)
+            .collect();
+        if !members.is_empty() {
+            sections.push((format!("In {}", scope.name), members));
         }
-        heading = heading.push(crate::ui::hspace());
-        heading = heading.push(txt(
-            format!(
-                "{} rule{}",
-                group.rules.len(),
-                if group.rules.len() == 1 { "" } else { "s" }
-            ),
-            11.0,
-            muted(),
-        ));
-        heading = heading.push(
-            widget::button::custom(txt(
-                if group.enabled { "Enabled" } else { "Paused" },
-                13.0,
-                oklch(0.95, 0.01, 152.0),
-            ))
-            .class(quiet(group.enabled))
-            .padding([8, 12])
-            .on_press(Message::ToggleGroup(gi)),
-        );
+    }
+    let general: Vec<usize> = groups
+        .iter()
+        .enumerate()
+        .filter(|(_, group)| !app.app_scopes().iter().any(|scope| scope.id == group.scope))
+        .map(|(gi, _)| gi)
+        .collect();
+    if !general.is_empty() {
+        sections.push(("In all applications".to_owned(), general));
+    }
+    let labelled = sections.len() > 1
+        || sections
+            .iter()
+            .any(|(label, _)| label != "In all applications");
 
-        // Two-column rule grid.
-        let editing = app.edit_rule;
-        let mut cells: Vec<Element<'_, Message>> = Vec::with_capacity(group.rules.len() + 1);
-        for (ri, rule) in group.rules.iter().enumerate() {
-            let active = editing
-                == Some(EditRule {
-                    group: gi,
-                    rule: Some(ri),
-                });
-            let dim = if group.enabled { 1.0 } else { 0.45 };
-
-            let mut content = widget::row::with_capacity(5)
-                .spacing(9)
-                .align_y(Alignment::Center)
-                .push(chord_pills(&rule.from))
-                .push(txt("→", 12.0, accent().scale_alpha(dim)))
-                .push(chord_pills(&rule.to))
-                .push(crate::ui::hspace());
-            if !rule.note.is_empty() {
-                content = content.push(txt(rule.note.clone(), 11.0, muted().scale_alpha(dim)));
-            }
-
-            cells.push(
-                widget::button::custom(content)
-                    .class(
-                        ButtonStyle {
-                            bg: Some(Background::Color(if active {
-                                tint(0.3, 0.04)
-                            } else {
-                                white(0.028 * dim)
-                            })),
-                            border: if active { accent() } else { white(0.07 * dim) },
-                            border_width: 1.0,
-                            radius: 9.0,
-                            ..ButtonStyle::default()
-                        }
-                        .class(),
-                    )
-                    .padding([8, 11])
-                    .width(Length::Fill)
-                    .on_press(Message::EditRule {
-                        group: gi,
-                        rule: Some(ri),
-                    })
-                    .into(),
-            );
+    for (label, members) in sections {
+        if labelled {
+            column = column.push(container(eyebrow(&label)).padding(Padding {
+                top: 6.0,
+                right: 4.0,
+                bottom: 0.0,
+                left: 4.0,
+            }));
         }
-        cells.push(
-            widget::button::custom(txt_semibold("+ Add shortcut", 11.5, muted()))
-                .class(
-                    ButtonStyle {
-                        hover_bg: Some(Background::Color(white(0.04))),
-                        text: muted(),
-                        hover_text: Some(oklch(0.85, 0.01, 152.0)),
-                        border: white(0.14),
-                        border_width: 1.0,
-                        radius: 9.0,
-                        ..ButtonStyle::default()
-                    }
-                    .class(),
-                )
-                .padding([8, 11])
-                .width(Length::Fill)
-                .on_press(Message::EditRule {
-                    group: gi,
-                    rule: None,
-                })
-                .into(),
-        );
-
-        let mut grid = widget::column::with_capacity(cells.len().div_ceil(2)).spacing(8);
-        let mut cells = cells.into_iter();
-        while let Some(first) = cells.next() {
-            let mut pair = widget::row::with_capacity(2).spacing(8).push(first);
-            if let Some(second) = cells.next() {
-                pair = pair.push(second);
-            } else {
-                pair = pair.push(widget::Space::new().width(Length::Fill));
-            }
-            grid = grid.push(pair);
+        for gi in members {
+            column = column.push(group_card(app, gi));
         }
-
-        column = column.push(
-            container(
-                widget::column::with_capacity(2)
-                    .spacing(12)
-                    .push(heading)
-                    .push(grid),
-            )
-            .width(Length::Fill)
-            .padding(Padding {
-                top: 14.0,
-                right: 16.0,
-                bottom: 15.0,
-                left: 16.0,
-            })
-            .class(ctheme::Container::custom(|_| container::Style {
-                background: Some(oklch(0.235, 0.008, 152.0).into()),
-                border: Border {
-                    color: white(0.06),
-                    width: 1.0,
-                    radius: 13.0.into(),
-                },
-                ..container::Style::default()
-            })),
-        );
     }
 
     container(column)
@@ -263,6 +121,216 @@ pub fn view(app: &App) -> Element<'_, Message> {
             left: 30.0,
         })
         .into()
+}
+
+/// One group: heading with its application scope chip, the rule
+/// grid, and the way to add a rule.
+fn group_card(app: &App, gi: usize) -> Element<'_, Message> {
+    let group = &app.groups()[gi];
+    // Group heading.
+    let mut heading = widget::row::with_capacity(6)
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .push(txt_semibold(
+            group.name.clone(),
+            13.5,
+            oklch(0.95, 0.01, 152.0),
+        ));
+
+    // The scope chip opens the chooser: every application, one of
+    // the profile's application scopes, or a new one.
+    let scoped = app.app_scopes().iter().any(|scope| scope.id == group.scope);
+    let chip = widget::button::custom(
+        widget::row::with_capacity(2)
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .push(txt_semibold(
+                app.app_scope_name(&group.scope),
+                10.5,
+                if scoped {
+                    oklch(0.92, 0.03, 196.0)
+                } else {
+                    muted()
+                },
+            ))
+            .push(txt("▾", 8.0, muted())),
+    )
+    .class(
+        ButtonStyle {
+            bg: Some(Background::Color(if scoped {
+                oklch(0.3, 0.05, 196.0)
+            } else {
+                white(0.05)
+            })),
+            hover_bg: Some(Background::Color(if scoped {
+                oklch(0.36, 0.06, 196.0)
+            } else {
+                white(0.09)
+            })),
+            border: if scoped {
+                oklch(0.44, 0.07, 196.0)
+            } else {
+                white(0.08)
+            },
+            border_width: 1.0,
+            radius: 7.0,
+            ..ButtonStyle::default()
+        }
+        .class(),
+    )
+    .padding([4, 9])
+    .on_press(Message::TogglePopover(Popover::GroupScope(gi)));
+    let chip: Element<'_, Message> = if app.popover == Some(Popover::GroupScope(gi)) {
+        widget::popover(chip)
+            .popup(crate::ui::overlays::group_scope_popup(app, gi))
+            .position(widget::popover::Position::Bottom)
+            .on_close(Message::CloseOverlays)
+            .into()
+    } else {
+        chip.into()
+    };
+    heading = heading.push(chip);
+    if group.any_mod {
+        heading = heading.push(
+            container(txt_semibold("Any modifier", 10.5, oklch(0.86, 0.08, 16.0)))
+                .padding([4, 9])
+                .class(ctheme::Container::custom(|_| container::Style {
+                    background: Some(oklch(0.27, 0.03, 16.0).into()),
+                    border: Border {
+                        color: oklch(0.6, 0.1, 16.0),
+                        width: 1.0,
+                        radius: 7.0.into(),
+                    },
+                    ..container::Style::default()
+                })),
+        );
+    }
+    heading = heading.push(crate::ui::hspace());
+    heading = heading.push(txt(
+        format!(
+            "{} rule{}",
+            group.rules.len(),
+            if group.rules.len() == 1 { "" } else { "s" }
+        ),
+        11.0,
+        muted(),
+    ));
+    heading = heading.push(
+        widget::button::custom(txt(
+            if group.enabled { "Enabled" } else { "Paused" },
+            13.0,
+            oklch(0.95, 0.01, 152.0),
+        ))
+        .class(quiet(group.enabled))
+        .padding([8, 12])
+        .on_press(Message::ToggleGroup(gi)),
+    );
+
+    // Two-column rule grid.
+    let editing = app.edit_rule;
+    let mut cells: Vec<Element<'_, Message>> = Vec::with_capacity(group.rules.len() + 1);
+    for (ri, rule) in group.rules.iter().enumerate() {
+        let active = editing
+            == Some(EditRule {
+                group: gi,
+                rule: Some(ri),
+            });
+        let dim = if group.enabled { 1.0 } else { 0.45 };
+
+        let mut content = widget::row::with_capacity(5)
+            .spacing(9)
+            .align_y(Alignment::Center)
+            .push(chord_pills(&rule.from))
+            .push(txt("→", 12.0, accent().scale_alpha(dim)))
+            .push(chord_pills(&rule.to))
+            .push(crate::ui::hspace());
+        if !rule.note.is_empty() {
+            content = content.push(txt(rule.note.clone(), 11.0, muted().scale_alpha(dim)));
+        }
+
+        cells.push(
+            widget::button::custom(content)
+                .class(
+                    ButtonStyle {
+                        bg: Some(Background::Color(if active {
+                            tint(0.3, 0.04)
+                        } else {
+                            white(0.028 * dim)
+                        })),
+                        border: if active { accent() } else { white(0.07 * dim) },
+                        border_width: 1.0,
+                        radius: 9.0,
+                        ..ButtonStyle::default()
+                    }
+                    .class(),
+                )
+                .padding([8, 11])
+                .width(Length::Fill)
+                .on_press(Message::EditRule {
+                    group: gi,
+                    rule: Some(ri),
+                })
+                .into(),
+        );
+    }
+    cells.push(
+        widget::button::custom(txt_semibold("+ Add shortcut", 11.5, muted()))
+            .class(
+                ButtonStyle {
+                    hover_bg: Some(Background::Color(white(0.04))),
+                    text: muted(),
+                    hover_text: Some(oklch(0.85, 0.01, 152.0)),
+                    border: white(0.14),
+                    border_width: 1.0,
+                    radius: 9.0,
+                    ..ButtonStyle::default()
+                }
+                .class(),
+            )
+            .padding([8, 11])
+            .width(Length::Fill)
+            .on_press(Message::EditRule {
+                group: gi,
+                rule: None,
+            })
+            .into(),
+    );
+
+    let mut grid = widget::column::with_capacity(cells.len().div_ceil(2)).spacing(8);
+    let mut cells = cells.into_iter();
+    while let Some(first) = cells.next() {
+        let mut pair = widget::row::with_capacity(2).spacing(8).push(first);
+        if let Some(second) = cells.next() {
+            pair = pair.push(second);
+        } else {
+            pair = pair.push(widget::Space::new().width(Length::Fill));
+        }
+        grid = grid.push(pair);
+    }
+
+    container(
+        widget::column::with_capacity(2)
+            .spacing(12)
+            .push(heading)
+            .push(grid),
+    )
+    .width(Length::Fill)
+    .padding(Padding {
+        top: 14.0,
+        right: 16.0,
+        bottom: 15.0,
+        left: 16.0,
+    })
+    .class(ctheme::Container::custom(|_| container::Style {
+        background: Some(oklch(0.235, 0.008, 152.0).into()),
+        border: Border {
+            color: white(0.06),
+            width: 1.0,
+            radius: 13.0.into(),
+        },
+        ..container::Style::default()
+    }))
+    .into()
 }
 
 fn new_group_button() -> Element<'static, Message> {
@@ -362,7 +430,7 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
 
     let hint = if app.recording.is_some() {
         "Hold the modifiers, then press a key. Escape cancels."
-    } else if rule.is_some_and(|rule| !rule.from.key.is_empty() && !rule.to.key.is_empty()) {
+    } else if rule.is_some_and(crate::ui::model::Rule::is_complete) {
         "Both sides recorded. This shortcut is ready."
     } else {
         "Record both sides to complete this shortcut."
@@ -380,7 +448,7 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
             15.0,
             oklch(0.95, 0.01, 152.0),
         ))
-        .push(txt(group.scope_label(), 11.5, muted()));
+        .push(txt(app.app_scope_name(&group.scope), 11.5, muted()));
 
     let behaviour = widget::column::with_capacity(3)
         .spacing(10)
@@ -455,7 +523,7 @@ pub fn rule_editor_footer(app: &App) -> Element<'_, Message> {
                 .get(edit.group)
                 .and_then(|group| edit.rule.and_then(|index| group.rules.get(index)))
         })
-        .is_some_and(|rule| !rule.from.key.is_empty() && !rule.to.key.is_empty());
+        .is_some_and(crate::ui::model::Rule::is_complete);
 
     let mut done = widget::button::custom(
         txt_semibold("Done", 14.0, crate::ui::theme::bg())
