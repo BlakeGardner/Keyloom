@@ -454,7 +454,7 @@ pub fn rule_editor<'a>(app: &'a App) -> Element<'a, Message> {
 
     // Wide sheet layout, mirroring the design's original bottom panel:
     // context · when-I-press → send-instead · group behaviour.
-    let context = widget::column::with_capacity(2)
+    let mut context = widget::column::with_capacity(3)
         .spacing(4)
         .width(Length::Fixed(190.0))
         .push(txt_semibold(
@@ -463,6 +463,22 @@ pub fn rule_editor<'a>(app: &'a App) -> Element<'a, Message> {
             oklch(0.95, 0.01, 152.0),
         ))
         .push(txt(app.app_scope_name(&group.scope), 11.5, muted()));
+    // A name for the shortcut, shown beside it in the group.
+    if let Some(rule) = rule {
+        context = context.push(
+            container(
+                widget::text_input("Name this shortcut", &rule.note)
+                    .on_input(Message::RuleNote)
+                    .size(12.0),
+            )
+            .padding(Padding {
+                top: 8.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 0.0,
+            }),
+        );
+    }
 
     let behaviour = widget::column::with_capacity(3)
         .spacing(10)

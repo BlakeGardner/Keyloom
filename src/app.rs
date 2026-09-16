@@ -354,6 +354,8 @@ pub enum Message {
         rule: Option<usize>,
     },
     SetRecording(Option<Side>),
+    /// The edited shortcut's name, as typed.
+    RuleNote(String),
     /// Make one modifier (by position) of the edited shortcut's input
     /// chord match either key of its pair, or one side alone.
     SetModifierSide {
@@ -2974,6 +2976,30 @@ impl cosmic::Application for App {
                 };
             }
             Message::SetRecording(side) => self.recording = side,
+            Message::RuleNote(note) => {
+                // Typed live, so no undo snapshot per keystroke; the
+                // name is saved as it changes and never touches the
+                // generated rules.
+                let Some(EditRule {
+                    group,
+                    rule: Some(rule),
+                }) = self.edit_rule
+                else {
+                    return Task::none();
+                };
+                if self.view == View::Tester {
+                    return Task::none();
+                }
+                if let Some(rule) = self
+                    .profile_groups
+                    .get_mut(&self.profile)
+                    .and_then(|groups| groups.get_mut(group))
+                    .and_then(|group| group.rules.get_mut(rule))
+                {
+                    rule.note = note;
+                    self.persist();
+                }
+            }
             Message::SetModifierSide { index, side } => {
                 let Some(EditRule {
                     group,
@@ -6409,5 +6435,35 @@ mod tests {
             event: monitor::KeyEvent::Released(evdev::KeyCode::KEY_RIGHTCTRL.0),
         }));
         assert!(!app.is_pressed(evdev::KeyCode::KEY_RIGHTCTRL.0));
+    }
+
+    /// A shortcut can be named from the editor; the name is kept with
+    /// the rule and changes nothing in the generated document.
+    #[test]
+    fn a_shortcut_takes_a_name_from_the_editor() {
+        let mut app = app();
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::AddGroup);
+        let _ = app.update(Message::EditRule {
+            group: 0,
+            rule: None,
+        });
+        // No rule yet: nothing to name.
+        let _ = app.update(Message::RuleNote("Copy".to_owned()));
+        assert!(app.groups()[0].rules.is_empty());
+
+        let device = PathBuf::from("/dev/input/test");
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_LEFTMETA.0));
+        app.phys_press(&device, evdev::KeyCode::KEY_C.0);
+        let before = yaml(&app);
+        let _ = app.update(Message::RuleNote("Copy".to_owned()));
+        assert_eq!(app.groups()[0].rules[0].note, "Copy");
+        assert_eq!(yaml(&app), before, "a name is not a rule");
+        assert_eq!(
+            app.profile_state().groups["default"][0].rules[0].note,
+            "Copy",
+            "the name is saved with the profile"
+        );
     }
 }
