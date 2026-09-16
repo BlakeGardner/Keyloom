@@ -21,18 +21,36 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         return widget::Space::new().into();
     };
     let mapping = app.mapping(selected);
+    // While a layer is shown, the editor sets the key's job in it.
+    let layer = app.active_layer();
+    let job = layer.and_then(|layer| layer.key(selected));
 
     let mut section = widget::column::with_capacity(9).spacing(14);
 
     // Current behavior summary (the sheet title names the key).
-    let mut summary = format!(
-        "Now: {}",
-        mapping
-            .and_then(|m| m.tap.clone())
-            .unwrap_or_else(|| format!("{} (default)", key_name(selected)))
-    );
-    if let Some(hold) = mapping.and_then(|m| m.hold.as_deref()) {
-        summary.push_str(&format!(" · When held: {hold}"));
+    let mut summary = if let Some(layer) = layer {
+        format!(
+            "Now: {} · in {}",
+            job.map_or_else(
+                || format!("{} (normal)", key_name(selected)),
+                |job| job.action.clone()
+            ),
+            layer.name
+        )
+    } else {
+        format!(
+            "Now: {}",
+            mapping
+                .and_then(|m| m.tap.clone())
+                .unwrap_or_else(|| format!("{} (default)", key_name(selected)))
+        )
+    };
+    if layer.is_none() {
+        if let Some(hold) = mapping.and_then(|m| m.hold.as_deref()) {
+            summary.push_str(&format!(" · When held: {hold}"));
+        } else if let Some(held) = app.layer_held_by(selected) {
+            summary.push_str(&format!(" · When held: the {} layer", held.name));
+        }
     }
     section = section.push(txt(summary, 13.0, oklch(0.78, 0.01, 152.0)));
 
@@ -140,19 +158,23 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         let items: Vec<Element<'_, Message>> = actions
             .into_iter()
             .map(|(action, group)| {
-                let active = match app.mode {
-                    Mode::Combo => combos.iter().any(|(_, _, rule)| {
-                        rule.to.key == action
-                            && rule
-                                .from
-                                .mods
-                                .iter()
-                                .map(String::as_str)
-                                .collect::<Vec<_>>()
-                                == from_mods
-                    }),
-                    Mode::Hold => mapping.and_then(|m| m.hold.as_deref()) == Some(action),
-                    Mode::Tap => mapping.and_then(|m| m.tap.as_deref()) == Some(action),
+                let active = if layer.is_some() {
+                    job.map(|job| job.action.as_str()) == Some(action)
+                } else {
+                    match app.mode {
+                        Mode::Combo => combos.iter().any(|(_, _, rule)| {
+                            rule.to.key == action
+                                && rule
+                                    .from
+                                    .mods
+                                    .iter()
+                                    .map(String::as_str)
+                                    .collect::<Vec<_>>()
+                                    == from_mods
+                        }),
+                        Mode::Hold => mapping.and_then(|m| m.hold.as_deref()) == Some(action),
+                        Mode::Tap => mapping.and_then(|m| m.tap.as_deref()) == Some(action),
+                    }
                 };
                 let label = if group == "Punctuation" {
                     format!("{}  {action}", short(action))
@@ -169,13 +191,20 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
 
     // Context line.
     let hint = if app.capture {
-        "Recording output — press a key, or Escape to cancel"
+        "Recording output — press a key, or Escape to cancel".to_owned()
+    } else if let Some(layer) = layer {
+        format!(
+            "Choose what {} does while {} is held",
+            key_name(selected),
+            key_name(&layer.trigger)
+        )
     } else {
         match app.mode {
             Mode::Combo => "Also listed under Shortcuts",
             Mode::Hold => "Runs when the key is held",
             Mode::Tap => "Choose an action for a normal press",
         }
+        .to_owned()
     };
     section = section.push(txt(
         format!(
@@ -186,32 +215,35 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         oklch(0.78, 0.01, 152.0),
     ));
 
-    // Advanced options (`.editor-disclosure`).
-    section = section.push(
-        container(
-            widget::button::custom(
-                widget::row::with_capacity(2)
-                    .spacing(9)
-                    .align_y(Alignment::Center)
-                    .push(txt(if app.advanced { "▾" } else { "▸" }, 11.0, fg()))
-                    .push(txt(
-                        if app.advanced {
-                            "Hide advanced options"
-                        } else {
-                            "Advanced options"
-                        },
-                        14.0,
-                        fg(),
-                    )),
+    // Advanced options (`.editor-disclosure`). A layer job is a plain
+    // action: nothing to hold, combine, or swap.
+    if layer.is_none() {
+        section = section.push(
+            container(
+                widget::button::custom(
+                    widget::row::with_capacity(2)
+                        .spacing(9)
+                        .align_y(Alignment::Center)
+                        .push(txt(if app.advanced { "▾" } else { "▸" }, 11.0, fg()))
+                        .push(txt(
+                            if app.advanced {
+                                "Hide advanced options"
+                            } else {
+                                "Advanced options"
+                            },
+                            14.0,
+                            fg(),
+                        )),
+                )
+                .class(flat_button())
+                .padding([10, 4])
+                .on_press(Message::ToggleAdvanced),
             )
-            .class(flat_button())
-            .padding([10, 4])
-            .on_press(Message::ToggleAdvanced),
-        )
-        .width(Length::Shrink),
-    );
-    if app.advanced {
-        section = section.push(advanced_area(app, selected));
+            .width(Length::Shrink),
+        );
+        if app.advanced {
+            section = section.push(advanced_area(app, selected));
+        }
     }
 
     section.into()
@@ -219,11 +251,15 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
 
 /// The drawer footer: restore and done actions for the key editor.
 pub fn key_editor_footer(app: &App) -> Element<'_, Message> {
-    let _ = app;
+    let restore = if app.layer.is_some() {
+        "Back to normal in this layer"
+    } else {
+        "Restore original key"
+    };
     widget::row::with_capacity(3)
         .spacing(12)
         .push(
-            widget::button::custom(txt("Restore original key", 14.0, fg()))
+            widget::button::custom(txt(restore, 14.0, fg()))
                 .class(flat_button())
                 .padding([10, 15])
                 .on_press(Message::ClearKey),

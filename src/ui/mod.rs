@@ -211,7 +211,14 @@ fn bottom_sheet(app: &App) -> Option<Element<'_, Message>> {
         && let Some(selected) = app.selected
     {
         (
-            format!("Make {} act as…", model::key_name(selected)),
+            match app.active_layer() {
+                Some(layer) => format!(
+                    "While holding {}, make {} act as…",
+                    model::key_name(&layer.trigger),
+                    model::key_name(selected)
+                ),
+                None => format!("Make {} act as…", model::key_name(selected)),
+            },
             Message::ClosePanel,
             editor::key_editor(app),
             editor::key_editor_footer(app),

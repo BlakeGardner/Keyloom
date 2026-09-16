@@ -40,7 +40,10 @@ workflow is not planned.
   generated configs (simple remap, modifier remap, two-rule swap) against a
   pinned xremap release in CI. (Automated: CI installs the pinned release
   and explicitly runs the real-binary integration test. Normal local test
-  runs ignore that test and do not launch the installed xremap.)
+  runs ignore that test and do not launch the installed xremap.
+  `scripts/verify-layers-with-xremap.sh` goes further for layers: it builds
+  the pinned xremap source and runs the generated layer documents through
+  xremap's own event-handler tests; CI runs it in the test job.)
 
 ## 2. Mapping rule correctness (v0.1)
 
@@ -220,12 +223,22 @@ still only previewed in memory. The tasks below are 0.1.0 blockers.
   Verify matching on the supported desktop environments and explain any
   unsupported setup. Confirm a rule works in its target app and does not
   affect another app, including after relaunch.
-- [ ] **Working layers.** Turn the previewed Caps-Lock navigation layer into
-  generated layer configuration so holding the layer key actually changes
-  what the other keys do. Persist layer configuration with profiles and
-  apply edits automatically. Verify entering and leaving a layer, restoring
-  normal keys on release, and retaining it after relaunch. The current layer
-  is a visual preview only.
+- [x] **Working layers.** Layers are edited on the deck (a picker on the
+  toolbar, a bar for the layer's key, name, and deletion, and the key editor
+  in layer mode), stored with their profile, and generated as xremap
+  `virtual_modifiers` plus `keymap` rules: the layer key is remapped to a
+  stand-in virtual modifier so a tap action survives as a tap/hold key, and
+  every job becomes a `<modifier>-<key>` rule. Verified with xremap's own
+  event-handling test harness on the generated documents
+  (`scripts/verify-layers-with-xremap.sh`): entering and leaving the layer,
+  normal keys on release, a held Shift passing through, the tap action, and
+  a job on a remapped key; relaunch is covered by the store round-trip
+  tests. Limits: up to ten layers per profile, jobs are
+  single actions, the layer key gives up its hold action and takes no job,
+  and physical modifiers take no jobs.
+- [ ] **Richer layer jobs.** Tap/hold and modifier-chord outputs inside a
+  layer, and a way to hold a layer with a modifier key without losing the
+  modifier (today a modifier used as a layer key stops acting as one).
 
 ## 8. App polish and distribution
 

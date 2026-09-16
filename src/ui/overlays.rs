@@ -104,11 +104,18 @@ pub fn profiles_popup(app: &App) -> Element<'_, Message> {
             .profile_maps
             .get(&profile.id)
             .map_or(0, |maps| maps.len());
-        let sub = if count == 0 {
+        let layers = app.profile_layers.get(&profile.id).map_or(0, Vec::len);
+        let mut sub = if count == 0 {
             "no mappings yet".to_owned()
         } else {
             format!("{count} mapping{}", if count == 1 { "" } else { "s" })
         };
+        if layers > 0 {
+            sub.push_str(&format!(
+                " · {layers} layer{}",
+                if layers == 1 { "" } else { "s" }
+            ));
+        }
         let row = popup_row(
             profile.name.clone(),
             Some(txt(sub, 10.5, muted()).into()),
@@ -570,7 +577,60 @@ pub fn remove_mapping_dialog(app: &App) -> Element<'_, Message> {
     modal(card, Some(Message::RemoveMappingCancel))
 }
 
-/// Confirm clearing all mappings in the active profile.
+/// The delete-layer confirmation dialog.
+pub fn delete_layer_dialog(app: &App) -> Element<'_, Message> {
+    let layer = app
+        .confirm_delete_layer
+        .as_ref()
+        .and_then(|id| app.layers().iter().find(|layer| &layer.id == id));
+    let name = layer.map_or("this layer", |layer| layer.name.as_str());
+    let body = layer.map_or_else(
+        || "You can undo right after deleting.".to_owned(),
+        |layer| {
+            let key = key_name(&layer.trigger);
+            let jobs = match layer.keys.len() {
+                0 => String::new(),
+                1 => "Its 1 key goes back to normal, and holding ".to_owned(),
+                n => format!("Its {n} keys go back to normal, and holding "),
+            };
+            if jobs.is_empty() {
+                format!("Holding {key} will do nothing special any more. You can undo right after deleting.")
+            } else {
+                format!("{jobs}{key} will do nothing special any more. You can undo right after deleting.")
+            }
+        },
+    );
+
+    let buttons = widget::row::with_capacity(3)
+        .spacing(10)
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(txt_semibold("Cancel", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::DeleteLayerCancel),
+        )
+        .push(
+            widget::button::custom(txt_semibold("Delete layer", 12.5, oklch(0.85, 0.06, 16.0)))
+                .class(quiet(false))
+                .padding([9, 18])
+                .on_press(Message::DeleteLayerConfirm),
+        );
+
+    let card = dialog_card(
+        widget::column::with_capacity(4)
+            .spacing(16)
+            .push(eyebrow("Delete layer"))
+            .push(txt_semibold(format!("Delete {name}?"), 24.0, fg()))
+            .push(txt(body, 15.0, muted()))
+            .push(buttons)
+            .into(),
+    );
+
+    modal(card, Some(Message::DeleteLayerCancel))
+}
+
+/// Confirm clearing all mappings and layers in the active profile.
 pub fn reset_mappings_dialog(app: &App) -> Element<'_, Message> {
     let buttons = widget::row::with_capacity(3)
         .spacing(10)
@@ -598,7 +658,7 @@ pub fn reset_mappings_dialog(app: &App) -> Element<'_, Message> {
             .push(txt_semibold("Reset all mappings?", 24.0, fg()))
             .push(txt(
                 format!(
-                    "This removes all mappings from {} and restores the keys' original behavior.",
+                    "This removes all mappings and layers from {} and restores the keys' original behavior.",
                     app.profile_name()
                 ),
                 15.0,
@@ -620,11 +680,20 @@ pub fn delete_profile_dialog(app: &App) -> Element<'_, Message> {
     let count = profile
         .and_then(|profile| app.profile_maps.get(&profile.id))
         .map_or(0, |maps| maps.len());
-    let body = match count {
-        0 => "It has no mappings. You can undo right after deleting.".to_owned(),
-        1 => "Its 1 mapping is deleted with it. You can undo right after.".to_owned(),
-        n => format!("Its {n} mappings are deleted with it. You can undo right after."),
+    let layers = profile
+        .and_then(|profile| app.profile_layers.get(&profile.id))
+        .map_or(0, Vec::len);
+    let mut body = match count {
+        0 => "It has no mappings.".to_owned(),
+        1 => "Its 1 mapping is deleted with it.".to_owned(),
+        n => format!("Its {n} mappings are deleted with it."),
     };
+    match layers {
+        0 => {}
+        1 => body.push_str(" Its layer goes with it."),
+        n => body.push_str(&format!(" Its {n} layers go with it.")),
+    }
+    body.push_str(" You can undo right after deleting.");
 
     let buttons = widget::row::with_capacity(3)
         .spacing(10)

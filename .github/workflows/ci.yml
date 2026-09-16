@@ -8,6 +8,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The recorded xremap release that generated configs are validated
+  # against: the pinned binary must load them
+  # (generated_documents_parse_with_real_xremap in src/xremap.rs), and
+  # the pinned source's own event-handler tests must agree with what the
+  # layer documents mean (scripts/verify-layers-with-xremap.sh). Bump
+  # deliberately when targeting a new xremap.
+  XREMAP_VERSION: 0.15.12
 
 # Cancel in-progress runs when new commits are pushed to the same PR/branch,
 # but never cancel runs on main.
@@ -57,10 +64,9 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     env:
-      # The recorded xremap release that generated configs are
-      # validated against (see generated_documents_parse_with_real_xremap
-      # in src/xremap.rs). Bump deliberately when targeting a new xremap.
-      XREMAP_VERSION: 0.15.12
+      # Keep the xremap source checkout out of Keyloom's target/, which
+      # rust-cache caches on its own.
+      XREMAP_HARNESS_DIR: ${{ runner.temp }}/xremap-harness
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
@@ -74,11 +80,19 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/xremap" --version
       - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
       - uses: Swatinem/rust-cache@v2
+      - name: Cache the pinned xremap source build for the layer harness
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.XREMAP_HARNESS_DIR }}
+          key: xremap-harness-${{ runner.os }}-${{ env.XREMAP_VERSION }}-${{ steps.toolchain.outputs.cachekey }}
       - name: Run tests
         run: cargo test --verbose --locked
       - name: Validate generated configs with pinned xremap
         run: cargo test --verbose --locked xremap::tests::generated_documents_parse_with_real_xremap -- --ignored --exact
+      - name: Run generated layer documents through xremap's event handler
+        run: ./scripts/verify-layers-with-xremap.sh
 
   deny:
     name: Audit dependencies

@@ -681,23 +681,6 @@ pub fn auto_group(code: &str) -> &'static str {
     }
 }
 
-/// The navigation layer previewed while Caps Lock is held.
-pub fn nav_layer(code: &str) -> Option<&'static str> {
-    match code {
-        "KeyH" => Some("←"),
-        "KeyJ" => Some("↓"),
-        "KeyK" => Some("↑"),
-        "KeyL" => Some("→"),
-        "KeyU" => Some("PgUp"),
-        "KeyD" => Some("PgDn"),
-        "KeyA" => Some("Home"),
-        "KeyE" => Some("End"),
-        "KeyY" => Some("⌫"),
-        "KeyN" => Some("Del"),
-        _ => None,
-    }
-}
-
 /// What a remapped key does in one profile.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mapping {
@@ -711,6 +694,67 @@ pub struct Mapping {
 
 /// Insertion-ordered key → mapping list, as the summary chips expect.
 pub type Maps = Vec<(String, Mapping)>;
+
+/// One key's job inside a layer.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayerKey {
+    /// Deck code of the key (`KeyH`).
+    pub code: String,
+    /// Action from the catalog, or `Disabled`.
+    pub action: String,
+    /// Device scope id (`all` or a specific keyboard id).
+    pub device: String,
+}
+
+/// A layer: while its key is held, the keys listed here take on other
+/// actions. Keys without an entry keep working normally.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: String,
+    pub name: String,
+    /// Deck code of the key held to activate the layer (`CapsLock`).
+    /// Empty while a new layer is still waiting for its key.
+    pub trigger: String,
+    /// Insertion-ordered key jobs, one per key.
+    pub keys: Vec<LayerKey>,
+}
+
+impl Layer {
+    /// This layer's job for one key, if it has one.
+    pub fn key(&self, code: &str) -> Option<&LayerKey> {
+        self.keys.iter().find(|key| key.code == code)
+    }
+}
+
+/// The Caps Lock navigation layer that ships with the starter profiles:
+/// Vim-style arrows on H/J/K/L, paging, line ends, and editing keys.
+pub fn navigation_layer() -> Layer {
+    const KEYS: [(&str, &str); 10] = [
+        ("KeyH", "Arrow Left"),
+        ("KeyJ", "Arrow Down"),
+        ("KeyK", "Arrow Up"),
+        ("KeyL", "Arrow Right"),
+        ("KeyU", "Page Up"),
+        ("KeyD", "Page Down"),
+        ("KeyA", "Home"),
+        ("KeyE", "End"),
+        ("KeyY", "Backspace"),
+        ("KeyN", "Delete"),
+    ];
+    Layer {
+        id: "navigation".to_owned(),
+        name: "Navigation".to_owned(),
+        trigger: "CapsLock".to_owned(),
+        keys: KEYS
+            .into_iter()
+            .map(|(code, action)| LayerKey {
+                code: code.to_owned(),
+                action: action.to_owned(),
+                device: "all".to_owned(),
+            })
+            .collect(),
+    }
+}
 
 /// One side of a shortcut rule: held modifiers plus a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -776,20 +820,27 @@ fn entry(code: &str, mapping: Mapping) -> (String, Mapping) {
     (code.to_owned(), mapping)
 }
 
+/// A profile seeded on a fresh install.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Starter {
+    pub profile: Profile,
+    pub maps: Maps,
+    pub layers: Vec<Layer>,
+}
+
 /// The starter profiles seeded on a fresh install, alongside the empty
 /// Default profile. They are ordinary profiles: fully editable, stored
 /// with the rest, and treated the same as user-created ones from then
 /// on. All mappings apply to every keyboard: the seeds cannot know
 /// which devices exist.
-pub fn starter_profiles() -> Vec<(Profile, Maps)> {
-    let profile = |id: &str, name: &str, maps| {
-        (
-            Profile {
-                id: id.to_owned(),
-                name: name.to_owned(),
-            },
-            maps,
-        )
+pub fn starter_profiles() -> Vec<Starter> {
+    let profile = |id: &str, name: &str, maps, layers| Starter {
+        profile: Profile {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        },
+        maps,
+        layers,
     };
 
     vec![
@@ -804,6 +855,7 @@ pub fn starter_profiles() -> Vec<(Profile, Maps)> {
                 entry("ContextMenu", mapping("Left Super", None, "all", false)),
                 entry("F12", mapping("Play/Pause", None, "all", false)),
             ],
+            Vec::new(),
         ),
         profile(
             "mac",
@@ -813,6 +865,7 @@ pub fn starter_profiles() -> Vec<(Profile, Maps)> {
                 entry("AltLeft", mapping("Left Super", None, "all", false)),
                 entry("CapsLock", mapping("Left Control", None, "all", false)),
             ],
+            Vec::new(),
         ),
         profile(
             "gaming",
@@ -821,6 +874,7 @@ pub fn starter_profiles() -> Vec<(Profile, Maps)> {
                 entry("MetaLeft", mapping("Disabled", None, "all", false)),
                 entry("CapsLock", mapping("Disabled", None, "all", false)),
             ],
+            Vec::new(),
         ),
         profile(
             "media",
@@ -835,6 +889,15 @@ pub fn starter_profiles() -> Vec<(Profile, Maps)> {
                 entry("F11", mapping("Volume Down", None, "all", true)),
                 entry("F12", mapping("Volume Up", None, "all", true)),
             ],
+            Vec::new(),
+        ),
+        // Caps Lock taps Escape and, held, turns the home row into
+        // arrows and friends.
+        profile(
+            "navigation",
+            "Navigation layer",
+            vec![entry("CapsLock", mapping("Escape", None, "all", false))],
+            vec![navigation_layer()],
         ),
     ]
 }

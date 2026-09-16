@@ -1,10 +1,11 @@
 //! Application state and update logic for the Keyloom GUI.
 //!
-//! The interface follows the design export in `design/`. Profiles and
-//! their mappings persist via cosmic-config, and every change
-//! regenerates the xremap configuration written to the user's config
-//! directory and restarts the xremap user service (debounced) so it
-//! takes effect; shortcut groups are still previewed in memory only.
+//! The interface follows the design export in `design/`. Profiles with
+//! their mappings and layers persist via cosmic-config, and every
+//! change regenerates the xremap configuration written to the user's
+//! config directory and restarts the xremap user service (debounced)
+//! so it takes effect; shortcut groups are still previewed in memory
+//! only.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,13 +17,17 @@ use cosmic::iced::Subscription;
 use cosmic::iced::futures::{Stream, StreamExt};
 use cosmic::prelude::*;
 
-use crate::config::{self, KeyboardLayouts, KeyloomConfig, LayoutOverride, SetupState};
+use crate::config::{
+    self, KeyboardLayouts, KeyloomConfig, LayoutOverride, ProfileState, SetupState,
+};
 use crate::keyboard;
 use crate::monitor;
 use crate::service;
 use crate::setup;
 use crate::ui;
-use crate::ui::model::{self, Chord, Group, Mapping, Maps, Profile, Rule, key_by_evdev, key_name};
+use crate::ui::model::{
+    self, Chord, Group, Layer, LayerKey, Mapping, Maps, Profile, Rule, key_by_evdev, key_name,
+};
 use crate::xremap;
 
 /// How long the bottom sheet takes to open or close (the design's `kbRise`).
@@ -43,13 +48,6 @@ pub enum View {
     Keyboard,
     Tester,
     Shortcuts,
-}
-
-/// Which layer the keyboard canvas previews.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Layer {
-    Base,
-    Nav,
 }
 
 /// What the key editor's action list assigns.
@@ -89,11 +87,19 @@ pub struct Toast {
 pub enum Undo {
     Maps(HashMap<String, Maps>),
     Groups(HashMap<String, Vec<Group>>),
-    /// A deleted profile: its list position, mappings, and groups.
+    /// Layers, with the mappings a layer change can touch (a key that
+    /// takes on holding a layer gives up its hold action).
+    Layers {
+        layers: HashMap<String, Vec<Layer>>,
+        maps: HashMap<String, Maps>,
+    },
+    /// A deleted profile: its list position, mappings, layers, and
+    /// groups.
     Profile {
         index: usize,
         profile: Profile,
         maps: Maps,
+        layers: Vec<Layer>,
         groups: Vec<Group>,
     },
 }
@@ -201,8 +207,26 @@ pub enum Message {
     SetVariant(bool),
     OpenRemaps,
     CloseRemaps,
-    SetLayer(Layer),
+    /// Show and edit one of the profile's layers on the deck, or
+    /// (`None`) the normal keys.
+    SetLayer(Option<String>),
     ToggleLayers,
+    /// Add a layer and start choosing the key that holds it.
+    AddLayer,
+    /// Choose the key that holds the active layer: the next key
+    /// clicked on the deck or pressed on a keyboard.
+    ChooseLayerKey,
+    /// Stop choosing a layer key; a new layer that never got one is
+    /// dropped again.
+    CancelLayerKey,
+    /// Ask for confirmation before deleting the active layer.
+    DeleteLayer,
+    DeleteLayerConfirm,
+    DeleteLayerCancel,
+    /// Start (or cancel) renaming the active layer.
+    RenameLayerToggle,
+    RenameLayerInput(String),
+    RenameLayerCommit,
     SelectKey(&'static str),
     Query(String),
     SetCategory(&'static str),
@@ -309,6 +333,7 @@ pub struct App {
     pub profile: String,
     pub profile_maps: HashMap<String, Maps>,
     pub profile_groups: HashMap<String, Vec<Group>>,
+    pub profile_layers: HashMap<String, Vec<Layer>>,
     custom_profiles: usize,
     /// In-progress rename of the active profile (the edited text).
     pub rename: Option<String>,
@@ -324,8 +349,16 @@ pub struct App {
     /// Whether the deck uses the ISO assembly instead of ANSI.
     pub iso: bool,
     keyboard_layouts: KeyboardLayouts,
-    pub layer: Layer,
+    /// The layer shown and edited on the deck (`None`: the normal keys).
+    pub layer: Option<String>,
     pub layers_open: bool,
+    /// The next key clicked on the deck or pressed on a keyboard
+    /// becomes the active layer's key.
+    pub choosing_layer_key: bool,
+    /// In-progress rename of the active layer (the edited text).
+    pub rename_layer: Option<String>,
+    /// Layer id awaiting delete confirmation in the modal dialog.
+    pub confirm_delete_layer: Option<String>,
     pub selected: Option<&'static str>,
     pub mode: Mode,
     pub query: String,
@@ -395,6 +428,49 @@ impl App {
         self.profile_groups
             .get(&self.profile)
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// Layers of the active profile.
+    pub fn layers(&self) -> &[Layer] {
+        self.profile_layers
+            .get(&self.profile)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The layer shown on the deck, if one is.
+    pub fn active_layer(&self) -> Option<&Layer> {
+        let id = self.layer.as_deref()?;
+        self.layers().iter().find(|layer| layer.id == id)
+    }
+
+    /// The layer a key holds in the active profile, if any.
+    pub fn layer_held_by(&self, code: &str) -> Option<&Layer> {
+        self.layers().iter().find(|layer| layer.trigger == code)
+    }
+
+    /// Why a key cannot take a job in the active layer, as a toast.
+    fn layer_job_blocker(&self, code: &str) -> Option<(String, String)> {
+        let layer = self.active_layer()?;
+        let name = key_name(code);
+        if layer.trigger == code {
+            return Some((
+                format!("{name} holds this layer"),
+                "The key that holds a layer cannot take a job in it. Use “Change key” to hold the layer with another key.".to_owned(),
+            ));
+        }
+        if xremap::is_modifier_key(code) {
+            return Some((
+                format!("{name} keeps its job"),
+                "Shift, Control, Alt and Super work the same in every layer.".to_owned(),
+            ));
+        }
+        if let Some(other) = self.layer_held_by(code) {
+            return Some((
+                format!("{name} holds the {} layer", other.name),
+                "A key that holds a layer cannot take a job in another one.".to_owned(),
+            ));
+        }
+        None
     }
 
     /// Name of the active profile.
@@ -787,10 +863,7 @@ impl App {
         }
         if let Some(settings) = &self.settings {
             let snapshot = KeyloomConfig::snapshot(
-                &self.profiles,
-                &self.profile_maps,
-                &self.profile,
-                u32::try_from(self.custom_profiles).unwrap_or(u32::MAX),
+                &self.profile_state(),
                 &self.keyboard_layouts,
                 self.setup_state,
             );
@@ -808,7 +881,7 @@ impl App {
     /// replaced only when `overwrite_foreign` is set (a user edit);
     /// startup leaves foreign files alone.
     fn write_xremap(&mut self, overwrite_foreign: bool) {
-        let yaml = xremap::generate(self.maps(), |id| self.device_label(id));
+        let yaml = xremap::generate(self.maps(), self.layers(), |id| self.device_label(id));
         match xremap::write(&yaml, overwrite_foreign) {
             // Only a real content change warrants a service restart.
             Ok(xremap::WriteOutcome::Written(_)) => self.schedule_apply(),
@@ -884,10 +957,22 @@ impl App {
         if self.view == View::Tester {
             return;
         }
-        // Reject a no-op self-mapping. Assigning the key's own name is
-        // only meaningful when the other slot changes behavior (e.g.
-        // hold → Control with tap kept as the key itself).
         let name = key_name(code);
+        // Holding a layer key activates its layer, so a hold action
+        // would never run.
+        if self.mode == Mode::Hold
+            && let Some(layer) = self.layer_held_by(code)
+        {
+            let layer = layer.name.clone();
+            self.flash(
+                format!("{name} holds the {layer} layer"),
+                "Delete the layer to give this key a hold action instead.",
+            );
+            return;
+        }
+        // Reject a no-op self-mapping. Assigning the key's own name is
+        // only meaningful when holding the key does something else
+        // (a hold action, or a layer).
         if action == name {
             let other = self.mapping(code).and_then(|mapping| {
                 if self.mode == Mode::Hold {
@@ -896,7 +981,8 @@ impl App {
                     mapping.hold.clone()
                 }
             });
-            if other.is_none() || other.as_deref() == Some(action) {
+            let holds_layer = self.mode == Mode::Tap && self.layer_held_by(code).is_some();
+            if (other.is_none() && !holds_layer) || other.as_deref() == Some(action) {
                 self.flash(
                     format!("{name} already does that"),
                     "Mapping a key to itself would change nothing — choose a different output.",
@@ -925,6 +1011,295 @@ impl App {
             format!("{}{held} → {action}", key_name(code)),
             format!("applies automatically · {device}"),
         );
+        self.persist();
+    }
+
+    /// The profile state as it is saved. A layer still waiting for its
+    /// key is not part of it: without a key it can do nothing yet.
+    fn profile_state(&self) -> ProfileState {
+        ProfileState {
+            profiles: self.profiles.clone(),
+            maps: self.profile_maps.clone(),
+            layers: self.keyed_layers(),
+            active: self.profile.clone(),
+            custom_profiles: u32::try_from(self.custom_profiles).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// Every profile's layers, without any still waiting for a key.
+    fn keyed_layers(&self) -> HashMap<String, Vec<Layer>> {
+        self.profile_layers
+            .iter()
+            .map(|(id, layers)| {
+                let layers = layers
+                    .iter()
+                    .filter(|layer| !layer.trigger.is_empty())
+                    .cloned()
+                    .collect();
+                (id.clone(), layers)
+            })
+            .collect()
+    }
+
+    /// Remember the layers and mappings before a layer change, for
+    /// Undo. A layer still waiting for its key is not a state worth
+    /// returning to.
+    fn snapshot_layers(&mut self) {
+        self.undo = Some(Undo::Layers {
+            layers: self.keyed_layers(),
+            maps: self.profile_maps.clone(),
+        });
+    }
+
+    /// Leave layer editing: stop choosing a key, show the normal keys,
+    /// and drop any pending rename or delete.
+    fn leave_layers(&mut self) {
+        self.cancel_layer_key();
+        self.layer = None;
+        self.rename_layer = None;
+        self.confirm_delete_layer = None;
+    }
+
+    /// Stop choosing a layer key. A new layer that never got its key
+    /// is dropped again: without one it can do nothing.
+    fn cancel_layer_key(&mut self) {
+        if !self.choosing_layer_key {
+            return;
+        }
+        self.choosing_layer_key = false;
+        if let Some(id) = self.layer.clone()
+            && self
+                .active_layer()
+                .is_some_and(|layer| layer.trigger.is_empty())
+        {
+            if let Some(layers) = self.profile_layers.get_mut(&self.profile) {
+                layers.retain(|layer| layer.id != id);
+            }
+            self.layer = None;
+            self.toast = None;
+        }
+    }
+
+    /// Add a layer to the active profile and start choosing its key.
+    fn add_layer(&mut self) {
+        if self.view != View::Keyboard || self.choosing_layer_key {
+            return;
+        }
+        if self.layers().len() >= xremap::MAX_LAYERS {
+            self.flash(
+                format!("Up to {} layers per profile", xremap::MAX_LAYERS),
+                "Delete a layer to make room for another.",
+            );
+            return;
+        }
+        // Number past every id ever used here, so names stay unique.
+        let number = self
+            .layers()
+            .iter()
+            .filter_map(|layer| layer.id.strip_prefix("layer-")?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let id = format!("layer-{number}");
+        let name = format!("Layer {number}");
+        self.profile_layers
+            .entry(self.profile.clone())
+            .or_default()
+            .push(Layer {
+                id: id.clone(),
+                name: name.clone(),
+                trigger: String::new(),
+                keys: Vec::new(),
+            });
+        self.layer = Some(id);
+        self.layers_open = true;
+        self.choosing_layer_key = true;
+        self.rename_layer = None;
+        self.remaps_open = false;
+        self.confirm_remove_mapping = None;
+        self.close_sheet();
+        self.flash(
+            format!("{name} added"),
+            "Click the key that will hold it, or press it on your keyboard.",
+        );
+    }
+
+    /// Make a key hold the active layer. The key gives up any hold
+    /// action and any layer jobs it had: held, it activates the layer.
+    fn set_layer_trigger(&mut self, code: &str) {
+        let Some(id) = self.layer.clone() else {
+            self.choosing_layer_key = false;
+            return;
+        };
+        let name = key_name(code);
+        if let Some(other) = self
+            .layers()
+            .iter()
+            .find(|layer| layer.id != id && layer.trigger == code)
+        {
+            let other = other.name.clone();
+            self.flash(
+                format!("{name} already holds {other}"),
+                "Choose a different key for this layer.",
+            );
+            return;
+        }
+        self.snapshot_layers();
+        let mut hold_removed = false;
+        if let Some(maps) = self.profile_maps.get_mut(&self.profile)
+            && let Some(index) = maps.iter().position(|(key, _)| key == code)
+        {
+            hold_removed = maps[index].1.hold.take().is_some();
+            if maps[index].1.tap.is_none() {
+                maps.remove(index);
+            }
+        }
+        let mut layer_name = String::new();
+        if let Some(layers) = self.profile_layers.get_mut(&self.profile) {
+            for layer in layers.iter_mut() {
+                layer.keys.retain(|key| key.code != code);
+            }
+            if let Some(layer) = layers.iter_mut().find(|layer| layer.id == id) {
+                layer.trigger = code.to_owned();
+                layer_name.clone_from(&layer.name);
+            }
+        }
+        self.choosing_layer_key = false;
+        self.flash(
+            format!("Hold {name} for {layer_name}"),
+            if hold_removed {
+                "Its hold action gave way to the layer · applies automatically"
+            } else {
+                "applies automatically"
+            },
+        );
+        self.persist();
+    }
+
+    /// Give the selected key a job in the active layer.
+    fn set_layer_job(&mut self, code: &str, action: &str) {
+        if self.view != View::Keyboard {
+            return;
+        }
+        let Some(id) = self.layer.clone() else {
+            return;
+        };
+        if let Some((text, sub)) = self.layer_job_blocker(code) {
+            self.flash(text, sub);
+            return;
+        }
+        // Naming the key itself changes nothing unless a mapping
+        // turned the key into something else.
+        let name = key_name(code);
+        if action == name && self.mapping(code).and_then(|m| m.tap.as_deref()).is_none() {
+            self.flash(
+                format!("{name} already does that"),
+                "Mapping a key to itself would change nothing — choose a different output.",
+            );
+            return;
+        }
+        self.snapshot_layers();
+        let device = self.device.clone();
+        let mut trigger = String::new();
+        if let Some(layer) = self
+            .profile_layers
+            .entry(self.profile.clone())
+            .or_default()
+            .iter_mut()
+            .find(|layer| layer.id == id)
+        {
+            trigger.clone_from(&layer.trigger);
+            if let Some(job) = layer.keys.iter_mut().find(|key| key.code == code) {
+                job.action = action.to_owned();
+                job.device.clone_from(&device);
+            } else {
+                layer.keys.push(LayerKey {
+                    code: code.to_owned(),
+                    action: action.to_owned(),
+                    device: device.clone(),
+                });
+            }
+        }
+        let device = self.device_label(&device).to_lowercase();
+        self.flash(
+            format!("{} + {name} → {action}", key_name(&trigger)),
+            format!("applies automatically · {device}"),
+        );
+        self.persist();
+    }
+
+    /// Take the selected key's job away in the active layer.
+    fn remove_layer_job(&mut self, code: &str) {
+        let Some(layer) = self.active_layer() else {
+            return;
+        };
+        let name = key_name(code);
+        let layer_name = layer.name.clone();
+        if layer.key(code).is_none() {
+            self.flash(
+                format!("{name} already works normally in {layer_name}"),
+                "It has no job in this layer.",
+            );
+            return;
+        }
+        let id = layer.id.clone();
+        self.snapshot_layers();
+        if let Some(layers) = self.profile_layers.get_mut(&self.profile)
+            && let Some(layer) = layers.iter_mut().find(|layer| layer.id == id)
+        {
+            layer.keys.retain(|key| key.code != code);
+        }
+        self.flash(
+            format!("{name} back to normal in {layer_name}"),
+            "applies automatically",
+        );
+        self.persist();
+    }
+
+    /// Delete a layer of the active profile, once confirmed.
+    fn delete_layer(&mut self, id: &str) {
+        if self.view != View::Keyboard {
+            return;
+        }
+        let Some(index) = self.layers().iter().position(|layer| layer.id == id) else {
+            return;
+        };
+        self.snapshot_layers();
+        let layer = self
+            .profile_layers
+            .get_mut(&self.profile)
+            .map(|layers| layers.remove(index));
+        if self.layer.as_deref() == Some(id) {
+            self.layer = None;
+            self.choosing_layer_key = false;
+            self.rename_layer = None;
+            self.clear_sheet();
+        }
+        let name = layer.map(|layer| layer.name).unwrap_or_default();
+        self.flash(format!("{name} deleted"), "Undo restores it.");
+        self.persist();
+    }
+
+    /// Apply the pending rename to the active layer.
+    fn commit_layer_rename(&mut self) {
+        let Some(name) = self.rename_layer.take() else {
+            return;
+        };
+        let name = name.trim().to_owned();
+        let Some(layer) = self.active_layer() else {
+            return;
+        };
+        if name.is_empty() || name == layer.name {
+            return;
+        }
+        let id = layer.id.clone();
+        self.snapshot_layers();
+        if let Some(layers) = self.profile_layers.get_mut(&self.profile)
+            && let Some(layer) = layers.iter_mut().find(|layer| layer.id == id)
+        {
+            layer.name.clone_from(&name);
+        }
+        self.flash("Layer renamed", format!("now called {name}"));
         self.persist();
     }
 
@@ -1005,7 +1380,8 @@ impl App {
         );
     }
 
-    /// Restore the selected key to its default behavior.
+    /// Restore the selected key to its default behavior — in the
+    /// active layer while one is shown, otherwise in the profile.
     fn clear_mapping(&mut self) {
         if self.view == View::Tester {
             return;
@@ -1013,7 +1389,11 @@ impl App {
         let Some(code) = self.selected else {
             return;
         };
-        self.remove_mapping(code);
+        if self.layer.is_some() {
+            self.remove_layer_job(code);
+        } else {
+            self.remove_mapping(code);
+        }
     }
 
     /// Remove one key's mapping from the active profile.
@@ -1091,12 +1471,19 @@ impl App {
         } else {
             Vec::new()
         };
+        let layers = if duplicate {
+            self.layers().to_vec()
+        } else {
+            Vec::new()
+        };
+        self.leave_layers();
         self.profiles.push(Profile {
             id: id.clone(),
             name: name.clone(),
         });
         self.profile_maps.insert(id.clone(), maps);
         self.profile_groups.insert(id.clone(), groups);
+        self.profile_layers.insert(id.clone(), layers);
         self.profile = id;
         self.confirm_remove_mapping = None;
         self.confirm_reset_mappings = None;
@@ -1105,7 +1492,7 @@ impl App {
         self.clear_sheet();
         self.undo = None;
         let sub = if duplicate {
-            "A separate copy of your mappings and shortcuts."
+            "A separate copy of your mappings, layers and shortcuts."
         } else {
             "Click a key to add your first mapping."
         };
@@ -1125,12 +1512,14 @@ impl App {
         };
         let profile = self.profiles.remove(index);
         let maps = self.profile_maps.remove(id).unwrap_or_default();
+        let layers = self.profile_layers.remove(id).unwrap_or_default();
         let groups = self.profile_groups.remove(id).unwrap_or_default();
         let name = profile.name.clone();
         self.undo = Some(Undo::Profile {
             index,
             profile,
             maps,
+            layers,
             groups,
         });
         self.popover = None;
@@ -1212,6 +1601,16 @@ impl App {
             return;
         }
 
+        // Choosing the key that holds a layer.
+        if !escape && self.view == View::Keyboard && self.choosing_layer_key {
+            let Some(cap) = key_by_evdev(scancode) else {
+                return;
+            };
+            self.pressed.insert((device.clone(), scancode));
+            self.set_layer_trigger(cap.code);
+            return;
+        }
+
         // Recording an output key for the key editor.
         if !escape
             && self.view == View::Keyboard
@@ -1224,7 +1623,9 @@ impl App {
             self.capture = false;
             self.pressed.insert((device.clone(), scancode));
             let action = key_name(cap.code);
-            if self.mode == Mode::Combo {
+            if self.layer.is_some() {
+                self.set_layer_job(selected, &action);
+            } else if self.mode == Mode::Combo {
                 self.add_combo(&action);
             } else {
                 self.set_mapping(selected, &action);
@@ -1287,11 +1688,8 @@ impl cosmic::Application for App {
             .map_or(SetupState::NotStarted, |stored| stored.setup);
         let stored = stored.filter(|stored| !stored.profiles.is_empty());
 
-        let (profiles, profile_maps, profile, custom_profiles) = match stored {
-            Some(stored) => {
-                let (profiles, maps, active, custom) = stored.into_state();
-                (profiles, maps, active, custom as usize)
-            }
+        let state = match stored {
+            Some(stored) => stored.into_state(),
             None => {
                 // Fresh install: an empty Default profile plus the
                 // editable starter profiles. Once persisted they are
@@ -1300,15 +1698,31 @@ impl cosmic::Application for App {
                     id: "default".to_owned(),
                     name: "Default".to_owned(),
                 };
-                let mut profile_maps = HashMap::from([(default.id.clone(), Vec::new())]);
-                let mut profiles = vec![default];
-                for (profile, maps) in model::starter_profiles() {
-                    profile_maps.insert(profile.id.clone(), maps);
-                    profiles.push(profile);
+                let mut state = ProfileState {
+                    maps: HashMap::from([(default.id.clone(), Vec::new())]),
+                    layers: HashMap::from([(default.id.clone(), Vec::new())]),
+                    active: default.id.clone(),
+                    profiles: vec![default],
+                    custom_profiles: 0,
+                };
+                for starter in model::starter_profiles() {
+                    state.maps.insert(starter.profile.id.clone(), starter.maps);
+                    state
+                        .layers
+                        .insert(starter.profile.id.clone(), starter.layers);
+                    state.profiles.push(starter.profile);
                 }
-                (profiles, profile_maps, "default".to_owned(), 0)
+                state
             }
         };
+        let ProfileState {
+            profiles,
+            maps: profile_maps,
+            layers: profile_layers,
+            active: profile,
+            custom_profiles,
+        } = state;
+        let custom_profiles = usize::try_from(custom_profiles).unwrap_or(usize::MAX);
         let profile_groups: HashMap<String, Vec<Group>> = HashMap::new();
 
         let mut app = App {
@@ -1326,6 +1740,7 @@ impl cosmic::Application for App {
             profile,
             profile_maps,
             profile_groups,
+            profile_layers,
             custom_profiles,
             rename: None,
             confirm_delete: None,
@@ -1335,8 +1750,11 @@ impl cosmic::Application for App {
             form: keyboard::FORM_FULL,
             iso: false,
             keyboard_layouts,
-            layer: Layer::Base,
+            layer: None,
             layers_open: false,
+            choosing_layer_key: false,
+            rename_layer: None,
+            confirm_delete_layer: None,
             selected: None,
             mode: Mode::Tap,
             query: String::new(),
@@ -1404,6 +1822,7 @@ impl cosmic::Application for App {
                 self.sheet_opened = None;
                 self.sheet_closing = None;
                 self.view = view;
+                self.leave_layers();
                 self.confirm_reset_mappings = None;
                 self.popover = None;
                 self.recording = None;
@@ -1437,6 +1856,7 @@ impl cosmic::Application for App {
                 self.rename = None;
             }
             Message::SelectProfile(id) => {
+                self.leave_layers();
                 self.confirm_reset_mappings = None;
                 self.profile = id;
                 self.toast = None;
@@ -1532,19 +1952,79 @@ impl cosmic::Application for App {
                 self.confirm_remove_mapping = None;
             }
             Message::SetLayer(layer) => {
-                self.layer = layer;
-                if layer == Layer::Nav {
+                if self.view == View::Keyboard {
+                    self.cancel_layer_key();
+                    self.layer =
+                        layer.filter(|id| self.layers().iter().any(|layer| &layer.id == id));
+                    self.rename_layer = None;
+                    self.remaps_open = false;
+                    self.confirm_remove_mapping = None;
                     self.close_sheet();
                 }
             }
             Message::ToggleLayers => self.layers_open = !self.layers_open,
+            Message::AddLayer => self.add_layer(),
+            Message::ChooseLayerKey => {
+                if self.view == View::Keyboard && self.active_layer().is_some() {
+                    self.choosing_layer_key = true;
+                    self.rename_layer = None;
+                    self.close_sheet();
+                }
+            }
+            Message::CancelLayerKey => self.cancel_layer_key(),
+            Message::DeleteLayer => {
+                if self.view == View::Keyboard
+                    && !self.choosing_layer_key
+                    && let Some(layer) = self.active_layer()
+                {
+                    self.confirm_delete_layer = Some(layer.id.clone());
+                }
+            }
+            Message::DeleteLayerConfirm => {
+                if let Some(id) = self.confirm_delete_layer.take() {
+                    self.delete_layer(&id);
+                }
+            }
+            Message::DeleteLayerCancel => self.confirm_delete_layer = None,
+            Message::RenameLayerToggle => {
+                if self.view == View::Keyboard
+                    && let Some(layer) = self.active_layer()
+                {
+                    self.rename_layer = if self.rename_layer.is_some() {
+                        None
+                    } else {
+                        Some(layer.name.clone())
+                    };
+                    if self.rename_layer.is_some() {
+                        let id = ui::keyboard_view::layer_rename_input_id();
+                        return Task::batch([
+                            cosmic::widget::text_input::focus(id.clone()),
+                            cosmic::widget::text_input::select_all(id),
+                        ]);
+                    }
+                }
+            }
+            Message::RenameLayerInput(text) => {
+                if self.rename_layer.is_some() {
+                    self.rename_layer = Some(text);
+                }
+            }
+            Message::RenameLayerCommit => self.commit_layer_rename(),
             Message::SelectKey(code) => {
                 if self.view == View::Tester {
                     self.last = Some(LastKey {
                         code,
                         device: "Clicked in this preview".to_owned(),
                     });
+                } else if self.choosing_layer_key {
+                    self.set_layer_trigger(code);
                 } else {
+                    if self.layer.is_some()
+                        && let Some((text, sub)) = self.layer_job_blocker(code)
+                    {
+                        self.flash(text, sub);
+                        return Task::none();
+                    }
                     if self.selected != Some(code) {
                         self.toast = None;
                     }
@@ -1570,7 +2050,11 @@ impl cosmic::Application for App {
                 self.query.clear();
             }
             Message::PickAction(action) => {
-                if self.mode == Mode::Combo {
+                if let Some(selected) = self.selected
+                    && self.layer.is_some()
+                {
+                    self.set_layer_job(selected, &action);
+                } else if self.mode == Mode::Combo {
                     self.add_combo(&action);
                 } else if let Some(selected) = self.selected {
                     self.set_mapping(selected, &action);
@@ -1746,13 +2230,26 @@ impl cosmic::Application for App {
                         self.sheet_closing = None;
                         self.toast = None;
                     }
+                    Some(Undo::Layers { layers, maps }) => {
+                        self.profile_layers = layers;
+                        self.profile_maps = maps;
+                        self.choosing_layer_key = false;
+                        self.rename_layer = None;
+                        if self.active_layer().is_none() {
+                            self.layer = None;
+                        }
+                        self.toast = None;
+                        self.persist();
+                    }
                     Some(Undo::Profile {
                         index,
                         profile,
                         maps,
+                        layers,
                         groups,
                     }) => {
                         self.profile_maps.insert(profile.id.clone(), maps);
+                        self.profile_layers.insert(profile.id.clone(), layers);
                         self.profile_groups.insert(profile.id.clone(), groups);
                         self.profiles
                             .insert(index.min(self.profiles.len()), profile);
@@ -1900,7 +2397,9 @@ impl cosmic::Application for App {
                     && self.view != View::Tester
                 {
                     self.undo = None;
-                    self.profile_maps.insert(id, Vec::new());
+                    self.leave_layers();
+                    self.profile_maps.insert(id.clone(), Vec::new());
+                    self.profile_layers.insert(id, Vec::new());
                     self.clear_sheet();
                     self.flash("Profile cleared", "nothing is remapped");
                     self.persist();
@@ -2004,6 +2503,9 @@ impl cosmic::Application for App {
         if self.confirm_delete.is_some() {
             return Some(ui::overlays::delete_profile_dialog(self));
         }
+        if self.confirm_delete_layer.is_some() {
+            return Some(ui::overlays::delete_layer_dialog(self));
+        }
         if self.confirm_reset_mappings.is_some() {
             return Some(ui::overlays::reset_mappings_dialog(self));
         }
@@ -2033,6 +2535,8 @@ impl cosmic::Application for App {
             self.about_open = false;
         } else if self.confirm_delete.is_some() {
             self.confirm_delete = None;
+        } else if self.confirm_delete_layer.is_some() {
+            self.confirm_delete_layer = None;
         } else if self.confirm_reset_mappings.is_some() {
             self.confirm_reset_mappings = None;
         } else if self.confirm_remove_mapping.is_some() {
@@ -2047,6 +2551,10 @@ impl cosmic::Application for App {
             self.rename = None;
         } else if self.recording.is_some() {
             self.recording = None;
+        } else if self.rename_layer.is_some() {
+            self.rename_layer = None;
+        } else if self.choosing_layer_key {
+            self.cancel_layer_key();
         } else {
             self.close_sheet();
         }
@@ -2746,7 +3254,7 @@ mod tests {
         ));
         let _ = app.update(Message::SelectKey("Numpad7"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
-        let yaml = crate::xremap::generate(app.maps(), |id| id.to_owned());
+        let yaml = crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned());
         let apply_seq = app.apply_seq;
 
         // Numpad7 is absent from the 60% deck; the rule must survive
@@ -2759,7 +3267,7 @@ mod tests {
             Some("Escape")
         );
         assert_eq!(
-            crate::xremap::generate(app.maps(), |id| id.to_owned()),
+            crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned()),
             yaml
         );
 
@@ -2773,7 +3281,7 @@ mod tests {
             let _ = app.update(Message::SetForm(app.detected_form().unwrap()));
             let _ = app.update(Message::SetVariant(app.detected_iso().unwrap()));
             assert_eq!(
-                crate::xremap::generate(app.maps(), |id| id.to_owned()),
+                crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned()),
                 yaml
             );
         }
@@ -3100,10 +3608,7 @@ mod tests {
         .unwrap();
         let mut original = app();
         let snapshot = KeyloomConfig::snapshot(
-            &original.profiles,
-            &original.profile_maps,
-            &original.profile,
-            0,
+            &original.profile_state(),
             &original.keyboard_layouts,
             original.setup_state,
         );
@@ -3231,13 +3736,15 @@ mod tests {
         assert!(app.groups().is_empty(), "no demo groups are seeded");
         assert!(app.devices.is_empty(), "no demo devices are listed");
         assert_eq!(app.device_entries().len(), 1, "only the All keyboards row");
-        for (profile, maps) in &starters {
+        for starter in &starters {
+            let id = &starter.profile.id;
             assert!(
-                app.profiles.iter().any(|seeded| seeded.id == profile.id),
+                app.profiles.iter().any(|seeded| &seeded.id == id),
                 "{} ships as a regular profile",
-                profile.name
+                starter.profile.name
             );
-            assert_eq!(app.profile_maps.get(&profile.id), Some(maps));
+            assert_eq!(app.profile_maps.get(id), Some(&starter.maps));
+            assert_eq!(app.profile_layers.get(id), Some(&starter.layers));
         }
     }
 
@@ -3246,8 +3753,8 @@ mod tests {
         let mut app = app();
         let seeded = model::starter_profiles()
             .into_iter()
-            .find(|(profile, _)| profile.id == "laptop")
-            .map(|(_, maps)| maps)
+            .find(|starter| starter.profile.id == "laptop")
+            .map(|starter| starter.maps)
             .expect("laptop profile ships");
 
         let _ = app.update(Message::SelectProfile("laptop".to_owned()));
@@ -3318,8 +3825,12 @@ mod tests {
         let _ = app.update(Message::SetView(View::Keyboard));
 
         // Deleting every inactive profile leaves the active one.
-        for id in ["laptop", "mac", "gaming", "media"] {
-            let _ = app.update(Message::DeleteProfile(id.to_owned()));
+        let starters: Vec<String> = model::starter_profiles()
+            .into_iter()
+            .map(|starter| starter.profile.id)
+            .collect();
+        for id in starters {
+            let _ = app.update(Message::DeleteProfile(id));
             let _ = app.update(Message::DeleteConfirm);
         }
         assert_eq!(app.profiles.len(), 1);
@@ -4047,5 +4558,363 @@ mod tests {
         });
         let _ = app.update(Message::SelectProfile("laptop".to_owned()));
         assert_eq!(app.apply_step(app.apply_seq), ApplyStep::Restart);
+    }
+
+    // --- Layers ---------------------------------------------------------
+
+    fn layer<'a>(app: &'a App, id: &str) -> &'a Layer {
+        app.layers()
+            .iter()
+            .find(|layer| layer.id == id)
+            .expect("layer exists")
+    }
+
+    fn yaml(app: &App) -> String {
+        crate::xremap::generate(app.maps(), app.layers(), |id| id.to_owned())
+    }
+
+    fn toast_text(app: &App) -> &str {
+        app.toast.as_ref().map_or("", |toast| toast.text.as_str())
+    }
+
+    #[test]
+    fn a_new_layer_waits_for_its_key_then_takes_jobs() {
+        let mut app = app();
+        let _ = app.update(Message::AddLayer);
+        assert!(app.choosing_layer_key);
+        assert!(app.layers_open);
+        assert_eq!(app.layer.as_deref(), Some("layer-1"));
+        assert_eq!(layer(&app, "layer-1").name, "Layer 1");
+        assert!(layer(&app, "layer-1").trigger.is_empty());
+        let apply_seq = app.apply_seq;
+
+        // The next click chooses the key; it opens no editor.
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        assert!(!app.choosing_layer_key);
+        assert_eq!(layer(&app, "layer-1").trigger, "CapsLock");
+        assert_eq!(app.selected, None);
+        assert_eq!(toast_text(&app), "Hold Caps Lock for Layer 1");
+        assert!(app.apply_seq > apply_seq, "the layer key is applied");
+
+        // Now keys take jobs in the layer through the editor.
+        let _ = app.update(Message::SelectKey("KeyH"));
+        assert_eq!(app.selected, Some("KeyH"));
+        let _ = app.update(Message::PickAction("Arrow Left".to_owned()));
+        let job = layer(&app, "layer-1").key("KeyH").expect("job stored");
+        assert_eq!(job.action, "Arrow Left");
+        assert_eq!(job.device, "all");
+        assert_eq!(toast_text(&app), "Caps Lock + H → Arrow Left");
+        assert!(
+            app.mapping("KeyH").is_none(),
+            "the normal keys are untouched"
+        );
+        let generated = yaml(&app);
+        assert!(generated.contains("      KEY_CAPSLOCK: KEY_BRL_DOT1\n"));
+        assert!(generated.contains("      KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"));
+
+        // Replacing the job keeps one entry per key.
+        let _ = app.update(Message::PickAction("Home".to_owned()));
+        assert_eq!(layer(&app, "layer-1").keys.len(), 1);
+        assert_eq!(layer(&app, "layer-1").key("KeyH").unwrap().action, "Home");
+
+        // "Back to normal in this layer" removes it, undoably.
+        let _ = app.update(Message::ClearKey);
+        assert!(layer(&app, "layer-1").key("KeyH").is_none());
+        assert_eq!(toast_text(&app), "H back to normal in Layer 1");
+        let _ = app.update(Message::Undo);
+        assert!(layer(&app, "layer-1").key("KeyH").is_some());
+    }
+
+    #[test]
+    fn a_physical_press_chooses_the_layer_key_and_records_jobs() {
+        let mut app = app();
+        let device = PathBuf::from("/dev/input/test-keyboard");
+        let _ = app.update(Message::AddLayer);
+        app.phys_press(&device, evdev::KeyCode::KEY_SPACE.0);
+        assert_eq!(layer(&app, "layer-1").trigger, "Space");
+        assert!(!app.choosing_layer_key);
+
+        // Recording a key while editing a job records it in the layer.
+        let _ = app.update(Message::SelectKey("KeyJ"));
+        let _ = app.update(Message::SetCapture(true));
+        app.phys_press(&device, evdev::KeyCode::KEY_DOWN.0);
+        assert!(!app.capture);
+        assert_eq!(
+            layer(&app, "layer-1").key("KeyJ").unwrap().action,
+            "Arrow Down"
+        );
+        assert!(app.mapping("KeyJ").is_none());
+    }
+
+    #[test]
+    fn cancelling_the_key_choice_drops_only_a_new_layer() {
+        let mut app = app();
+        let _ = app.update(Message::AddLayer);
+        let _ = app.on_escape();
+        assert!(app.layers().is_empty(), "a layer without a key is dropped");
+        assert_eq!(app.layer, None);
+        assert!(!app.choosing_layer_key);
+
+        // Showing the normal keys mid-choice does the same.
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::SetLayer(None));
+        assert!(app.layers().is_empty());
+
+        // An existing layer keeps its key when a new choice is cancelled.
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::ChooseLayerKey);
+        assert!(app.choosing_layer_key);
+        let _ = app.update(Message::CancelLayerKey);
+        assert_eq!(app.layers().len(), 1);
+        assert_eq!(layer(&app, "layer-1").trigger, "CapsLock");
+        assert!(!app.choosing_layer_key);
+    }
+
+    #[test]
+    fn a_layer_key_and_modifiers_take_no_jobs() {
+        let mut app = app();
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        for (code, text) in [
+            ("CapsLock", "Caps Lock holds this layer"),
+            ("ShiftLeft", "Left Shift keeps its job"),
+        ] {
+            let _ = app.update(Message::SelectKey(code));
+            assert_eq!(app.selected, None, "{code} opens no editor");
+            assert_eq!(toast_text(&app), text);
+        }
+
+        // One key holds one layer, and a layer's key takes no job in
+        // another layer.
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        assert!(app.choosing_layer_key, "the key is taken; keep choosing");
+        assert_eq!(toast_text(&app), "Caps Lock already holds Layer 1");
+        let _ = app.update(Message::SelectKey("Space"));
+        assert_eq!(layer(&app, "layer-2").trigger, "Space");
+        let _ = app.update(Message::SetLayer(Some("layer-1".to_owned())));
+        let _ = app.update(Message::SelectKey("Space"));
+        assert_eq!(app.selected, None);
+        assert_eq!(toast_text(&app), "Space holds the Layer 2 layer");
+    }
+
+    #[test]
+    fn holding_a_layer_supersedes_the_hold_action() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        assert_eq!(
+            app.mapping("CapsLock").and_then(|m| m.hold.as_deref()),
+            Some("Left Control")
+        );
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let mapping = app.mapping("CapsLock").expect("the tap action stays");
+        assert_eq!(mapping.tap.as_deref(), Some("Escape"));
+        assert_eq!(mapping.hold, None, "the hold action gave way to the layer");
+        assert!(
+            app.toast
+                .as_ref()
+                .is_some_and(|toast| toast.sub.contains("hold action gave way"))
+        );
+        assert!(
+            yaml(&app).contains(
+                "      KEY_CAPSLOCK:\n        held: KEY_BRL_DOT1\n        alone: KEY_ESC\n"
+            )
+        );
+
+        // Undo puts both back, and the key-less layer is not resurrected.
+        let _ = app.update(Message::Undo);
+        assert!(app.layers().is_empty());
+        assert_eq!(
+            app.mapping("CapsLock").and_then(|m| m.hold.as_deref()),
+            Some("Left Control")
+        );
+    }
+
+    #[test]
+    fn a_layer_key_refuses_new_hold_actions_but_may_tap_itself() {
+        let mut app = app();
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::SetLayer(None));
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::SetMode(Mode::Hold));
+        let _ = app.update(Message::PickAction("Left Control".to_owned()));
+        assert!(app.mapping("CapsLock").is_none());
+        assert_eq!(toast_text(&app), "Caps Lock holds the Layer 1 layer");
+
+        // Tapping the key as itself now means something: holding it is
+        // the layer.
+        let _ = app.update(Message::SetMode(Mode::Tap));
+        let _ = app.update(Message::PickAction("Caps Lock".to_owned()));
+        assert_eq!(
+            app.mapping("CapsLock").and_then(|m| m.tap.as_deref()),
+            Some("Caps Lock")
+        );
+        assert!(yaml(&app).contains("        alone: KEY_CAPSLOCK\n"));
+    }
+
+    #[test]
+    fn deleting_a_layer_asks_first_and_is_undoable() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("navigation".to_owned()));
+        let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
+        assert!(app.active_layer().is_some());
+        let _ = app.update(Message::DeleteLayer);
+        assert_eq!(app.confirm_delete_layer.as_deref(), Some("navigation"));
+        assert_eq!(app.layers().len(), 1, "asking changes nothing");
+        let _ = app.on_escape();
+        assert_eq!(app.confirm_delete_layer, None);
+        assert_eq!(app.layers().len(), 1);
+
+        let _ = app.update(Message::DeleteLayer);
+        let _ = app.update(Message::DeleteLayerConfirm);
+        assert!(app.layers().is_empty());
+        assert_eq!(app.layer, None);
+        assert_eq!(toast_text(&app), "Navigation deleted");
+        assert!(!yaml(&app).contains("virtual_modifiers"));
+
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.layers().len(), 1);
+        assert_eq!(layer(&app, "navigation").keys.len(), 10);
+    }
+
+    #[test]
+    fn renaming_the_active_layer() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("navigation".to_owned()));
+        let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
+        let _ = app.update(Message::RenameLayerToggle);
+        assert_eq!(app.rename_layer.as_deref(), Some("Navigation"));
+        let _ = app.update(Message::RenameLayerInput("  Vim keys ".to_owned()));
+        let _ = app.update(Message::RenameLayerCommit);
+        assert_eq!(app.rename_layer, None);
+        assert_eq!(layer(&app, "navigation").name, "Vim keys");
+        assert!(yaml(&app).contains("'Keyloom layer: Vim keys, hold Caps Lock'"));
+
+        // Escape cancels an edit in progress.
+        let _ = app.update(Message::RenameLayerToggle);
+        let _ = app.update(Message::RenameLayerInput("Other".to_owned()));
+        let _ = app.on_escape();
+        assert_eq!(app.rename_layer, None);
+        assert_eq!(layer(&app, "navigation").name, "Vim keys");
+    }
+
+    #[test]
+    fn leaving_the_keyboard_view_or_profile_shows_the_normal_keys_again() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("navigation".to_owned()));
+        let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
+        let _ = app.update(Message::SetView(View::Tester));
+        assert_eq!(app.layer, None);
+        let _ = app.update(Message::SetView(View::Keyboard));
+        let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
+        assert!(app.active_layer().is_some());
+        let _ = app.update(Message::SelectProfile("default".to_owned()));
+        assert_eq!(app.layer, None);
+        // A layer id from another profile is ignored.
+        let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
+        assert_eq!(app.layer, None);
+    }
+
+    #[test]
+    fn the_navigation_starter_profile_generates_a_working_layer() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("navigation".to_owned()));
+        let generated = yaml(&app);
+        assert!(
+            generated.contains(
+                "      KEY_CAPSLOCK:\n        held: KEY_BRL_DOT1\n        alone: KEY_ESC\n"
+            )
+        );
+        assert!(generated.contains("virtual_modifiers:\n  - KEY_BRL_DOT1\n"));
+        for rule in [
+            "KEY_BRL_DOT1-KEY_A: KEY_HOME",
+            "KEY_BRL_DOT1-KEY_D: KEY_PAGEDOWN",
+            "KEY_BRL_DOT1-KEY_E: KEY_END",
+            "KEY_BRL_DOT1-KEY_H: KEY_LEFT",
+            "KEY_BRL_DOT1-KEY_J: KEY_DOWN",
+            "KEY_BRL_DOT1-KEY_K: KEY_UP",
+            "KEY_BRL_DOT1-KEY_L: KEY_RIGHT",
+            "KEY_BRL_DOT1-KEY_N: KEY_DELETE",
+            "KEY_BRL_DOT1-KEY_U: KEY_PAGEUP",
+            "KEY_BRL_DOT1-KEY_Y: KEY_BACKSPACE",
+        ] {
+            assert!(generated.contains(&format!("      {rule}\n")), "{rule}");
+        }
+    }
+
+    #[test]
+    fn profiles_carry_their_layers_through_duplicate_reset_and_delete() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("navigation".to_owned()));
+        let _ = app.update(Message::NewProfile { duplicate: true });
+        assert_eq!(app.profile_name(), "Navigation layer copy");
+        assert_eq!(app.layers().len(), 1);
+        assert_eq!(app.layer, None);
+
+        let _ = app.update(Message::MenuReset);
+        let _ = app.update(Message::ResetMappingsConfirm);
+        assert!(app.layers().is_empty());
+        assert!(app.maps().is_empty());
+
+        // Deleting a profile takes its layers; Undo brings them back.
+        let _ = app.update(Message::SelectProfile("default".to_owned()));
+        let _ = app.update(Message::DeleteProfile("navigation".to_owned()));
+        let _ = app.update(Message::DeleteConfirm);
+        assert!(!app.profile_layers.contains_key("navigation"));
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.profile_layers.get("navigation").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn layer_jobs_follow_the_device_scope() {
+        let mut app = app();
+        let _ = app.update(connected(
+            "/dev/input/event1",
+            "Laptop",
+            keyboard::FORM_SIXTY_FIVE,
+            false,
+        ));
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        let _ = app.update(Message::SelectKey("KeyH"));
+        let _ = app.update(Message::PickAction("Arrow Left".to_owned()));
+        assert_eq!(
+            layer(&app, "layer-1").key("KeyH").unwrap().device,
+            "/dev/input/event1"
+        );
+        assert!(
+            crate::xremap::generate(app.maps(), app.layers(), |id| app.device_label(id)).contains(
+                "    device:\n      only: ['Laptop']\n    remap:\n      KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"
+            )
+        );
+    }
+
+    #[test]
+    fn the_layer_pool_is_the_limit() {
+        let mut app = app();
+        for key in ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10"] {
+            let _ = app.update(Message::AddLayer);
+            let _ = app.update(Message::SelectKey(key));
+        }
+        assert_eq!(app.layers().len(), crate::xremap::MAX_LAYERS);
+        let _ = app.update(Message::AddLayer);
+        assert_eq!(app.layers().len(), crate::xremap::MAX_LAYERS);
+        assert!(!app.choosing_layer_key);
+        assert_eq!(toast_text(&app), "Up to 10 layers per profile");
+    }
+
+    #[test]
+    fn the_tester_ignores_layer_editing() {
+        let mut app = app();
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::AddLayer);
+        assert!(app.layers().is_empty());
+        assert!(!app.choosing_layer_key);
+        let _ = app.update(Message::SetLayer(Some("navigation".to_owned())));
+        assert_eq!(app.layer, None);
     }
 }

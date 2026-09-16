@@ -16,7 +16,9 @@ Turn **Caps Lock into Escape**, swap two keys, or give an unused key a useful
 job like Play/Pause. See your mappings directly on the keyboard and restore
 any key when you want its original behavior back.
 
-Need one key to do more? Set it to **Escape when tapped and Control when held**.
+Need one key to do more? Set it to **Escape when tapped and Control when held**,
+or give it a whole **layer**: hold Caps Lock and H/J/K/L become arrow keys,
+while every other key keeps working normally.
 
 > **Screenshot placeholder — Visual remapping**
 >
@@ -52,8 +54,8 @@ for downloads and release notes.
 Keyloom is in early development. It needs
 [xremap](https://github.com/xremap/xremap) installed; a guided first-run
 setup then takes care of the background service and input permissions.
-Application-specific remaps and layers are planned for the first public
-release, 0.1.0.
+Application-specific remaps are planned for the first public release,
+0.1.0.
 
 ## What's next
 

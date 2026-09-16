@@ -44,8 +44,8 @@ below). Installing xremap itself is still up to the user.
   are reserved for Tester. "Record a key" capture still accepts physical input.
 - Clicking a key opens the key editor, and the deck displays configured tap
   and hold actions.
-- Layer preview: a toggleable Navigation layer shows what H/J/K/L and friends
-  become while Caps Lock is held.
+- Layers: hold one key to give other keys a second job, edited right on the
+  deck (see "Layers" below).
 - Mapping summary and remaps dialog for reviewing, editing, and removing
   mappings in the active profile. Removal requires confirmation and is
   undoable.
@@ -70,18 +70,47 @@ below). Installing xremap itself is still up to the user.
 - "Restore original key" clears the mapping.
 - Existing combos for the key are listed and removable inline.
 
+## Layers
+
+- A layer is a key that, while held, gives other keys a different action:
+  the classic example is Caps Lock turning H/J/K/L into arrows. Each profile
+  can have up to ten layers, each with a name, the key that holds it, and a
+  set of keys with a job in that state. Keys without a job keep working
+  normally, and modifiers held at the same time still apply (Shift with a
+  layer arrow selects text).
+- The Layers picker on the keyboard toolbar switches the deck between the
+  normal keys and each layer. In a layer, the deck shows the key that holds it
+  and every key's job; keys that cannot take a job are dimmed.
+- "+ New layer" creates a layer and asks for its key: click it on the deck or
+  press it on a keyboard, with Escape to cancel. The bar above the deck then
+  offers changing the key, renaming, and deleting the layer (with
+  confirmation, undoable).
+- With a layer shown, clicking a key opens the key editor for that key's job
+  in the layer, with the same catalog, search, and key recording as normal
+  mappings; "Back to normal in this layer" removes the job. Jobs follow the
+  "Applies to" device scope and are single actions (no tap/hold, chords, or
+  swaps inside a layer).
+- The layer key keeps its tap action if it has one (in the starter profile,
+  Caps Lock still taps Escape) and does nothing when tapped otherwise. Taking
+  on a layer replaces any hold action the key had, and a layer key cannot take
+  a job in any layer. Shift, Control, Alt, and Super cannot take jobs either.
+- Layers are stored with their profile and applied through the generated
+  configuration like mappings (see "Persistence and generated configuration").
+
 ## Profiles
 
-- Multiple named profiles, each with its own mappings and shortcut groups.
+- Multiple named profiles, each with its own mappings, layers, and shortcut
+  groups.
 - Profiles can be created, duplicated, renamed, and deleted. The active profile
   cannot be deleted, so at least one profile always remains; deletion is
   undoable.
 - A fresh install seeds an empty Default profile plus editable starter
-  profiles (Laptop, Mac-style, Gaming, Media F-row). They are ordinary
-  profiles from then on: renamed, edited, and stored like any other.
+  profiles (Laptop, Mac-style, Gaming, Media F-row, and Navigation layer,
+  which holds a Caps Lock navigation layer). They are ordinary profiles from
+  then on: renamed, edited, and stored like any other.
 - "Reset all mappings" asks for confirmation before clearing the active
-  profile's mappings. Confirmed resets cannot be undone. Cancel, Escape, or
-  clicking outside the dialog keeps the mappings.
+  profile's mappings and layers. Confirmed resets cannot be undone. Cancel,
+  Escape, or clicking outside the dialog keeps them.
 
 ## Devices
 
@@ -169,10 +198,12 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 
 ## Persistence and generated configuration
 
-- Profiles and their mappings (plus the active profile) are stored via
-  cosmic-config under `~/.config/cosmic/io.github.blakegardner.Keyloom/`
-  and restored on launch; a fresh install seeds the Default profile and
-  the starter profiles, which persist like any other from then on.
+- Profiles with their mappings and layers (plus the active profile) are
+  stored via cosmic-config under
+  `~/.config/cosmic/io.github.blakegardner.Keyloom/` and restored on launch;
+  a fresh install seeds the Default profile and the starter profiles, which
+  persist like any other from then on. Profiles saved before layers existed
+  load with none.
 - Keyboard size and ANSI/ISO overrides also persist across launches,
   independently of profiles. Identity uses the device's model identifiers
   plus its unique identifier, falling back to connection path or name.
@@ -180,13 +211,20 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   again; identical devices with matching names and no unique identifier or
   connection information share overrides.
   Display changes do not rewrite the remap configuration or restart xremap.
-- Every mapping or profile change regenerates the xremap document from the
-  internal rule model and writes it to `$XDG_CONFIG_HOME/xremap/keyloom.yml`
-  (usually `~/.config`).
+- Every mapping, layer, or profile change regenerates the xremap document
+  from the internal rule model and writes it to
+  `$XDG_CONFIG_HOME/xremap/keyloom.yml` (usually `~/.config`).
 - The generator translates friendly action names into xremap `KEY_*` names,
-  emits one `modmap` block for unscoped mappings plus one per device scope
-  (`device.only`), renders tap/hold as `held`/`alone`, two-way swaps as two
-  entries, and Disabled keys as an empty output (`[]`).
+  emits one `modmap` block per device scope (`device.only`) followed by one
+  for unscoped mappings, renders tap/hold as `held`/`alone`, two-way swaps as
+  two entries, and Disabled keys as an empty output (`[]`).
+- Layers become xremap `virtual_modifiers` plus `keymap` rules. Each layer
+  key is remapped to a stand-in virtual modifier (braille-dot key codes,
+  which no keyboard emits and xremap never passes on), as the hold side of a
+  tap/hold key when the key has a tap action; every job becomes a
+  `<modifier>-<key>` rule, scoped per keyboard where the job is. A job on a
+  key whose normal press is remapped targets what the key became, since
+  xremap applies mappings before rules.
 - Files Keyloom generated carry a marker comment; a hand-written xremap
   config found at that path is backed up to `keyloom.yml.bak` before the
   first overwrite, and is never touched just for launching the app.

@@ -54,6 +54,17 @@ Review formatter changes before staging. After further code edits, repeat
 the affected checks so the final code is covered by validation. Keep these
 commands aligned with CI when the validation workflow changes.
 
+When a change touches what `src/xremap.rs` generates for layers, or
+`scripts/xremap-harness/tests_keyloom.rs`, also run
+`./scripts/verify-layers-with-xremap.sh`, which CI runs too. It builds the
+pinned xremap *source* under `target/xremap-harness/` and runs the generated
+documents through xremap's in-process tests. It is safe on a machine that
+uses xremap: it never runs an xremap binary, opens an input device, or reads
+the installed xremap or its configuration. It needs network access for the
+first clone and a few minutes to build. Never verify remapping by creating a
+virtual keyboard or starting another xremap: a running remapper can grab
+such devices and type into the developer's session.
+
 For documentation-only work that is not being committed, review the
 documentation diff and run `git diff --check`; Rust checks are not needed.
 
