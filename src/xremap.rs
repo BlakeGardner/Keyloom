@@ -81,8 +81,7 @@ pub fn action_symbol(action: &str) -> Option<String> {
     if let Some(cap) = model::registry().find(|cap| model::key_name(cap.code) == action) {
         return evdev_name(cap.evdev);
     }
-    // Catalog names that differ from the deck's key names, plus keys
-    // that have no cap on the rendered keyboard (media, brightness).
+    // Older generic names still accepted from stored mappings.
     const ACTIONS: &[(&str, &str)] = &[
         ("Control", "KEY_LEFTCTRL"),
         ("Shift", "KEY_LEFTSHIFT"),
@@ -94,14 +93,6 @@ pub fn action_symbol(action: &str) -> Option<String> {
         ("Down", "KEY_DOWN"),
         ("Bracket Left", "KEY_LEFTBRACE"),
         ("Bracket Right", "KEY_RIGHTBRACE"),
-        ("Play/Pause", "KEY_PLAYPAUSE"),
-        ("Next", "KEY_NEXTSONG"),
-        ("Previous", "KEY_PREVIOUSSONG"),
-        ("Mute", "KEY_MUTE"),
-        ("Volume Up", "KEY_VOLUMEUP"),
-        ("Volume Down", "KEY_VOLUMEDOWN"),
-        ("Brightness Up", "KEY_BRIGHTNESSUP"),
-        ("Brightness Down", "KEY_BRIGHTNESSDOWN"),
     ];
     ACTIONS
         .iter()
@@ -1007,7 +998,39 @@ mod tests {
         assert_eq!(key_symbol("CapsLock").as_deref(), Some("KEY_CAPSLOCK"));
         assert_eq!(key_symbol("ControlRight").as_deref(), Some("KEY_RIGHTCTRL"));
         assert_eq!(key_symbol("Numpad7").as_deref(), Some("KEY_KP7"));
+        assert_eq!(key_symbol("MissionControl").as_deref(), Some("KEY_SCALE"));
+        assert_eq!(key_symbol("AudioVolumeUp").as_deref(), Some("KEY_VOLUMEUP"));
         assert_eq!(key_symbol("NoSuchKey"), None);
+        assert_eq!(action_symbol("Volume Up").as_deref(), Some("KEY_VOLUMEUP"));
+        assert_eq!(action_symbol("Launchpad").as_deref(), Some("KEY_DASHBOARD"));
+    }
+
+    /// A key no deck draws is an ordinary source: the Apple keyboards'
+    /// Mission Control key can become F3, and a chord can start from a
+    /// media key.
+    #[test]
+    fn off_deck_keys_are_sources_for_mappings_and_chords() {
+        let maps = vec![map("MissionControl", Some("F3"), None, "all", false)];
+        assert!(without_layers(&maps).contains("      KEY_SCALE: KEY_F3\n"));
+        let groups = vec![group(
+            "Media",
+            "",
+            false,
+            vec![rule(&["Shift"], "Volume Up", &[], "Volume Up")],
+        )];
+        let yaml = super::generate(
+            Rules {
+                maps: &Vec::new(),
+                layers: &[],
+                apps: &[],
+                groups: &groups,
+            },
+            no_devices,
+        );
+        assert!(
+            yaml.contains("      Shift-KEY_VOLUMEUP: KEY_VOLUMEUP\n"),
+            "{yaml}"
+        );
     }
 
     #[test]

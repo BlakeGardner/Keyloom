@@ -236,9 +236,34 @@ pub const EXTRA_KEYS: &[KeyCap] = caps![
     "Fn", "Fn", KeyCode::KEY_FN, 11.0, 5.5, 1.0, 1.0, 0.0;
 ];
 
-/// Every physical key the app knows, across all decks and variants.
+/// Keys no deck draws: media, brightness, and the Apple keyboards'
+/// Mission Control and Launchpad keys. They are still physical keys the
+/// monitor sees, so they can be remapped (by pressing them from the
+/// remaps list), recorded as a chord's key, and named by the tester.
+/// Their geometry is unused. Labels are what the tester's cap shows.
+#[rustfmt::skip]
+pub const OFF_DECK_KEYS: &[KeyCap] = caps![
+    "AudioVolumeUp", "Vol +", KeyCode::KEY_VOLUMEUP, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "AudioVolumeDown", "Vol −", KeyCode::KEY_VOLUMEDOWN, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "AudioVolumeMute", "Mute", KeyCode::KEY_MUTE, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "MediaPlayPause", "Play", KeyCode::KEY_PLAYPAUSE, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "MediaTrackNext", "Next", KeyCode::KEY_NEXTSONG, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "MediaTrackPrevious", "Prev", KeyCode::KEY_PREVIOUSSONG, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "BrightnessUp", "Bri +", KeyCode::KEY_BRIGHTNESSUP, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "BrightnessDown", "Bri −", KeyCode::KEY_BRIGHTNESSDOWN, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "MissionControl", "▦", KeyCode::KEY_SCALE, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "Launchpad", "⁙", KeyCode::KEY_DASHBOARD, 0.0, 0.0, 1.0, 1.0, 0.0;
+];
+
+/// Every physical key the app knows, across all decks and variants,
+/// plus the keys no deck draws.
 pub fn registry() -> impl Iterator<Item = &'static KeyCap> {
-    ALL_KEYS.iter().chain(EXTRA_KEYS)
+    ALL_KEYS.iter().chain(EXTRA_KEYS).chain(OFF_DECK_KEYS)
+}
+
+/// Whether a key is one no deck draws (see [`OFF_DECK_KEYS`]).
+pub fn is_off_deck(code: &str) -> bool {
+    OFF_DECK_KEYS.iter().any(|cap| cap.code == code)
 }
 
 /// Find a key cap by its code identifier.
@@ -476,6 +501,17 @@ pub fn key_name(code: &str) -> String {
         ("PageDown", "Page Down"),
         ("NumLock", "Num Lock"),
         ("IntlBackslash", "ISO Backslash"),
+        // Keys no deck draws, named as the action catalog names them.
+        ("AudioVolumeUp", "Volume Up"),
+        ("AudioVolumeDown", "Volume Down"),
+        ("AudioVolumeMute", "Mute"),
+        ("MediaPlayPause", "Play/Pause"),
+        ("MediaTrackNext", "Next"),
+        ("MediaTrackPrevious", "Previous"),
+        ("BrightnessUp", "Brightness Up"),
+        ("BrightnessDown", "Brightness Down"),
+        ("MissionControl", "Mission Control"),
+        ("Launchpad", "Launchpad"),
     ];
     if let Some((_, name)) = NAMES.iter().find(|(c, _)| *c == code) {
         return (*name).to_owned();
@@ -534,6 +570,8 @@ pub fn short(action: &str) -> &str {
         ("Volume Down", "Vol −"),
         ("Brightness Up", "Bri +"),
         ("Brightness Down", "Bri −"),
+        ("Mission Control", "Mission"),
+        ("Launchpad", "Launch"),
         ("Disabled", "Off"),
         ("Print Screen", "PrtSc"),
         ("Scroll Lock", "ScrLk"),
@@ -629,6 +667,8 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
             "Volume Down",
             "Brightness Up",
             "Brightness Down",
+            "Mission Control",
+            "Launchpad",
         ],
     ),
     (
@@ -704,7 +744,9 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
 
 /// Category preselected in the editor for a given key (`autoGroup`).
 pub fn auto_group(code: &str) -> &'static str {
-    if code.starts_with("Key") {
+    if is_off_deck(code) {
+        "Media"
+    } else if code.starts_with("Key") {
         "Letters"
     } else if code.starts_with("Numpad") || code == "NumLock" {
         "Numpad"
@@ -1199,6 +1241,45 @@ mod tests {
         }
         assert_eq!(parse_modifier("Any"), None);
         assert_eq!(modifier_short("Any"), "Any");
+    }
+
+    /// The keys no deck draws are in the registry under the catalog's
+    /// names, found by scancode, and absent from every deck.
+    #[test]
+    fn off_deck_keys_are_known_but_never_drawn() {
+        for cap in OFF_DECK_KEYS {
+            assert!(is_off_deck(cap.code));
+            assert_eq!(key(cap.code).map(|found| found.evdev), Some(cap.evdev));
+            assert_eq!(
+                key_by_evdev(cap.evdev).map(|found| found.code),
+                Some(cap.code)
+            );
+            let name = key_name(cap.code);
+            assert!(
+                ACTION_GROUPS
+                    .iter()
+                    .any(|(_, actions)| actions.contains(&name.as_str())),
+                "{} is offered as {name}",
+                cap.code
+            );
+            assert_eq!(auto_group(cap.code), "Media");
+            for form in 0..FORM_FACTORS.len() {
+                for iso in [false, true] {
+                    assert!(
+                        !deck(form, iso).iter().any(|drawn| drawn.code == cap.code),
+                        "{} is drawn on form {form}",
+                        cap.code
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            key_by_evdev(KeyCode::KEY_SCALE.0)
+                .map(|cap| key_name(cap.code))
+                .as_deref(),
+            Some("Mission Control")
+        );
+        assert!(!is_off_deck("KeyA"));
     }
 
     /// Physical identities are unique in the registry.

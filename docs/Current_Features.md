@@ -60,14 +60,20 @@ user.
   mappings in the active profile, each with the keyboard and application it
   applies to. Selecting a row opens the mapping in its own scope. Removal
   requires confirmation and is undoable.
+- Keys no deck draws can be remapped too: media and brightness keys, and
+  the Mission Control and Launchpad keys of Apple keyboards. "Remap a key
+  that isn't shown" in the remaps dialog listens for the key and opens the
+  key editor for it; such mappings appear in the remaps list, the keys can
+  start a shortcut chord, and the tester names them.
 - "Applies to" device scope selector on the toolbar (see Devices below).
 
 ## Key editor
 
-- Searchable action catalog with categories: modifiers, navigation, media,
-  letters, numbers, numpad, function keys, punctuation, other (including
-  Disabled). Modifiers name their side explicitly (Left/Right Control, Shift,
-  Alt, Super), and the catalog offers every key the app renders.
+- Searchable action catalog with categories: modifiers, navigation, media
+  (including Mission Control and Launchpad), letters, numbers, numpad,
+  function keys, punctuation, other (including Disabled). Modifiers name
+  their side explicitly (Left/Right Control, Shift, Alt, Super), and the
+  catalog offers every key the app knows.
 - Mapping a key to itself is rejected with a short explanation, except when a
   different hold action makes the self-tap meaningful.
 - "Record a key" capture mode: press a physical key to use it as the output,

@@ -414,6 +414,27 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
         muted(),
     );
 
+    // Keys no deck draws (media, brightness, Mission Control) are
+    // reached by pressing them.
+    let choose = widget::row::with_capacity(2)
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .push(
+            widget::button::custom(txt(
+                "Remap a key that isn't shown…",
+                13.0,
+                oklch(0.95, 0.01, 152.0),
+            ))
+            .class(quiet(false))
+            .padding([8, 12])
+            .on_press(Message::ChooseKey),
+        )
+        .push(txt(
+            "Press it on your keyboard: media, brightness, and Apple function keys aren't drawn above.",
+            12.0,
+            muted(),
+        ));
+
     let mut rows = widget::column::with_capacity(maps.len().max(1)).spacing(8);
     if maps.is_empty() {
         rows = rows.push(txt(
@@ -464,7 +485,7 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
     }
 
     let card = container(
-        widget::column::with_capacity(3)
+        widget::column::with_capacity(4)
             .spacing(16)
             .push(header)
             .push(description)
@@ -472,9 +493,10 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
                 // Reserve a scrollbar gutter so it cannot cover the remove buttons
                 // or intercept their hover and click events.
                 container(widget::scrollable(rows).spacing(8))
-                    .max_height(420.0)
+                    .max_height(360.0)
                     .padding(4),
-            ),
+            )
+            .push(choose),
     )
     .width(Length::Fixed(640.0))
     .padding(24)
@@ -547,6 +569,58 @@ pub fn capture_dialog(app: &App) -> Element<'_, Message> {
     );
 
     modal(card, Some(Message::SetCapture(false)))
+}
+
+/// The "Press the key you want to remap" dialog, for keys no deck
+/// draws.
+pub fn choose_key_dialog() -> Element<'static, Message> {
+    let listening = container(
+        mono("Listening for your next key…", 14.0, fg())
+            .align_x(Alignment::Center)
+            .width(Length::Fill),
+    )
+    .width(Length::Fill)
+    .padding([22, 16])
+    .class(ctheme::Container::custom(|_| container::Style {
+        border: Border {
+            color: border(),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..container::Style::default()
+    }));
+
+    let card = dialog_card(
+        widget::column::with_capacity(6)
+            .spacing(16)
+            .push(eyebrow("Choosing a key"))
+            .push(txt_semibold("Press the key you want to remap", 24.0, fg()))
+            .push(txt(
+                "Any key works, including the ones the keyboard above doesn't draw: media and brightness keys, and Mission Control or Launchpad on Apple keyboards. The editor opens for it.",
+                15.0,
+                muted(),
+            ))
+            .push(listening)
+            .push(txt(
+                "Modifier keys are ignored while listening. Escape cancels.",
+                13.0,
+                muted(),
+            ))
+            .push(
+                widget::button::custom(
+                    txt("Cancel", 14.0, oklch(0.95, 0.01, 152.0))
+                        .align_x(Alignment::Center)
+                        .width(Length::Fill),
+                )
+                .class(quiet(false))
+                .padding([10, 15])
+                .width(Length::Fill)
+                .on_press(Message::CancelChooseKey),
+            )
+            .into(),
+    );
+
+    modal(card, Some(Message::CancelChooseKey))
 }
 
 /// Confirm removal while keeping the remaps list open underneath.

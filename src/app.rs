@@ -322,6 +322,10 @@ pub enum Message {
     NormalKeyHere,
     /// Open a mapping from the remaps list in the scope it belongs to.
     EditMapping(usize),
+    /// Wait for a key press to choose the key to remap: the way to
+    /// reach a key no deck draws.
+    ChooseKey,
+    CancelChooseKey,
     SelectKey(&'static str),
     Query(String),
     SetCategory(&'static str),
@@ -473,6 +477,9 @@ pub struct App {
     pub confirm_delete_app: Option<String>,
     /// The application picker, while it is open.
     pub picker: Option<Picker>,
+    /// The next key pressed on a keyboard (or clicked on the deck)
+    /// opens the key editor; the way to reach keys no deck draws.
+    pub choosing_key: bool,
     pub selected: Option<&'static str>,
     pub mode: Mode,
     pub query: String,
@@ -1960,6 +1967,46 @@ impl App {
         );
     }
 
+    /// A key was clicked on the deck, pressed while a key was being
+    /// chosen, or opened from the remaps list: in the tester it becomes
+    /// the last key, while choosing a layer key it holds the layer, and
+    /// otherwise it opens the key editor.
+    fn select_key(&mut self, code: &'static str) {
+        self.choosing_key = false;
+        if self.view == View::Tester {
+            self.last = Some(LastKey {
+                code,
+                device: "Clicked in this preview".to_owned(),
+            });
+        } else if self.choosing_layer_key {
+            self.set_layer_trigger(code);
+        } else {
+            if self.layer.is_some()
+                && let Some((text, sub)) = self.layer_job_blocker(code)
+            {
+                self.flash(text, sub);
+                return;
+            }
+            if self.selected != Some(code) {
+                self.toast = None;
+            }
+            if self.selected.is_none() || self.sheet_closing.is_some() {
+                // Opening (not switching keys) starts the rise; a
+                // selection during closing reverses it in place.
+                self.open_sheet();
+            }
+            self.selected = Some(code);
+            self.advanced = false;
+            self.mode = Mode::Tap;
+            self.query.clear();
+            self.category = None;
+            self.capture = false;
+            self.popover = None;
+            self.remaps_open = false;
+            self.confirm_remove_mapping = None;
+        }
+    }
+
     /// Restore the selected key — in the active layer while one is
     /// shown, otherwise in the shown scope: its own mapping there goes,
     /// and whatever a more general scope says applies again.
@@ -2227,6 +2274,19 @@ impl App {
             return;
         }
 
+        // Choosing the key to remap by pressing it.
+        if !escape && self.view == View::Keyboard && self.choosing_key {
+            if is_modifier {
+                return;
+            }
+            let Some(cap) = key_by_evdev(scancode) else {
+                return;
+            };
+            self.pressed.insert((device.clone(), scancode));
+            self.select_key(cap.code);
+            return;
+        }
+
         // Recording an output key for the key editor.
         if !escape
             && self.view == View::Keyboard
@@ -2378,6 +2438,7 @@ impl cosmic::Application for App {
             rename_app: None,
             confirm_delete_app: None,
             picker: None,
+            choosing_key: false,
             selected: None,
             mode: Mode::Tap,
             query: String::new(),
@@ -2447,6 +2508,7 @@ impl cosmic::Application for App {
                 self.view = view;
                 self.leave_layers();
                 self.leave_apps();
+                self.choosing_key = false;
                 self.confirm_reset_mappings = None;
                 self.popover = None;
                 self.recording = None;
@@ -2482,6 +2544,7 @@ impl cosmic::Application for App {
             Message::SelectProfile(id) => {
                 self.leave_layers();
                 self.leave_apps();
+                self.choosing_key = false;
                 self.confirm_reset_mappings = None;
                 self.profile = id;
                 self.toast = None;
@@ -2711,7 +2774,7 @@ impl cosmic::Application for App {
                     };
                     self.refresh_layout();
                 }
-                return self.update(Message::SelectKey(cap.code));
+                self.select_key(cap.code);
             }
             Message::AddLayer => self.add_layer(),
             Message::ChooseLayerKey => {
@@ -2760,40 +2823,17 @@ impl cosmic::Application for App {
                 }
             }
             Message::RenameLayerCommit => self.commit_layer_rename(),
-            Message::SelectKey(code) => {
-                if self.view == View::Tester {
-                    self.last = Some(LastKey {
-                        code,
-                        device: "Clicked in this preview".to_owned(),
-                    });
-                } else if self.choosing_layer_key {
-                    self.set_layer_trigger(code);
-                } else {
-                    if self.layer.is_some()
-                        && let Some((text, sub)) = self.layer_job_blocker(code)
-                    {
-                        self.flash(text, sub);
-                        return Task::none();
-                    }
-                    if self.selected != Some(code) {
-                        self.toast = None;
-                    }
-                    if self.selected.is_none() || self.sheet_closing.is_some() {
-                        // Opening (not switching keys) starts the rise; a
-                        // selection during closing reverses it in place.
-                        self.open_sheet();
-                    }
-                    self.selected = Some(code);
-                    self.advanced = false;
-                    self.mode = Mode::Tap;
-                    self.query.clear();
-                    self.category = None;
-                    self.capture = false;
-                    self.popover = None;
+            Message::SelectKey(code) => self.select_key(code),
+            Message::ChooseKey => {
+                if self.view == View::Keyboard && self.layer.is_none() {
+                    self.choosing_key = true;
                     self.remaps_open = false;
                     self.confirm_remove_mapping = None;
+                    self.popover = None;
+                    self.close_sheet();
                 }
             }
+            Message::CancelChooseKey => self.choosing_key = false,
             Message::Query(query) => self.query = query,
             Message::SetCategory(category) => {
                 self.category = Some(category);
@@ -3327,6 +3367,9 @@ impl cosmic::Application for App {
         if self.view == View::Keyboard && self.selected.is_some() && self.capture {
             return Some(ui::overlays::capture_dialog(self));
         }
+        if self.view == View::Keyboard && self.choosing_key {
+            return Some(ui::overlays::choose_key_dialog());
+        }
         if self.view == View::Keyboard && self.remaps_open {
             return Some(ui::overlays::remaps_dialog(self));
         }
@@ -3359,6 +3402,8 @@ impl cosmic::Application for App {
             self.picker = None;
         } else if self.capture {
             self.capture = false;
+        } else if self.choosing_key {
+            self.choosing_key = false;
         } else if self.remaps_open {
             self.remaps_open = false;
             self.confirm_remove_mapping = None;
@@ -6259,6 +6304,75 @@ mod tests {
         assert_eq!(
             app.groups()[0].rules[0].from.mods,
             vec!["Right Ctrl".to_owned()]
+        );
+    }
+
+    // --- Keys no deck draws ----------------------------------------------
+
+    #[test]
+    fn a_key_no_deck_draws_is_remapped_by_pressing_it() {
+        let mut app = app();
+        let device = PathBuf::from("/dev/input/test");
+        // Only from the keyboard view, and not while a layer is shown.
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::ChooseKey);
+        assert!(!app.choosing_key);
+        let _ = app.update(Message::SetView(View::Keyboard));
+
+        let _ = app.update(Message::OpenRemaps);
+        let _ = app.update(Message::ChooseKey);
+        assert!(app.choosing_key);
+        assert!(!app.remaps_open, "the listening dialog takes over");
+        assert!(app.dialog().is_some());
+        // Modifiers are skipped while listening; Escape cancels.
+        app.phys_press(&device, evdev::KeyCode::KEY_LEFTSHIFT.0);
+        assert!(app.choosing_key);
+        let _ = app.on_escape();
+        assert!(!app.choosing_key);
+        assert_eq!(app.selected, None);
+
+        let _ = app.update(Message::ChooseKey);
+        app.phys_press(&device, evdev::KeyCode::KEY_SCALE.0);
+        assert!(!app.choosing_key);
+        assert_eq!(app.selected, Some("MissionControl"));
+        let _ = app.update(Message::PickAction("F3".to_owned()));
+        assert_eq!(
+            app.mapping("MissionControl").and_then(|m| m.tap.as_deref()),
+            Some("F3")
+        );
+        assert_eq!(toast_text(&app), "Mission Control → F3");
+        assert!(yaml(&app).contains("      KEY_SCALE: KEY_F3\n"));
+        assert_eq!(app.maps().len(), 1, "listed like any mapping");
+
+        // A deck click while listening simply selects that key.
+        let _ = app.update(Message::ChooseKey);
+        let _ = app.update(Message::SelectKey("KeyA"));
+        assert!(!app.choosing_key);
+        assert_eq!(app.selected, Some("KeyA"));
+    }
+
+    #[test]
+    fn media_keys_start_chords_and_show_in_the_tester() {
+        let mut app = app();
+        let device = PathBuf::from("/dev/input/test");
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::AddGroup);
+        let _ = app.update(Message::EditRule {
+            group: 0,
+            rule: None,
+        });
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_LEFTSHIFT.0));
+        app.phys_press(&device, evdev::KeyCode::KEY_VOLUMEUP.0);
+        let rule = &app.groups()[0].rules[0];
+        assert_eq!(rule.from.mods, vec!["Shift".to_owned()]);
+        assert_eq!(rule.from.key, "Volume Up");
+
+        let _ = app.update(Message::SetView(View::Tester));
+        app.phys_press(&device, evdev::KeyCode::KEY_PLAYPAUSE.0);
+        assert_eq!(
+            app.last.as_ref().map(|last| last.code),
+            Some("MediaPlayPause")
         );
     }
 }
