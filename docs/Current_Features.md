@@ -17,6 +17,9 @@ user.
 ## Application shell
 
 - Native Rust + libcosmic application; runs on Wayland and X11.
+- Menu launcher and application icon assets are ready for packaging in
+  `data/`; they must be installed alongside the binary for desktop integration.
+  See the [packaging notes](../data/README.md).
 - Follows the desktop's light/dark preference: directly on COSMIC, and
   through the XDG settings portal on other desktops (GNOME, KDE, and any
   compositor with a portal backend), updating live when it changes.

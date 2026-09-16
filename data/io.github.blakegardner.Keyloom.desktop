@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Keyloom
+GenericName=Keyboard Remapper
+Comment=Customize your keys, layers, and shortcuts
+Exec=keyloom
+Icon=io.github.blakegardner.Keyloom
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=keyboard;remap;keymap;layers;shortcuts;xremap;
+StartupWMClass=io.github.blakegardner.Keyloom

@@ -1102,7 +1102,7 @@ pub fn about_dialog() -> Element<'static, Message> {
     use cosmic::iced::widget::svg;
 
     let logo = svg(svg::Handle::from_memory(
-        include_bytes!("../../assets/keyloom_logo.svg").as_slice(),
+        include_bytes!("../../data/io.github.blakegardner.Keyloom.svg").as_slice(),
     ))
     .width(Length::Fixed(144.0))
     .height(Length::Fixed(144.0));

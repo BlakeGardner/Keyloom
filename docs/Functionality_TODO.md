@@ -285,9 +285,10 @@ through the generated configuration. The tasks below are 0.1.0 blockers.
   clicks dismiss it.
 - [x] **Add license information to About** for GPLv3-only (`GPL-3.0-only`),
   with the license identifier from Cargo metadata and a no-warranty notice.
-- [ ] **Desktop entry and icon** in `data/` so the app installs and launches
-  from a menu. The embedded logo in `assets/keyloom_logo.svg` is available,
-  but desktop integration and an installed application icon are still missing.
+- [x] **Desktop entry and icon** in `data/`, ready for future packages to
+  install a menu launcher and application icon. Both use the existing app ID
+  and reuse the About logo. [Packaging notes](../data/README.md) document
+  install paths and validation; building with Cargo does not install them.
 - [x] **Choose a license** — GPLv3-only (`GPL-3.0-only`), with the full text
   in [LICENSE](../LICENSE), Cargo package metadata, and a README license summary.
 
