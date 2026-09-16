@@ -6,6 +6,27 @@ existing code patterns and keep changes focused on the requested work.
 Before writing, reviewing, or refactoring Rust code, invoke the `rust-skills`
 skill (when available) and follow its guidance.
 
+## Guiding principles
+
+- **Feel at home on COSMIC and work across desktops.** Use libcosmic's
+  conventions and integration capabilities to provide a first-party-quality
+  experience on COSMIC. Changes and features must also work across all major
+  desktop environments. Prefer shared desktop standards, detect optional
+  integration capabilities, and provide usable fallbacks when a desktop does
+  not support them. Do not make core workflows depend on COSMIC-only services.
+  Consider compatibility beyond the development desktop when implementing and
+  validating changes, and state any compatibility that could not be verified.
+- **Make the interface beautiful and delightful.** Treat visual polish,
+  consistency, responsiveness, accessibility, and thoughtful feedback as part
+  of feature quality. Follow established libcosmic patterns and use purposeful
+  details that help users understand and enjoy the application.
+- **Provide power through simplicity.** Make common tasks obvious and easy,
+  with sensible defaults and clear language. Use progressive disclosure:
+  reveal advanced options when users seek them out or the task requires them,
+  keeping everyday workflows approachable while preserving depth and control
+  for users who want it. Avoid adding controls, settings, or steps without a
+  clear user need.
+
 ## Keep product documentation current
 
 Treat the product docs as a durable description of Keyloom, not a changelog
