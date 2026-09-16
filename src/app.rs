@@ -2385,6 +2385,10 @@ impl cosmic::Application for App {
                     state
                         .layers
                         .insert(starter.profile.id.clone(), starter.layers);
+                    state.apps.insert(starter.profile.id.clone(), starter.apps);
+                    state
+                        .groups
+                        .insert(starter.profile.id.clone(), starter.groups);
                     state.profiles.push(starter.profile);
                 }
                 state
@@ -4607,6 +4611,8 @@ mod tests {
             );
             assert_eq!(app.profile_maps.get(id), Some(&starter.maps));
             assert_eq!(app.profile_layers.get(id), Some(&starter.layers));
+            assert_eq!(app.profile_apps.get(id), Some(&starter.apps));
+            assert_eq!(app.profile_groups.get(id), Some(&starter.groups));
         }
     }
 

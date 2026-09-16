@@ -286,7 +286,7 @@ fn app_bar(app: &App) -> Option<Element<'_, Message>> {
     } else {
         txt_semibold(scope.name.clone(), 15.0, fg()).into()
     };
-    let members = scope.members();
+    let members = scope.members_short();
     let differ = app
         .maps()
         .iter()

@@ -1424,6 +1424,43 @@ mod tests {
         assert!(normal < held);
     }
 
+    /// The shortcut examples starter generates the terminals' block
+    /// first, filtered on every terminal it names, then the general
+    /// group, each rule as a chord on Super.
+    #[test]
+    fn the_shortcut_examples_starter_generates_its_groups_in_order() {
+        let starter = model::starter_profiles()
+            .into_iter()
+            .find(|starter| starter.profile.id == "shortcuts")
+            .expect("the shortcut examples profile ships");
+        let yaml = super::generate(
+            Rules {
+                maps: &starter.maps,
+                layers: &starter.layers,
+                apps: &starter.apps,
+                groups: &starter.groups,
+            },
+            no_devices,
+        );
+        let expected = format!(
+            "{MARKER}\n\
+             modmap: []\n\
+             keymap:\n\
+             \x20 - name: 'Keyloom shortcuts: Terminals (Terminals)'\n\
+             \x20   application:\n\
+             \x20     only: ['com.system76.CosmicTerm', 'org.gnome.Terminal', 'org.gnome.Console', 'org.kde.konsole']\n\
+             \x20   remap:\n\
+             \x20     Super-KEY_C: Ctrl-Shift-KEY_C\n\
+             \x20     Super-KEY_V: Ctrl-Shift-KEY_V\n\
+             \x20 - name: 'Keyloom shortcuts: Super as Command'\n\
+             \x20   remap:\n\
+             \x20     Super-KEY_C: Ctrl-KEY_C\n\
+             \x20     Super-KEY_V: Ctrl-KEY_V\n\
+             \x20     Super-KEY_Z: Ctrl-KEY_Z\n"
+        );
+        assert_eq!(yaml, expected);
+    }
+
     // --- Shortcut groups ---------------------------------------------
 
     /// A sided modifier becomes the key itself, which xremap matches
@@ -2023,9 +2060,25 @@ mod tests {
         }
         assert_eq!(all_layers.len(), MAX_LAYERS);
 
+        let examples = model::starter_profiles()
+            .into_iter()
+            .find(|starter| starter.profile.id == "shortcuts")
+            .expect("the shortcut examples profile ships");
         let mut documents = vec![
             ("empty".to_owned(), without_layers(&Vec::new())),
             ("representative".to_owned(), representative()),
+            (
+                "shortcut-examples".to_owned(),
+                super::generate(
+                    Rules {
+                        maps: &examples.maps,
+                        layers: &examples.layers,
+                        apps: &examples.apps,
+                        groups: &examples.groups,
+                    },
+                    no_devices,
+                ),
+            ),
             ("all-sources".to_owned(), without_layers(&all_sources)),
             (
                 "all-layers".to_owned(),

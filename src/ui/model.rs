@@ -972,6 +972,25 @@ impl AppScope {
         names.join(", ")
     }
 
+    /// The first few applications by name, with a count for the rest
+    /// ("COSMIC Terminal, GNOME Terminal, Console + 3 more"), for
+    /// places with room for one line.
+    pub fn members_short(&self) -> String {
+        const SHOWN: usize = 3;
+        let names: Vec<&str> = self
+            .apps
+            .iter()
+            .take(SHOWN)
+            .map(|app| app.name.as_str())
+            .collect();
+        let rest = self.apps.len().saturating_sub(SHOWN);
+        if rest == 0 {
+            names.join(", ")
+        } else {
+            format!("{} + {rest} more", names.join(", "))
+        }
+    }
+
     /// Whether the scope covers the application with this id.
     pub fn has_app(&self, id: &str) -> bool {
         self.apps
@@ -1051,6 +1070,8 @@ pub struct Starter {
     pub profile: Profile,
     pub maps: Maps,
     pub layers: Vec<Layer>,
+    pub apps: Vec<AppScope>,
+    pub groups: Vec<Group>,
 }
 
 /// The starter profiles seeded on a fresh install, alongside the empty
@@ -1066,6 +1087,8 @@ pub fn starter_profiles() -> Vec<Starter> {
         },
         maps,
         layers,
+        apps: Vec::new(),
+        groups: Vec::new(),
     };
 
     vec![
@@ -1124,7 +1147,94 @@ pub fn starter_profiles() -> Vec<Starter> {
             vec![entry("CapsLock", mapping("Escape", None, "all", false))],
             vec![navigation_layer()],
         ),
+        shortcut_examples_profile(),
     ]
+}
+
+/// The starter that shows what shortcut groups do, small enough to
+/// read at a glance: three Command-style shortcuts on the Super key
+/// (⌘ on an Apple keyboard, the Win key elsewhere), and a Terminals
+/// application scope where copy and paste take the terminals'
+/// Ctrl+Shift form instead, so Ctrl+C keeps interrupting. The
+/// terminal group comes first in the generated rules, which is the
+/// precedence the Shortcuts view describes.
+fn shortcut_examples_profile() -> Starter {
+    let chord = |mods: &[&str], key: &str| Chord {
+        mods: mods.iter().map(|m| (*m).to_owned()).collect(),
+        key: key.to_owned(),
+    };
+    let rule = |from: Chord, to: Chord, note: &str| Rule {
+        from,
+        to,
+        note: note.to_owned(),
+    };
+    let group = |id: &str, name: &str, scope: &str, rules| Group {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        scope: scope.to_owned(),
+        enabled: true,
+        any_mod: false,
+        rules,
+    };
+
+    // Common terminals by the ids their windows report; ones that are
+    // not installed simply never match.
+    let terminals = AppScope {
+        id: "app-1".to_owned(),
+        name: "Terminals".to_owned(),
+        apps: [
+            ("com.system76.CosmicTerm", "COSMIC Terminal"),
+            ("org.gnome.Terminal", "GNOME Terminal"),
+            ("org.gnome.Console", "Console"),
+            ("org.kde.konsole", "Konsole"),
+        ]
+        .into_iter()
+        .map(|(id, name)| AppRef {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            aliases: Vec::new(),
+        })
+        .collect(),
+    };
+
+    Starter {
+        profile: Profile {
+            id: "shortcuts".to_owned(),
+            name: "Shortcut examples".to_owned(),
+        },
+        maps: Vec::new(),
+        layers: Vec::new(),
+        apps: vec![terminals],
+        groups: vec![
+            group(
+                "command",
+                "Super as Command",
+                "",
+                vec![
+                    rule(chord(&["Super"], "C"), chord(&["Ctrl"], "C"), "Copy"),
+                    rule(chord(&["Super"], "V"), chord(&["Ctrl"], "V"), "Paste"),
+                    rule(chord(&["Super"], "Z"), chord(&["Ctrl"], "Z"), "Undo"),
+                ],
+            ),
+            group(
+                "terminals",
+                "Terminals",
+                "app-1",
+                vec![
+                    rule(
+                        chord(&["Super"], "C"),
+                        chord(&["Ctrl", "Shift"], "C"),
+                        "Copy",
+                    ),
+                    rule(
+                        chord(&["Super"], "V"),
+                        chord(&["Ctrl", "Shift"], "V"),
+                        "Paste",
+                    ),
+                ],
+            ),
+        ],
+    }
 }
 
 #[cfg(test)]
@@ -1221,6 +1331,27 @@ mod tests {
             assert!(!ansi.iter().any(|cap| cap.code == "IntlBackslash"));
             assert_eq!(ansi.iter().filter(|cap| cap.code == "Enter").count(), 1);
         }
+    }
+
+    /// A scope names all its applications, or the first few and a count.
+    #[test]
+    fn app_scope_members_are_listed_or_counted() {
+        let app = |name: &str| AppRef {
+            id: name.to_lowercase(),
+            name: name.to_owned(),
+            aliases: Vec::new(),
+        };
+        let mut scope = AppScope {
+            id: "app-1".to_owned(),
+            name: "Terminals".to_owned(),
+            apps: vec![app("Console"), app("Konsole"), app("kitty")],
+        };
+        assert_eq!(scope.members(), "Console, Konsole, kitty");
+        assert_eq!(scope.members_short(), "Console, Konsole, kitty");
+        scope.apps.push(app("foot"));
+        scope.apps.push(app("Alacritty"));
+        assert_eq!(scope.members(), "Console, Konsole, kitty, foot, Alacritty");
+        assert_eq!(scope.members_short(), "Console, Konsole, kitty + 2 more");
     }
 
     /// Every modifier name round-trips through its family and side,

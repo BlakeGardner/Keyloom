@@ -168,9 +168,14 @@ user.
   cannot be deleted, so at least one profile always remains; deletion is
   undoable.
 - A fresh install seeds an empty Default profile plus editable starter
-  profiles (Laptop, Mac-style, Gaming, Media F-row, and Navigation layer,
-  which holds a Caps Lock navigation layer). They are ordinary profiles from
-  then on: renamed, edited, and stored like any other.
+  profiles (Laptop, Mac-style, Gaming, Media F-row, Navigation layer, which
+  holds a Caps Lock navigation layer, and Shortcut examples). They are
+  ordinary profiles from then on: renamed, edited, and stored like any other.
+- Shortcut examples is the small starter made of shortcut groups: Super
+  plus C, V, and Z send copy, paste, and undo everywhere, and a Terminals
+  application scope covering the common terminals sends their Ctrl+Shift
+  copy and paste instead, so Ctrl+C keeps interrupting. It shows a chord
+  rule, an application scope, and which of the two wins.
 - "Reset all mappings" asks for confirmation before clearing the active
   profile's mappings, layers, application scopes, and shortcut groups.
   Confirmed resets cannot be undone. Cancel, Escape, or clicking outside the
@@ -270,9 +275,10 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
   different jobs, such as a Command key remapped to Right Control.
 - Add group, delete rule, and edit existing rules. Groups and rules are
   stored with the profile and applied like mappings.
-- Groups start empty for every profile; combo mappings made in the key
-  editor appear under an automatic "From the keyboard" group, one for every
-  application and one per application scope shown while the combo was made.
+- Groups start empty in every starter profile except Shortcut examples; combo
+  mappings made in the key editor appear under an automatic "From the
+  keyboard" group, one for every application and one per application scope
+  shown while the combo was made.
 - "Any modifier" makes a group's shortcuts match while Shift, Ctrl, Alt, or
   Super is held as well, releasing that modifier around the output; with two
   unrelated modifiers held, only one of them is released. A rule from a key
