@@ -12,12 +12,12 @@ pub mod theme;
 use cosmic::iced::core::text::LineHeight;
 use cosmic::iced::font::Weight;
 use cosmic::iced::widget::stack;
-use cosmic::iced::{Alignment, Border, Color, Font, Length, Shadow, Vector};
+use cosmic::iced::{Alignment, Background, Border, Color, Font, Length, Shadow, Vector};
 use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message, View};
-use theme::{oklch, shadow, surface, tint, white};
+use theme::{accent, oklch, shadow, surface, tint, vgradient, white};
 
 /// Text widget carrying cosmic's theme and renderer generics.
 pub type Txt<'a> = widget::Text<'a, cosmic::Theme, cosmic::Renderer>;
@@ -90,6 +90,66 @@ pub fn popover_panel<'a>(content: impl Into<Element<'a, Message>>) -> Panel<'a> 
             },
             ..container::Style::default()
         }))
+}
+
+/// The states a key cap is drawn in, on the deck and in miniature.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Cap {
+    /// An ordinary key.
+    Plain,
+    /// The key being edited.
+    Selected,
+    /// A key being held down (a layer key).
+    Held,
+    /// A remapped output: what a key now produces.
+    Mapped,
+}
+
+/// Background, border, and text colors of a cap in one state, shared
+/// by the deck and the miniature keycaps so they always match.
+pub fn cap_colors(cap: Cap) -> (Background, Color, Color) {
+    let plain = vgradient(oklch(0.325, 0.007, 152.0), oklch(0.275, 0.007, 152.0));
+    match cap {
+        Cap::Plain => (plain, oklch(0.36, 0.007, 152.0), oklch(0.9, 0.008, 152.0)),
+        Cap::Selected => (plain, accent(), oklch(0.9, 0.008, 152.0)),
+        Cap::Held => (
+            vgradient(tint(0.5, 0.1), tint(0.42, 0.09)),
+            accent(),
+            oklch(0.99, 0.01, 152.0),
+        ),
+        Cap::Mapped => (
+            vgradient(tint(0.34, 0.032), tint(0.285, 0.028)),
+            tint(0.46, 0.075),
+            accent(),
+        ),
+    }
+}
+
+/// The printed legend of a deck key, falling back to its name for keys
+/// whose cap is blank (Space) and for unknown codes.
+pub fn legend(code: &str) -> String {
+    match model::key(code).map(|cap| cap.label) {
+        Some(label) if !label.is_empty() => label.to_owned(),
+        _ => model::key_name(code),
+    }
+}
+
+/// A miniature keycap for naming a key inline: in the layer bar and in
+/// the key editor's title and summary.
+pub fn keycap_chip(label: impl Into<String>, cap: Cap) -> Element<'static, Message> {
+    let (bg, border, color) = cap_colors(cap);
+    container(txt_semibold(label, 12.0, color))
+        .padding([4, 10])
+        .class(ctheme::Container::custom(move |_| container::Style {
+            background: Some(bg),
+            border: Border {
+                color: border,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        }))
+        .into()
 }
 
 /// The kinds of chord pills used across the shortcut views.
@@ -206,43 +266,39 @@ pub fn view(app: &App) -> Element<'_, Message> {
 /// The editor sheet sliding over the bottom of the window — the app's
 /// context drawer, repositioned to the bottom edge.
 fn bottom_sheet(app: &App) -> Option<Element<'_, Message>> {
-    let (title, close, content, footer): (String, _, Element<'_, Message>, _) = if app.view
-        == View::Keyboard
-        && let Some(selected) = app.selected
-    {
-        (
-            match app.active_layer() {
-                Some(layer) => format!(
-                    "While holding {}, make {} act as…",
-                    model::key_name(&layer.trigger),
-                    model::key_name(selected)
-                ),
-                None => format!("Make {} act as…", model::key_name(selected)),
-            },
-            Message::ClosePanel,
-            editor::key_editor(app),
-            editor::key_editor_footer(app),
-        )
-    } else if app.view == View::Shortcuts
-        && let Some(edit) = app.edit_rule
-    {
-        (
-            if edit.rule.is_some() {
-                "Edit shortcut".to_owned()
-            } else {
-                "New shortcut".to_owned()
-            },
-            Message::CloseEdit,
-            shortcuts::rule_editor(app),
-            shortcuts::rule_editor_footer(app),
-        )
-    } else {
-        return None;
-    };
+    let (title, close, content, footer): (Element<'_, Message>, _, Element<'_, Message>, _) =
+        if app.view == View::Keyboard && app.selected.is_some() {
+            (
+                editor::key_editor_title(app),
+                Message::ClosePanel,
+                editor::key_editor(app),
+                editor::key_editor_footer(app),
+            )
+        } else if app.view == View::Shortcuts
+            && let Some(edit) = app.edit_rule
+        {
+            (
+                txt_semibold(
+                    if edit.rule.is_some() {
+                        "Edit shortcut"
+                    } else {
+                        "New shortcut"
+                    },
+                    16.0,
+                    theme::fg(),
+                )
+                .into(),
+                Message::CloseEdit,
+                shortcuts::rule_editor(app),
+                shortcuts::rule_editor_footer(app),
+            )
+        } else {
+            return None;
+        };
 
     let header = widget::row::with_capacity(3)
         .align_y(Alignment::Center)
-        .push(txt_semibold(title, 16.0, theme::fg()))
+        .push(title)
         .push(widget::Space::new().width(Length::Fill))
         .push(
             widget::button::custom(txt("Close", 13.0, oklch(0.95, 0.01, 152.0)))

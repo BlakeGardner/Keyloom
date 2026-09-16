@@ -2,7 +2,7 @@
 //! the rendered deck of key caps, and the mapping summary underneath.
 
 use cosmic::iced::widget::stack;
-use cosmic::iced::{Alignment, Background, Border, Color, Font, Length, Padding, font::Weight};
+use cosmic::iced::{Alignment, Background, Color, Font, Length, Padding, font::Weight};
 use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
@@ -13,7 +13,7 @@ use crate::ui::theme::{
     ButtonStyle, accent, accent_button, chip, fg, ghost_button, muted, oklch, tint, vgradient,
     white,
 };
-use crate::ui::{eyebrow, panel, tester, txt, txt_semibold};
+use crate::ui::{Cap, cap_colors, eyebrow, keycap_chip, legend, panel, tester, txt, txt_semibold};
 use crate::xremap;
 
 /// The device scope (or tester input filter) and the layer picker.
@@ -204,42 +204,6 @@ pub fn layer_rename_input_id() -> widget::Id {
     widget::Id::new("layer-rename-input")
 }
 
-/// The look of a key that is being held: the tester's pressed cap, so
-/// the layer key on the deck and in the banner read as pressed down.
-fn held_cap() -> (Background, Color, Color) {
-    (
-        vgradient(tint(0.5, 0.1), tint(0.42, 0.09)),
-        accent(),
-        oklch(0.99, 0.01, 152.0),
-    )
-}
-
-/// The printed legend of a deck key, falling back to its name for keys
-/// whose cap is blank (Space).
-fn legend(code: &str) -> String {
-    match model::key(code).map(|cap| cap.label) {
-        Some(label) if !label.is_empty() => label.to_owned(),
-        _ => key_name(code),
-    }
-}
-
-/// A miniature held keycap for the layer bar, matching the deck.
-fn held_keycap(label: String) -> Element<'static, Message> {
-    let (bg, border, color) = held_cap();
-    container(txt_semibold(label, 12.0, color))
-        .padding([4, 10])
-        .class(ctheme::Container::custom(move |_| container::Style {
-            background: Some(bg),
-            border: Border {
-                color: border,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..container::Style::default()
-        }))
-        .into()
-}
-
 /// The strip above the deck while a layer is shown: its name, the key
 /// that holds it, and what to do next.
 fn layer_bar(app: &App) -> Option<Element<'_, Message>> {
@@ -299,7 +263,7 @@ fn layer_bar(app: &App) -> Option<Element<'_, Message>> {
                     .push(eyebrow("Layer"))
                     .push(name)
                     .push(txt("while", 12.5, muted()))
-                    .push(held_keycap(legend(&layer.trigger)))
+                    .push(keycap_chip(legend(&layer.trigger), Cap::Held))
                     .push(txt("is held", 12.5, muted()))
                     .push(action("Change key", Message::ChooseLayerKey))
                     .push(crate::ui::hspace())
@@ -505,10 +469,8 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
     let pressed = app.highlights_key(cap.evdev);
 
     // Base cap colors, overridden per state exactly like the export.
-    let mut bg = vgradient(oklch(0.325, 0.007, 152.0), oklch(0.275, 0.007, 152.0));
-    let mut border = oklch(0.36, 0.007, 152.0);
+    let (mut bg, mut border, mut color) = cap_colors(Cap::Plain);
     let mut border_width = 1.0;
-    let mut color = oklch(0.9, 0.008, 152.0);
     let mut outline = None;
 
     if nav_active && layer_label.is_none() && !is_trigger {
@@ -527,10 +489,9 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         bg = vgradient(tint(0.37, 0.05), tint(0.31, 0.045));
         border = tint(0.5, 0.085);
     } else if is_trigger {
-        (bg, border, color) = held_cap();
+        (bg, border, color) = cap_colors(Cap::Held);
     } else if (mapping.is_some() || holds_layer.is_some()) && !nav_active {
-        bg = vgradient(tint(0.34, 0.032), tint(0.285, 0.028));
-        border = tint(0.46, 0.075);
+        (bg, border, _) = cap_colors(Cap::Mapped);
     }
     if selected {
         border = accent();

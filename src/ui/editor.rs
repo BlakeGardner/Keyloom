@@ -11,7 +11,30 @@ use crate::ui::theme::{
     ButtonStyle, accent, accent_filled, black, border, fg, flat_button, flat_tab, keycap, muted,
     oklch, outline_button, quiet, tint, white,
 };
-use crate::ui::{mono, txt, txt_semibold};
+use crate::ui::{Cap, keycap_chip, legend, mono, txt, txt_semibold};
+
+/// The sheet title: the key being edited and, in a layer, the key
+/// held for it, drawn as the deck draws them.
+pub fn key_editor_title(app: &App) -> Element<'_, Message> {
+    let Some(selected) = app.selected else {
+        return widget::Space::new().into();
+    };
+    let word = |text: &'static str| txt_semibold(text, 16.0, fg());
+    let mut title = widget::row::with_capacity(5)
+        .spacing(8)
+        .align_y(Alignment::Center);
+    title = match app.active_layer() {
+        Some(layer) => title
+            .push(word("While holding"))
+            .push(keycap_chip(legend(&layer.trigger), Cap::Held))
+            .push(word("make")),
+        None => title.push(word("Make")),
+    };
+    title
+        .push(keycap_chip(legend(selected), Cap::Selected))
+        .push(word("act as…"))
+        .into()
+}
 
 /// The key editor content, shown in the app's context drawer while a
 /// key is selected.
@@ -27,32 +50,37 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
 
     let mut section = widget::column::with_capacity(9).spacing(14);
 
-    // Current behavior summary (the sheet title names the key).
-    let mut summary = if let Some(layer) = layer {
-        format!(
-            "Now: {} · in {}",
-            job.map_or_else(
-                || format!("{} (normal)", key_name(selected)),
-                |job| job.action.clone()
-            ),
-            layer.name
-        )
+    // Current behavior summary (the sheet title names the key): what
+    // the key produces now, as keycaps like the deck's.
+    let note = |text: String| txt(text, 13.0, oklch(0.78, 0.01, 152.0));
+    let mut summary = widget::row::with_capacity(6)
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .push(note("Now:".to_owned()));
+    if let Some(layer) = layer {
+        summary = match job {
+            Some(job) => summary.push(keycap_chip(short(&job.action), Cap::Mapped)),
+            None => summary
+                .push(keycap_chip(legend(selected), Cap::Plain))
+                .push(note("normal".to_owned())),
+        };
+        summary = summary.push(note(format!("· in {}", layer.name)));
     } else {
-        format!(
-            "Now: {}",
-            mapping
-                .and_then(|m| m.tap.clone())
-                .unwrap_or_else(|| format!("{} (default)", key_name(selected)))
-        )
-    };
-    if layer.is_none() {
+        summary = match mapping.and_then(|m| m.tap.as_deref()) {
+            Some(tap) => summary.push(keycap_chip(short(tap), Cap::Mapped)),
+            None => summary
+                .push(keycap_chip(legend(selected), Cap::Plain))
+                .push(note("default".to_owned())),
+        };
         if let Some(hold) = mapping.and_then(|m| m.hold.as_deref()) {
-            summary.push_str(&format!(" · When held: {hold}"));
+            summary = summary
+                .push(note("· When held:".to_owned()))
+                .push(keycap_chip(short(hold), Cap::Mapped));
         } else if let Some(held) = app.layer_held_by(selected) {
-            summary.push_str(&format!(" · When held: the {} layer", held.name));
+            summary = summary.push(note(format!("· When held: the {} layer", held.name)));
         }
     }
-    section = section.push(txt(summary, 13.0, oklch(0.78, 0.01, 152.0)));
+    section = section.push(summary);
 
     // Search plus key recording, side by side in the wide sheet.
     section = section.push(
@@ -279,38 +307,27 @@ pub fn key_editor_footer(app: &App) -> Element<'_, Message> {
         .into()
 }
 
-/// One tactile output keycap in the action grid, drawn with the design's
-/// 3D ledge: a 3px dark band and a 1px edge line under the cap.
+/// One tactile output keycap in the action grid, drawn with a solid
+/// ledge: the key's darker front face showing under the cap, the way
+/// a keycap's side does.
 fn keycap_cell(label: String, active: bool, message: Message) -> Element<'static, Message> {
     const WIDTH: f32 = 148.0;
     const KEY_HEIGHT: f32 = 52.0;
-    /// Dark band + edge line drawn below the cap.
-    const DROP: f32 = 4.0;
+    /// Height of the front face below the cap.
+    const DROP: f32 = 3.0;
 
-    let edge = container(widget::Space::new())
+    let side = container(widget::Space::new())
         .width(Length::Fixed(WIDTH))
         .height(Length::Fixed(KEY_HEIGHT + DROP))
         .class(ctheme::Container::custom(move |_| container::Style {
             background: Some(
                 if active {
-                    accent()
+                    tint(0.36, 0.08)
                 } else {
-                    oklch(0.39, 0.008, 152.0)
+                    oklch(0.2, 0.007, 152.0)
                 }
                 .into(),
             ),
-            border: Border {
-                radius: 6.0.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        }));
-
-    let band = container(widget::Space::new())
-        .width(Length::Fixed(WIDTH))
-        .height(Length::Fixed(KEY_HEIGHT + DROP - 1.0))
-        .class(ctheme::Container::custom(|_| container::Style {
-            background: Some(crate::ui::theme::bg().into()),
             border: Border {
                 radius: 6.0.into(),
                 ..Border::default()
@@ -339,7 +356,7 @@ fn keycap_cell(label: String, active: bool, message: Message) -> Element<'static
     .height(Length::Fixed(KEY_HEIGHT))
     .on_press(message);
 
-    stack([edge.into(), band.into(), cap.into()])
+    stack([side.into(), cap.into()])
         .width(Length::Fixed(WIDTH))
         .height(Length::Fixed(KEY_HEIGHT + DROP))
         .into()
