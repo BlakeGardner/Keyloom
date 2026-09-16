@@ -221,9 +221,10 @@ through the generated configuration. The tasks below are 0.1.0 blockers.
   with complete rules become xremap `keymap` blocks (`Mods-KEY: Mods-KEY`),
   application-scoped groups first, and every edit applies through the
   automatic configuration workflow. "Any modifier" adds an entry per other
-  modifier held, which xremap releases around the output. Limits: with two
-  unrelated modifiers held only one is released, and chords record
-  modifiers without their side (Ctrl, not Right Control).
+  modifier held, which xremap releases around the output. A recorded
+  modifier matches either key of its pair and can be narrowed to one side
+  per rule (generated as that key, `KEY_RIGHTCTRL-KEY_C`). Limit: with two
+  unrelated modifiers held only one is released.
 - [x] **Application-specific remaps.** Application scopes are edited on
   the deck like layers (a picker on the toolbar, a bar for the scope's
   applications, name, and removal, and the key editor showing inherited

@@ -755,6 +755,53 @@ pub fn group_scope_popup(app: &App, index: usize) -> Element<'_, Message> {
     popover_panel(column).width(Length::Fixed(258.0)).into()
 }
 
+/// The side chooser of one modifier in the edited shortcut's input
+/// chord: either key of the pair, or one side alone.
+pub fn modifier_side_popup(app: &App, index: usize) -> Element<'_, Message> {
+    use crate::ui::model::{MODS, ModifierSide, parse_modifier};
+    let current = app
+        .edit_rule
+        .and_then(|edit| app.groups().get(edit.group).zip(edit.rule))
+        .and_then(|(group, rule)| group.rules.get(rule))
+        .and_then(|rule| rule.from.mods.get(index))
+        .and_then(|name| parse_modifier(name));
+    let Some((family, side)) = current else {
+        return popover_panel(txt("No modifier here.", 12.0, muted()))
+            .width(Length::Fixed(220.0))
+            .into();
+    };
+    let key = MODS[family];
+    let mut column = widget::column::with_capacity(3).spacing(2);
+    for (choice, name, sub) in [
+        (
+            ModifierSide::Either,
+            format!("Either {key} key"),
+            "matches the left and the right one",
+        ),
+        (
+            ModifierSide::Left,
+            format!("Left {key} only"),
+            "the right one leaves this shortcut alone",
+        ),
+        (
+            ModifierSide::Right,
+            format!("Right {key} only"),
+            "the left one leaves this shortcut alone",
+        ),
+    ] {
+        column = column.push(popup_row(
+            name,
+            Some(txt(sub, 10.5, muted()).into()),
+            side == choice,
+            Message::SetModifierSide {
+                index,
+                side: choice,
+            },
+        ));
+    }
+    popover_panel(column).width(Length::Fixed(258.0)).into()
+}
+
 /// The application picker: the applications open right now, named
 /// exactly as remapping sees them, then the installed ones, and a way
 /// to type a name for anything else.

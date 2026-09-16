@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use evdev::KeyCode;
 
-use crate::ui::model::{self, AppScope, Chord, Group, Layer, Mapping, Maps};
+use crate::ui::model::{self, AppScope, Chord, Group, Layer, Mapping, Maps, ModifierSide};
 
 /// First line of every file Keyloom generates. Files that don't start
 /// with this marker are treated as foreign and never silently replaced.
@@ -542,16 +542,22 @@ fn layer_blocks<F: Fn(&str) -> String>(
         .collect()
 }
 
-/// xremap's name for one of the editor's modifier chips; unknown
-/// modifiers (the design's "Any") are left out of a chord.
+/// xremap's name for a chord modifier: the alias that matches either
+/// key for a side-less one, the key itself for a sided one. Unknown
+/// names (the design's "Any") are left out of a chord.
 fn modifier_symbol(name: &str) -> Option<&'static str> {
-    match name {
-        "Ctrl" => Some("Ctrl"),
-        "Shift" => Some("Shift"),
-        "Alt" => Some("Alt"),
-        "Super" => Some("Super"),
-        _ => None,
-    }
+    const KEYS: [[&str; 2]; 4] = [
+        ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"],
+        ["KEY_LEFTSHIFT", "KEY_RIGHTSHIFT"],
+        ["KEY_LEFTALT", "KEY_RIGHTALT"],
+        ["KEY_LEFTMETA", "KEY_RIGHTMETA"],
+    ];
+    let (family, side) = model::parse_modifier(name)?;
+    Some(match side {
+        ModifierSide::Either => model::MODS[family],
+        ModifierSide::Left => KEYS[family][0],
+        ModifierSide::Right => KEYS[family][1],
+    })
 }
 
 /// A chord in xremap's `Mod-Mod-KEY` form, or `None` when its key has
@@ -595,8 +601,11 @@ fn group_blocks<F: Fn(&str) -> String>(groups: &[Group], places: &Places<'_, F>)
             // modifier held, which xremap then releases around the
             // output instead of passing it through.
             if group.any_mod {
-                for modifier in model::MODS {
-                    if !rule.from.mods.iter().any(|held| held == modifier) {
+                for (family, modifier) in model::MODS.iter().enumerate() {
+                    let held = rule.from.mods.iter().any(|held| {
+                        model::parse_modifier(held).is_some_and(|(held, _)| held == family)
+                    });
+                    if !held {
                         rule_line(format!("{modifier}-{from}"), &to);
                     }
                 }
@@ -1389,6 +1398,50 @@ mod tests {
 
     // --- Shortcut groups ---------------------------------------------
 
+    /// A sided modifier becomes the key itself, which xremap matches
+    /// alone, while a side-less one stays the alias for either key;
+    /// "any modifier" treats a sided modifier as its family held.
+    #[test]
+    fn sided_modifiers_generate_the_key_and_side_less_ones_the_alias() {
+        let groups = vec![
+            group(
+                "Terminals",
+                "",
+                false,
+                vec![rule(&["Right Ctrl"], "C", &["Ctrl", "Shift"], "C")],
+            ),
+            group(
+                "Sided any",
+                "",
+                true,
+                vec![rule(&["Left Alt"], "Backspace", &["Ctrl"], "Backspace")],
+            ),
+        ];
+        let yaml = super::generate(
+            Rules {
+                maps: &Vec::new(),
+                layers: &[],
+                apps: &[],
+                groups: &groups,
+            },
+            no_devices,
+        );
+        assert!(
+            yaml.contains("      KEY_RIGHTCTRL-KEY_C: Ctrl-Shift-KEY_C\n"),
+            "{yaml}"
+        );
+        assert!(
+            yaml.contains(
+                "    remap:\n\
+                 \x20     Ctrl-KEY_LEFTALT-KEY_BACKSPACE: Ctrl-KEY_BACKSPACE\n\
+                 \x20     Shift-KEY_LEFTALT-KEY_BACKSPACE: Ctrl-KEY_BACKSPACE\n\
+                 \x20     Super-KEY_LEFTALT-KEY_BACKSPACE: Ctrl-KEY_BACKSPACE\n\
+                 \x20     KEY_LEFTALT-KEY_BACKSPACE: Ctrl-KEY_BACKSPACE\n"
+            ),
+            "{yaml}"
+        );
+    }
+
     /// Paused groups, incomplete rules, and keys xremap cannot name
     /// generate nothing; a chord repeated in a group is written once.
     #[test]
@@ -1728,6 +1781,22 @@ mod tests {
             },
             no_devices,
         );
+        // A shortcut keyed to the right Ctrl alone, as a Mac-style setup
+        // does when the Command keys become Right Ctrl.
+        let sided = super::generate(
+            Rules {
+                maps: &Vec::new(),
+                layers: &[],
+                apps: &[],
+                groups: &[group(
+                    "Terminals",
+                    "",
+                    false,
+                    vec![rule(&["Right Ctrl"], "C", &["Ctrl", "Shift"], "C")],
+                )],
+            },
+            no_devices,
+        );
         for (name, yaml) in [
             (
                 "navigation.yml",
@@ -1742,6 +1811,7 @@ mod tests {
                 generate(&h_types_j, &nav_only, no_devices),
             ),
             ("app-scoped.yml", app_scoped),
+            ("sided-modifiers.yml", sided),
         ] {
             fs::write(dir.join(name), yaml).expect("harness directory is writable");
         }

@@ -12,8 +12,66 @@ use crate::keyboard;
 /// One key unit in the deck, in logical pixels (`U` in the export).
 pub const UNIT: f32 = 49.0;
 
-/// The modifier chips offered by the combo editors.
+/// The modifier chips offered by the combo editors. A chord modifier
+/// named like this matches either key of the pair.
 pub const MODS: [&str; 4] = ["Ctrl", "Shift", "Alt", "Super"];
+
+/// The same modifiers by side, in [`MODS`] order. A chord modifier
+/// named like this matches that key alone, for setups that give the
+/// two keys of a pair different jobs.
+pub const SIDED_MODS: [[&str; 2]; 4] = [
+    ["Left Ctrl", "Right Ctrl"],
+    ["Left Shift", "Right Shift"],
+    ["Left Alt", "Right Alt"],
+    ["Left Super", "Right Super"],
+];
+
+/// Which key of a modifier pair a chord modifier matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModifierSide {
+    Either,
+    Left,
+    Right,
+}
+
+/// A chord modifier as its family (an index into [`MODS`]) and side, or
+/// `None` for a name that is no modifier key (the design's "Any").
+pub fn parse_modifier(name: &str) -> Option<(usize, ModifierSide)> {
+    if let Some(family) = MODS.iter().position(|family| *family == name) {
+        return Some((family, ModifierSide::Either));
+    }
+    SIDED_MODS
+        .iter()
+        .enumerate()
+        .find_map(|(family, [left, right])| {
+            if *left == name {
+                Some((family, ModifierSide::Left))
+            } else if *right == name {
+                Some((family, ModifierSide::Right))
+            } else {
+                None
+            }
+        })
+}
+
+/// The chord modifier name for a family and side.
+pub fn modifier_name(family: usize, side: ModifierSide) -> &'static str {
+    match side {
+        ModifierSide::Either => MODS[family],
+        ModifierSide::Left => SIDED_MODS[family][0],
+        ModifierSide::Right => SIDED_MODS[family][1],
+    }
+}
+
+/// Compact form of a chord modifier for pills: `R Ctrl` for `Right
+/// Ctrl`; other names as they are.
+pub fn modifier_short(name: &str) -> String {
+    match parse_modifier(name) {
+        Some((family, ModifierSide::Left)) => format!("L {}", MODS[family]),
+        Some((family, ModifierSide::Right)) => format!("R {}", MODS[family]),
+        _ => name.to_owned(),
+    }
+}
 
 /// One physical key cap on the rendered keyboard.
 #[derive(Clone, Copy, Debug)]
@@ -1121,6 +1179,26 @@ mod tests {
             assert!(!ansi.iter().any(|cap| cap.code == "IntlBackslash"));
             assert_eq!(ansi.iter().filter(|cap| cap.code == "Enter").count(), 1);
         }
+    }
+
+    /// Every modifier name round-trips through its family and side,
+    /// and anything else is no modifier.
+    #[test]
+    fn chord_modifiers_parse_by_family_and_side() {
+        for (family, name) in MODS.iter().enumerate() {
+            assert_eq!(parse_modifier(name), Some((family, ModifierSide::Either)));
+            assert_eq!(modifier_name(family, ModifierSide::Either), *name);
+            assert_eq!(modifier_short(name), *name);
+            let [left, right] = SIDED_MODS[family];
+            assert_eq!(parse_modifier(left), Some((family, ModifierSide::Left)));
+            assert_eq!(parse_modifier(right), Some((family, ModifierSide::Right)));
+            assert_eq!(modifier_name(family, ModifierSide::Left), left);
+            assert_eq!(modifier_name(family, ModifierSide::Right), right);
+            assert_eq!(modifier_short(left), format!("L {name}"));
+            assert_eq!(modifier_short(right), format!("R {name}"));
+        }
+        assert_eq!(parse_modifier("Any"), None);
+        assert_eq!(modifier_short("Any"), "Any");
     }
 
     /// Physical identities are unique in the registry.

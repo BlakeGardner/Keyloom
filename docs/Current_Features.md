@@ -258,6 +258,10 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 - Rules show modifiers + key → modifiers + key, and the editor can record both
   sides of a chord from a physical keyboard. Rules with both sides recorded
   apply; incomplete rules and paused groups generate nothing.
+- A recorded modifier matches either key of its pair. Clicking a modifier
+  in the editor's "When I press" chord narrows it to the left or right key
+  alone (shown as "L Ctrl" or "R Ctrl"), for setups that give the two keys
+  different jobs, such as a Command key remapped to Right Control.
 - Add group, delete rule, and edit existing rules. Groups and rules are
   stored with the profile and applied like mappings.
 - Groups start empty for every profile; combo mappings made in the key

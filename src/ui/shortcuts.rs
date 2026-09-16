@@ -6,11 +6,12 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, EditRule, Message, Popover, Side};
+use crate::ui::model::{Chord, modifier_short};
 use crate::ui::theme::{
     ButtonStyle, accent, accent_button, accent_filled, ghost_button, muted, oklch, quiet, tint,
     white,
 };
-use crate::ui::{chord_pills, eyebrow, txt, txt_semibold};
+use crate::ui::{Pill, chord_pills, eyebrow, pill, txt, txt_semibold};
 
 /// The shortcuts tab content.
 #[allow(clippy::too_many_lines)]
@@ -343,7 +344,7 @@ fn new_group_button() -> Element<'static, Message> {
 
 /// The rule editor content, shown in the app's context drawer while a
 /// shortcut is being edited.
-pub fn rule_editor(app: &App) -> Element<'_, Message> {
+pub fn rule_editor<'a>(app: &'a App) -> Element<'a, Message> {
     let Some(edit) = app.edit_rule else {
         return widget::Space::new().into();
     };
@@ -385,11 +386,13 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
         }))
     };
 
-    let chord_box = |side: Side, chord: Option<&crate::ui::model::Chord>| {
+    let chord_box = |side: Side, chord: Option<&'a Chord>| {
         let recording = app.recording == Some(side);
-        container(match chord {
-            Some(chord) => chord_pills(chord),
-            None => chord_pills(&crate::ui::model::Chord::default()),
+        container(match (side, chord) {
+            // The input chord's modifiers open the side chooser.
+            (Side::From, Some(chord)) => input_pills(app, chord),
+            (Side::To, Some(chord)) => chord_pills(chord),
+            (_, None) => chord_pills(&Chord::default()),
         })
         .width(Length::Fill)
         .padding([9, 11])
@@ -431,7 +434,11 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
     let hint = if app.recording.is_some() {
         "Hold the modifiers, then press a key. Escape cancels."
     } else if rule.is_some_and(crate::ui::model::Rule::is_complete) {
-        "Both sides recorded. This shortcut is ready."
+        if rule.is_some_and(|rule| rule.from.mods.iter().any(|m| m != "Any")) {
+            "Both sides recorded. Click a modifier to match only its left or right key."
+        } else {
+            "Both sides recorded. This shortcut is ready."
+        }
     } else {
         "Record both sides to complete this shortcut."
     };
@@ -512,6 +519,41 @@ pub fn rule_editor(app: &App) -> Element<'_, Message> {
         .push(chords)
         .push(behaviour)
         .into()
+}
+
+/// The input chord as pills, each modifier a button opening the
+/// chooser between either key of its pair and one side alone.
+fn input_pills<'a>(app: &'a App, chord: &'a Chord) -> Element<'a, Message> {
+    let mut row = widget::row::with_capacity(chord.mods.len() + 1)
+        .spacing(4)
+        .align_y(Alignment::Center);
+    if chord.is_empty() {
+        return row.push(pill("—", Pill::Empty)).into();
+    }
+    for (index, modifier) in chord.mods.iter().enumerate() {
+        if modifier == "Any" {
+            row = row.push(pill("Any modifier", Pill::Any));
+            continue;
+        }
+        let button = widget::button::custom(pill(&modifier_short(modifier), Pill::Mod))
+            .class(ctheme::Button::Transparent)
+            .padding(0)
+            .on_press(Message::TogglePopover(Popover::ModifierSide(index)));
+        if app.popover == Some(Popover::ModifierSide(index)) {
+            row = row.push(
+                widget::popover(button)
+                    .popup(crate::ui::overlays::modifier_side_popup(app, index))
+                    .position(widget::popover::Position::Bottom)
+                    .on_close(Message::CloseOverlays),
+            );
+        } else {
+            row = row.push(button);
+        }
+    }
+    if !chord.key.is_empty() {
+        row = row.push(pill(&chord.key, Pill::Key));
+    }
+    row.into()
 }
 
 /// The drawer footer: delete and done actions for the rule editor.

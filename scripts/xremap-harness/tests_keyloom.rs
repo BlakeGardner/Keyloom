@@ -13,6 +13,7 @@ const NAVIGATION: &str = include_str!("keyloom/navigation.yml");
 const TWO_LAYERS: &str = include_str!("keyloom/two-layers.yml");
 const REMAPPED_KEY: &str = include_str!("keyloom/remapped-key.yml");
 const APP_SCOPED: &str = include_str!("keyloom/app-scoped.yml");
+const SIDED_MODIFIERS: &str = include_str!("keyloom/sided-modifiers.yml");
 
 fn press(key: Key) -> Action {
     Action::KeyEvent(KeyEvent::new(key, KeyValue::Press))
@@ -352,6 +353,49 @@ fn keyloom_shortcut_differs_between_an_application_and_elsewhere() {
             release(Key::KEY_LEFTCTRL),
             release(Key::KEY_C),
             release(Key::KEY_LEFTMETA),
+        ],
+    );
+}
+
+/// A shortcut narrowed to the right Ctrl fires with that key alone:
+/// Right Ctrl+C sends Ctrl+Shift+C (the held Ctrl counts as the
+/// output's Ctrl, so only Shift is added), while Left Ctrl+C passes
+/// through untouched.
+#[test]
+fn keyloom_sided_modifier_matches_one_key_only() {
+    assert_actions(
+        SIDED_MODIFIERS,
+        vec![
+            Event::key_press(Key::KEY_RIGHTCTRL),
+            Event::key_press(Key::KEY_C),
+            Event::key_release(Key::KEY_C),
+            Event::key_release(Key::KEY_RIGHTCTRL),
+        ],
+        vec![
+            press(Key::KEY_RIGHTCTRL),
+            press(Key::KEY_LEFTSHIFT),
+            press(Key::KEY_C),
+            release(Key::KEY_C),
+            delay(),
+            delay(),
+            release(Key::KEY_LEFTSHIFT),
+            release(Key::KEY_C),
+            release(Key::KEY_RIGHTCTRL),
+        ],
+    );
+    assert_actions(
+        SIDED_MODIFIERS,
+        vec![
+            Event::key_press(Key::KEY_LEFTCTRL),
+            Event::key_press(Key::KEY_C),
+            Event::key_release(Key::KEY_C),
+            Event::key_release(Key::KEY_LEFTCTRL),
+        ],
+        vec![
+            press(Key::KEY_LEFTCTRL),
+            press(Key::KEY_C),
+            release(Key::KEY_C),
+            release(Key::KEY_LEFTCTRL),
         ],
     );
 }

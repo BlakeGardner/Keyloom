@@ -218,7 +218,7 @@ pub fn chord_pills(chord: &model::Chord) -> Element<'static, Message> {
         if modifier == "Any" {
             row = row.push(pill("Any modifier", Pill::Any));
         } else {
-            row = row.push(pill(modifier, Pill::Mod));
+            row = row.push(pill(&model::modifier_short(modifier), Pill::Mod));
         }
     }
     if !chord.key.is_empty() {

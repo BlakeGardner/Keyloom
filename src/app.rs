@@ -27,8 +27,8 @@ use crate::service;
 use crate::setup;
 use crate::ui;
 use crate::ui::model::{
-    self, AppRef, AppScope, Chord, Group, Layer, LayerKey, Mapping, Maps, Profile, Rule,
-    key_by_evdev, key_name,
+    self, AppRef, AppScope, Chord, Group, Layer, LayerKey, Mapping, Maps, ModifierSide, Profile,
+    Rule, key_by_evdev, key_name,
 };
 use crate::xremap;
 
@@ -69,6 +69,9 @@ pub enum Popover {
     Menu,
     /// The application scope chooser of one shortcut group.
     GroupScope(usize),
+    /// The side chooser of one modifier (by position) in the input
+    /// chord of the shortcut being edited.
+    ModifierSide(usize),
 }
 
 /// Which side of a shortcut rule is being recorded.
@@ -347,6 +350,12 @@ pub enum Message {
         rule: Option<usize>,
     },
     SetRecording(Option<Side>),
+    /// Make one modifier (by position) of the edited shortcut's input
+    /// chord match either key of its pair, or one side alone.
+    SetModifierSide {
+        index: usize,
+        side: ModifierSide,
+    },
     ToggleAnyMod,
     DeleteRule,
     CloseEdit,
@@ -2922,6 +2931,46 @@ impl cosmic::Application for App {
                 };
             }
             Message::SetRecording(side) => self.recording = side,
+            Message::SetModifierSide { index, side } => {
+                let Some(EditRule {
+                    group,
+                    rule: Some(rule),
+                }) = self.edit_rule
+                else {
+                    return Task::none();
+                };
+                self.popover = None;
+                // Only a modifier that is there changes; a no-op takes
+                // no undo snapshot and saves nothing.
+                let Some((family, _)) = self
+                    .groups()
+                    .get(group)
+                    .and_then(|group| group.rules.get(rule))
+                    .and_then(|rule| rule.from.mods.get(index))
+                    .and_then(|name| model::parse_modifier(name))
+                else {
+                    return Task::none();
+                };
+                let name = model::modifier_name(family, side);
+                self.mutate_groups(|groups| {
+                    if let Some(modifier) = groups
+                        .get_mut(group)
+                        .and_then(|group| group.rules.get_mut(rule))
+                        .and_then(|rule| rule.from.mods.get_mut(index))
+                    {
+                        *modifier = name.to_owned();
+                    }
+                });
+                let key = model::MODS[family];
+                self.flash(
+                    match side {
+                        ModifierSide::Either => format!("Either {key} key"),
+                        ModifierSide::Left => format!("Left {key} only"),
+                        ModifierSide::Right => format!("Right {key} only"),
+                    },
+                    "applies automatically",
+                );
+            }
             Message::ToggleAnyMod => {
                 let Some(edit) = self.edit_rule else {
                     return Task::none();
@@ -6147,6 +6196,69 @@ mod tests {
             app.combos_for("C").len(),
             1,
             "the terminal's combo is not shown everywhere"
+        );
+    }
+
+    #[test]
+    fn a_recorded_modifier_can_be_narrowed_to_one_side() {
+        let mut app = app();
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::AddGroup);
+        let _ = app.update(Message::EditRule {
+            group: 0,
+            rule: None,
+        });
+        let device = PathBuf::from("/dev/input/test");
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_RIGHTCTRL.0));
+        app.phys_press(&device, evdev::KeyCode::KEY_C.0);
+        assert_eq!(
+            app.groups()[0].rules[0].from.mods,
+            vec!["Ctrl".to_owned()],
+            "a modifier records without its side"
+        );
+        let _ = app.update(Message::SetRecording(Some(Side::To)));
+        app.pressed
+            .remove(&(device.clone(), evdev::KeyCode::KEY_RIGHTCTRL.0));
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_LEFTCTRL.0));
+        app.pressed
+            .insert((device.clone(), evdev::KeyCode::KEY_LEFTSHIFT.0));
+        app.phys_press(&device, evdev::KeyCode::KEY_C.0);
+
+        let _ = app.update(Message::TogglePopover(Popover::ModifierSide(0)));
+        assert_eq!(app.popover, Some(Popover::ModifierSide(0)));
+        let apply_seq = app.apply_seq;
+        let _ = app.update(Message::SetModifierSide {
+            index: 0,
+            side: ModifierSide::Right,
+        });
+        assert_eq!(app.popover, None);
+        assert_eq!(
+            app.groups()[0].rules[0].from.mods,
+            vec!["Right Ctrl".to_owned()]
+        );
+        assert_eq!(toast_text(&app), "Right Ctrl only");
+        assert!(app.apply_seq > apply_seq, "the change applies");
+        assert!(yaml(&app).contains("      KEY_RIGHTCTRL-KEY_C: Ctrl-Shift-KEY_C\n"));
+
+        let _ = app.update(Message::SetModifierSide {
+            index: 0,
+            side: ModifierSide::Either,
+        });
+        assert_eq!(app.groups()[0].rules[0].from.mods, vec!["Ctrl".to_owned()]);
+        assert!(yaml(&app).contains("      Ctrl-KEY_C: Ctrl-Shift-KEY_C\n"));
+        // A position past the chord's modifiers changes nothing, and
+        // Undo restores the sided modifier.
+        let _ = app.update(Message::SetModifierSide {
+            index: 3,
+            side: ModifierSide::Left,
+        });
+        assert_eq!(app.groups()[0].rules[0].from.mods, vec!["Ctrl".to_owned()]);
+        let _ = app.update(Message::Undo);
+        assert_eq!(
+            app.groups()[0].rules[0].from.mods,
+            vec!["Right Ctrl".to_owned()]
         );
     }
 }
