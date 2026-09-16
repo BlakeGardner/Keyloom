@@ -540,10 +540,12 @@ fn input_pills<'a>(app: &'a App, chord: &'a Chord) -> Element<'a, Message> {
             .padding(0)
             .on_press(Message::TogglePopover(Popover::ModifierSide(index)));
         if app.popover == Some(Popover::ModifierSide(index)) {
+            // The editor sits at the window's bottom edge, where a popup
+            // hanging below the pill would be cut off: center it instead.
             row = row.push(
                 widget::popover(button)
                     .popup(crate::ui::overlays::modifier_side_popup(app, index))
-                    .position(widget::popover::Position::Bottom)
+                    .position(widget::popover::Position::Center)
                     .on_close(Message::CloseOverlays),
             );
         } else {
