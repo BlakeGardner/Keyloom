@@ -836,12 +836,18 @@ fn classify_unit(
                 UnitCheck::Stale { active }
             }
         }
-        Some(text) => UnitCheck::Foreign {
-            exec_start: exec_start_of(text),
-            reads_config: reads_config(text, config),
-            active,
-            path,
-        },
+        Some(text) => {
+            // Only the startup command counts: a path named in a
+            // comment, a commented-out ExecStart, or a setting that
+            // never runs does not load anything.
+            let exec_start = exec_start_of(text);
+            UnitCheck::Foreign {
+                reads_config: reads_config(&exec_start, config),
+                exec_start,
+                active,
+                path,
+            }
+        }
         // A unit whose file cannot be read is not one Keyloom wrote.
         None => UnitCheck::Foreign {
             exec_start: String::new(),
@@ -880,10 +886,17 @@ pub fn exec_start_of(text: &str) -> String {
     found.join("\n")
 }
 
-/// Whether a unit file names Keyloom's generated configuration.
-fn reads_config(text: &str, config: Option<&Path>) -> bool {
-    config.is_some_and(|config| text.contains(&*config.to_string_lossy()))
-        || text.contains("xremap/keyloom.yml")
+/// Whether a unit's startup command names Keyloom's generated
+/// configuration. Takes the `ExecStart` value from [`exec_start_of`],
+/// never the whole unit file: a path mentioned anywhere else in the
+/// file is not one xremap reads.
+///
+/// The second test carries the rest: Keyloom always generates into
+/// `xremap/keyloom.yml`, so a command spelling the directory some
+/// other way (`%h`, `%E`, `$HOME`) still names the same file.
+fn reads_config(exec_start: &str, config: Option<&Path>) -> bool {
+    config.is_some_and(|config| exec_start.contains(&*config.to_string_lossy()))
+        || exec_start.contains("xremap/keyloom.yml")
 }
 
 /// Why a fix did not happen.
@@ -1546,6 +1559,58 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn only_the_startup_command_counts_as_reading_the_config() {
+        let config = Path::new("/home/me/.config/xremap/keyloom.yml");
+        let reads = |text: &str| {
+            matches!(
+                classify_unit(true, true, None, Some(text), None, Some(config)),
+                UnitCheck::Foreign {
+                    reads_config: true,
+                    ..
+                }
+            )
+        };
+
+        assert!(
+            !reads(
+                "[Service]\n                 # Someday: /home/me/.config/xremap/keyloom.yml\n                 ExecStart=/usr/bin/xremap /home/me/mine.yml\n"
+            ),
+            "a path in a comment runs nothing"
+        );
+        assert!(
+            !reads(
+                "[Service]\n                 #ExecStart=/usr/bin/xremap %h/.config/xremap/keyloom.yml\n                 ExecStart=/usr/bin/xremap /home/me/mine.yml\n"
+            ),
+            "a commented-out ExecStart is not the command that runs"
+        );
+        assert!(
+            !reads(
+                "[Service]\n                 ExecStartPre=/usr/bin/test -f %h/.config/xremap/keyloom.yml\n                 ExecStart=/usr/bin/xremap /home/me/mine.yml\n"
+            ),
+            "a setting other than ExecStart does not load the config"
+        );
+        assert!(
+            !reads(
+                "[Service]\n                 ExecStart=/usr/bin/xremap %h/.config/xremap/keyloom.yml\n                 ExecStart=\n                 ExecStart=/usr/bin/xremap /home/me/mine.yml\n"
+            ),
+            "an empty ExecStart resets the list systemd runs"
+        );
+
+        assert!(
+            reads(
+                "[Service]\nExecStart=/usr/bin/xremap /home/me/mine.yml \\\n  %h/.config/xremap/keyloom.yml\n"
+            ),
+            "a continued command line still names the config"
+        );
+        assert!(
+            reads(
+                "[Service]\nExecStart=/usr/bin/xremap --watch /home/me/.config/xremap/keyloom.yml\n"
+            ),
+            "the absolute path Keyloom generates"
+        );
     }
 
     #[tokio::test]
