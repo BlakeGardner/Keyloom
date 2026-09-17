@@ -335,35 +335,47 @@ in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibil
 Setup starts from a system with or without xremap. A wizard opens the first
 time Keyloom runs (and from the ⋯ menu or the header's status chip
 afterwards) and walks through four checks, fixing what it can one step at a
-time. Keyloom itself stays unprivileged: changes to the system go through
-the desktop's authentication prompt (`pkexec`), one prompt per step. Pages
-stay high level; paths, the unit, and the exact commands sit behind a "Show
-details" toggle that is off by default.
+time. Each step page has one main button, and it does what the step needs:
+it carries out the fix and moves on once a fresh check confirms it worked,
+or reads "Continue" where the step is already in order or cannot be fixed
+from Keyloom. Moving forward passes over steps that are already in order
+(or only wait for a login), so setup stops only where something is left to
+do; Back still shows every step, and the progress dots mark the ones passed
+over. Keyloom itself stays unprivileged: changes to the system go through
+the desktop's authentication prompt (`pkexec`), one prompt per step.
+
+Pages stay short. A "Show details" toggle, off by default, says what a step
+changes and how to do it by hand, with the commands selectable and
+copyable, "Check again" for after manual changes, and "Skip this step" for
+moving on without the fix.
 
 - **xremap** — finds the binary on `PATH`, or Keyloom's own download in
-  `~/.local/bin`, and shows its version, whether Keyloom downloaded it, and
-  whether its build can tell which window is in front on this desktop, so
-  application-specific remaps can work; on GNOME's Wayland session the step
-  links to xremap's GNOME Shell extension, which matching there needs. With
-  no xremap at all, "Download xremap" fetches the release Keyloom was tested
-  with (its `full` build, with a client for every desktop) from the project's
-  GitHub releases into `~/.local/bin`: no administrator access is needed,
-  the download is checked against the digest recorded in Keyloom before
-  anything is written, and the binary is asked for its version before it
-  is put in place. Keyloom's own download is offered an update when Keyloom
-  moves to a newer release; a binary the user installed is never touched.
-  Processors without an xremap release (anything but x86_64 and aarch64)
-  get an explanation and a link to the project page instead. Editing keeps
-  working throughout.
+  `~/.local/bin`; the details show its version, whether Keyloom downloaded
+  it, and whether its build can tell which window is in front on this
+  desktop, which application-specific remaps depend on. When those remaps
+  need more than setup provides (xremap's GNOME Shell extension on GNOME's
+  Wayland session, or a build with a client for this desktop), the summary
+  says so, as does the step when it is shown. With no xremap at all,
+  "Install xremap" fetches the release Keyloom was tested with (its `full`
+  build, with a client for every desktop) from the project's GitHub releases
+  into `~/.local/bin`: no administrator access is needed, the download is
+  checked against the digest recorded in Keyloom before anything is written,
+  and the binary is asked for its version before it is put in place.
+  Keyloom's own download is offered an update when Keyloom moves to a newer
+  release; a binary the user installed is never touched. Processors without
+  an xremap release (anything but x86_64 and aarch64) get an explanation, a
+  link to the project page, and "Check again" instead. Editing keeps working
+  throughout.
 - **Keyboard access** — checks membership in the `input` group, telling
   membership that is in effect apart from membership that still needs a
-  new login. "Add me to the input group" runs `usermod -aG input` and
-  explains that any program running as the user gains the same access.
+  new login. The fix runs `usermod -aG input`; the details explain that any
+  program running as the user gains the same access.
 - **Virtual keyboard** — checks that `/dev/uinput` opens for writing. The
   fix installs the rule `KERNEL=="uinput", GROUP="input", TAG+="uaccess"`
   as `/etc/udev/rules.d/00-xremap-input.rules`, loads the `uinput` module
   now and at boot, and reloads udev. A rule the xremap packages ship is
-  recognized.
+  recognized. An installed rule that is not in effect waits for the next
+  login while joining the input group does, and is offered again otherwise.
 - **Remapping service** — installs Keyloom's own `xremap.service` user unit
   under `~/.config/systemd/user/`, modeled on a hand-written unit proven on
   COSMIC: on Wayland sessions it waits for the compositor's socket (X11
@@ -374,28 +386,36 @@ details" toggle that is off by default.
   desktop's client, are left to choose for themselves), keeps xremap
   running, and logs at info level (xremap's debug level would write every
   key press to the journal). Setup then reloads systemd, enables the unit,
-  and starts it when
-  access is already in effect (otherwise it starts at the next login). No
-  password is needed. An existing unit is inspected first:
-  one that already reads `keyloom.yml` is left alone; one that does not is
-  shown with its `ExecStart` and can be replaced (its file is backed up
-  beside it) or kept, in which case Keyloom's remaps have no effect.
+  and starts it when access is already in effect (otherwise it starts at the
+  next login). No password is needed. To turn it on by hand instead, the
+  details save the file (and reload systemd) without enabling or starting
+  it, then show the `systemctl --user enable` command that does, with
+  `--now` only when access is already in effect. An existing unit is
+  inspected first: one that already reads `keyloom.yml` is left alone; one
+  that does not is shown with its `ExecStart` and can be replaced (its file
+  is backed up beside it) or kept with "Keep mine", in which case Keyloom's
+  remaps have no effect unless its command line is given `keyloom.yml` as
+  well, as the details explain.
 
-Every step can be rechecked after manual changes; a cancelled or refused
-authorization is reported on the step with the fix still on offer. The
-summary page says whether everything works, only a logout and login
-remain, or steps still need attention. Setup opens by itself
-only on the first launch: closing it records completion when every step is
-in order (or only waits for a login) and deferral otherwise, so it never
-nags. Only "Skip for now", Finish, or Escape close the wizard; a click
-outside it is ignored so a stray click cannot skip setup.
+A failed fix is reported on its step with the fix still on offer; any
+failure other than a dismissed prompt also opens the details, so the manual
+commands are at hand (without `pkexec`, the main button becomes "Check
+again"). The summary page says whether everything works, only a logout and
+login remain, or steps still need attention; each step's row reopens that
+step, and an unfinished setup offers "Continue setup" back to the first step
+the user can still act on. Setup opens by itself only on the first launch:
+closing it records completion when every step is in order (or only waits for
+a login) and deferral otherwise, so it never nags. Only "Set up later",
+Finish, or Escape close the wizard; a click outside it is ignored so a stray
+click cannot skip setup. A page taller than the window scrolls while its
+buttons stay in view.
 
 Limitations: the authentication prompt is polkit's generic one, naming
 `usermod` or `/bin/sh` rather than Keyloom; a unit the user wrote can only
 be replaced or kept, not merged with Keyloom's configuration; an xremap
 running as another user (a system service) is not noticed; logging into a
-different desktop leaves the unit naming the old one until "Update service"
-is clicked in setup; a distribution's xremap older than 0.15.13 gets
+different desktop leaves the unit naming the old one until setup's "Update
+remapping" is used; a distribution's xremap older than 0.15.13 gets
 neither the download nor `--desktop`; and no sample remap is verified end
 to end.
 

@@ -1,8 +1,10 @@
 //! Popover panels, the confirmation toast, and modal dialogs.
 
+use std::path::Path;
+
 use cosmic::iced::core::text::Wrapping;
 use cosmic::iced::widget::{rich_text, span};
-use cosmic::iced::{Alignment, Border, Color, Length, Padding};
+use cosmic::iced::{Alignment, Border, Color, Font, Length, Padding};
 use cosmic::widget::{self, container, icon, mouse_area};
 use cosmic::{Element, theme as ctheme};
 
@@ -13,8 +15,9 @@ use crate::keyboard;
 use crate::service;
 use crate::session::Desktop;
 use crate::setup::{
-    AppMatching, Facts, GroupCheck, INPUT_GROUP, RULE, RULES_PATH, Step, UINPUT, UinputCheck,
-    UnitCheck, XREMAP_GNOME_EXTENSION_URL, XREMAP_URL, XremapAction, XremapCheck,
+    ActionError, AppMatching, Facts, GroupCheck, INPUT_GROUP, RULES_PATH, Step, UINPUT,
+    UinputCheck, UnitCheck, XREMAP_GNOME_EXTENSION_URL, XREMAP_NO_SUDO_URL, XREMAP_URL,
+    XremapAction, XremapCheck, uinput_commands,
 };
 use crate::ui::model::key_name;
 use crate::ui::theme::{
@@ -376,7 +379,7 @@ fn modal<'a, Renderer: cosmic::iced::core::Renderer + 'a>(
 fn dialog_card<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
     container(content)
         .width(Length::Fixed(540.0))
-        .padding(28)
+        .padding(CARD_PADDING)
         .class(ctheme::Container::custom(|_| container::Style {
             background: Some(oklch(0.185, 0.007, 152.0).into()),
             border: Border {
@@ -1320,22 +1323,53 @@ struct StepView {
     /// One-line state, also used by the summary.
     status: String,
     title: String,
-    /// Explanation under the state.
+    /// A sentence or two under the state.
     body: Body,
-    /// Paths, units, and commands, shown only on request.
-    detail: Option<String>,
-    /// The fix the step's button carries out, if it has one. Fixes
-    /// that need the administrator bring up the desktop's own password
-    /// prompt.
-    action: Option<&'static str>,
+    /// What the page's main button does.
+    next: Next,
+    /// A second way on beside the main button that leaves the system as
+    /// it is, for a page that puts a choice to the user.
+    keep: Option<&'static str>,
+    /// What "Show details" reveals.
+    details: Details,
 }
 
-/// The explanation under a step's status.
+/// What a setup page's main button does. Each page has exactly one, so
+/// the obvious way forward is also the one that gets the step done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Next {
+    /// Nothing is known yet.
+    Wait,
+    /// Carry out the step's fix, and move on once it has worked. Fixes
+    /// that need the administrator bring up the desktop's own password
+    /// prompt.
+    Fix {
+        label: &'static str,
+        /// The label while the fix runs.
+        working: &'static str,
+    },
+    /// Look at the system again, once the user has changed it by hand.
+    Recheck,
+    /// Another step has to come first.
+    Visit(Step, &'static str),
+    /// Nothing is left to do here, or nothing Keyloom can do: move on.
+    Continue,
+}
+
+/// A fix, as a page's main button.
+const fn fix(label: &'static str, working: &'static str) -> Next {
+    Next::Fix { label, working }
+}
+
+/// What a fix that asks for a password shows while the prompt is up.
+const APPROVAL: &str = "Waiting for approval…";
+
+/// Prose with at most one phrase that opens a web page.
+#[derive(Default)]
 enum Body {
-    /// The status says it all.
+    #[default]
     None,
     Plain(String),
-    /// Text with one phrase that opens a web page.
     Linked {
         before: String,
         link: &'static str,
@@ -1344,9 +1378,63 @@ enum Body {
     },
 }
 
-/// The fix a step offers, as its button label.
-const fn fix(label: &'static str) -> Option<&'static str> {
-    Some(label)
+fn plain(text: impl Into<String>) -> Body {
+    Body::Plain(text.into())
+}
+
+fn linked(
+    before: impl Into<String>,
+    link: &'static str,
+    url: &'static str,
+    after: impl Into<String>,
+) -> Body {
+    Body::Linked {
+        before: before.into(),
+        link,
+        url,
+        after: after.into(),
+    }
+}
+
+/// What a step's details say: what the step changes or found, and how
+/// to do it by hand, for those who want to.
+#[derive(Default)]
+struct Details {
+    about: Body,
+    /// Commands or a file to copy, or facts to read, in monospace.
+    text: Option<String>,
+    /// Whether `text` is meant to be copied and used.
+    copyable: bool,
+    /// Whether the details offer to save the service file, which the
+    /// commands for turning it on by hand need in place first.
+    saves_service: bool,
+}
+
+impl Details {
+    fn about(about: Body) -> Self {
+        Self {
+            about,
+            ..Self::default()
+        }
+    }
+
+    /// Paths, versions, and states, to read.
+    fn facts(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self.copyable = false;
+        self
+    }
+
+    /// Commands (or a file) to copy.
+    fn commands(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self.copyable = true;
+        self
+    }
+
+    fn is_empty(&self) -> bool {
+        matches!(self.about, Body::None) && self.text.is_none()
+    }
 }
 
 /// The step's name in the summary.
@@ -1355,7 +1443,7 @@ fn step_name(step: Step) -> &'static str {
         Step::Xremap => "xremap",
         Step::InputGroup => "Keyboard access",
         Step::Uinput => "Virtual keyboard",
-        Step::Service => "Remapping service",
+        Step::Service => "Remapping",
     }
 }
 
@@ -1365,9 +1453,10 @@ fn checking(step: Step) -> StepView {
         color: muted(),
         status: "Checking…".to_owned(),
         title: step_name(step).to_owned(),
-        body: Body::Plain("Keyloom is looking at how this system is set up.".to_owned()),
-        detail: None,
-        action: None,
+        body: plain("Keyloom is looking at how this system is set up."),
+        next: Next::Wait,
+        keep: None,
+        details: Details::default(),
     }
 }
 
@@ -1381,8 +1470,20 @@ fn step_view(facts: &Facts, step: Step) -> StepView {
     }
 }
 
+/// A path or name as one shell word, quoted only when it needs to be.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%=,~$".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
 fn xremap_view(facts: &Facts) -> StepView {
-    let action = facts.xremap_action();
     match &facts.xremap {
         XremapCheck::Found {
             path,
@@ -1390,106 +1491,116 @@ fn xremap_view(facts: &Facts) -> StepView {
             desktops,
             managed,
         } => {
-            let status = match (version, managed) {
+            let mut detail = format!("Binary: {}", path.display());
+            match (version, managed) {
                 (Some(version), true) => {
-                    format!("Installed (version {version}, downloaded by Keyloom)")
+                    detail.push_str(&format!("\nVersion: {version} (installed by Keyloom)"));
                 }
-                (Some(version), false) => format!("Installed (version {version})"),
-                (None, true) => "Installed (downloaded by Keyloom)".to_owned(),
-                (None, false) => "Installed".to_owned(),
-            };
-            let mut detail = format!(
-                "Binary: {}\nDesktop: {}",
-                path.display(),
-                session_label(facts)
-            );
+                (Some(version), false) => detail.push_str(&format!("\nVersion: {version}")),
+                (None, true) => detail.push_str("\nInstalled by Keyloom"),
+                (None, false) => {}
+            }
+            detail.push_str(&format!("\nDesktop: {}", session_label(facts)));
             if let Some(desktops) = desktops {
                 detail.push_str(&format!("\nCan ask: {}", desktop_list(desktops)));
             }
-            let update = action == Some(XremapAction::Update);
-            let lead = if update {
+            if facts.xremap_action() == Some(XremapAction::Update) {
                 if let Some(asset) = install::asset() {
                     detail.push_str(&format!(
                         "\nDownload: {}\nSHA-256: {}",
                         asset.url, asset.sha256
                     ));
                 }
-                format!(
-                    "Keyloom now ships xremap {}; updating replaces its copy and restarts \
-                     remapping. ",
-                    install::RELEASE
-                )
-            } else {
-                String::new()
-            };
+                return StepView {
+                    color: color_attention(),
+                    status: "Update available".to_owned(),
+                    title: "Update xremap".to_owned(),
+                    body: plain(format!(
+                        "Keyloom now uses xremap {}. Updating replaces the copy Keyloom \
+                         installed and restarts remapping.",
+                        install::RELEASE
+                    )),
+                    next: fix("Update xremap", "Updating…"),
+                    keep: None,
+                    details: Details::about(plain(
+                        "Keyloom only ever updates the copy it installed itself; xremap from \
+                         your distribution is left alone.",
+                    ))
+                    .facts(detail),
+                };
+            }
             StepView {
                 color: color_ok(),
-                status,
+                status: "Installed".to_owned(),
                 title: "xremap is installed".to_owned(),
-                body: matching_body(facts, lead),
-                detail: Some(detail),
-                action: update.then_some("Update xremap"),
+                body: matching_note(facts),
+                next: Next::Continue,
+                keep: None,
+                details: Details::about(matching_detail(facts)).facts(detail),
             }
         }
-        XremapCheck::Missing => match (action, install::asset(), install::managed_path()) {
-            (Some(XremapAction::Download), Some(asset), Some(destination)) => StepView {
-                color: color_attention(),
-                status: "Not installed".to_owned(),
-                title: "Get xremap".to_owned(),
-                body: Body::Linked {
-                    before: format!(
-                        "Keyloom does its remapping through xremap, which isn't installed yet. \
-                         Keyloom can download xremap {} from the project's releases into your \
-                         home folder; no administrator access is needed. Or install it from \
-                         your distribution's packages or the ",
-                        asset.version
+        XremapCheck::Missing => match (facts.xremap_action(), install::asset()) {
+            (Some(XremapAction::Download), Some(asset)) => {
+                let destination = install::managed_path()
+                    .map_or_else(String::new, |path| path.display().to_string());
+                StepView {
+                    color: color_attention(),
+                    status: "Not installed".to_owned(),
+                    title: "Install xremap".to_owned(),
+                    body: plain(
+                        "Keyloom remaps keys with xremap, a small open-source tool. Keyloom \
+                         installs it just for you, so no password is needed.",
                     ),
-                    link: "xremap project page",
-                    url: XREMAP_URL,
-                    after: ", then check again. You can keep mapping keys in the meantime."
-                        .to_owned(),
-                },
-                detail: Some(format!(
-                    "Download: {}\nSHA-256: {}\nInstalls to: {}\nLooked for an executable \
-                     named xremap on PATH first.",
-                    asset.url,
-                    asset.sha256,
-                    destination.display()
-                )),
-                action: fix("Download xremap"),
-            },
+                    next: fix("Install xremap", "Installing…"),
+                    keep: None,
+                    details: Details::about(linked(
+                        format!(
+                            "Keyloom downloads xremap {} from the project's releases on \
+                             GitHub, makes sure it is the exact file Keyloom expects, and \
+                             installs it in your home folder. To install xremap yourself \
+                             instead, use your distribution's package or the ",
+                            asset.version
+                        ),
+                        "xremap project page",
+                        XREMAP_URL,
+                        ", then check again.",
+                    ))
+                    .facts(format!(
+                        "Download: {}\nSHA-256: {}\nInstalls to: {destination}",
+                        asset.url, asset.sha256
+                    )),
+                }
+            }
             _ => StepView {
                 color: color_blocked(),
                 status: "Not installed".to_owned(),
-                title: "Install xremap first".to_owned(),
-                body: Body::Linked {
-                    before: "Keyloom does its remapping through xremap, and it isn't installed \
-                             yet. Install it from your distribution's packages or from the "
-                        .to_owned(),
-                    link: "xremap project page",
-                    url: XREMAP_URL,
-                    after: ", then check again. You can keep mapping keys in the meantime."
-                        .to_owned(),
-                },
-                detail: Some(format!(
-                    "Looked for an executable named xremap on PATH.\n{}\n{XREMAP_URL}",
+                title: "Install xremap".to_owned(),
+                body: linked(
+                    "Keyloom remaps keys with xremap, but can't install it on this system. \
+                     Install it from your distribution's packages or the ",
+                    "xremap project page",
+                    XREMAP_URL,
+                    ", then check again.",
+                ),
+                next: Next::Recheck,
+                keep: None,
+                details: Details::about(plain(format!(
+                    "Keyloom looked for xremap on your PATH and in ~/.local/bin. {}",
                     if install::asset().is_none() {
                         format!(
-                            "Keyloom has no xremap release to download for this processor ({}).",
+                            "It has no xremap download for this processor ({}).",
                             std::env::consts::ARCH
                         )
                     } else {
-                        "Keyloom could not find your home directory to download xremap into."
-                            .to_owned()
+                        "It couldn't find your home folder to install xremap into.".to_owned()
                     }
-                )),
-                action: None,
+                ))),
             },
         },
     }
 }
 
-/// The session as the details line names it.
+/// The session as the details name it.
 fn session_label(facts: &Facts) -> String {
     let desktop = facts
         .session
@@ -1511,201 +1622,256 @@ fn desktop_list(desktops: &[Desktop]) -> String {
         .join(", ")
 }
 
-/// What the xremap step says about application-specific remaps here,
-/// after `lead` (which ends with a space when it says anything).
-fn matching_body(facts: &Facts, lead: String) -> Body {
+/// What application-specific remaps need here, when it takes more than
+/// setup does: xremap's extension on GNOME's Wayland session, or a build
+/// that can ask this desktop which window is in front.
+fn matching_note(facts: &Facts) -> Body {
     match facts.app_matching() {
-        AppMatching::NotInstalled => {
-            if lead.is_empty() {
-                Body::None
-            } else {
-                Body::Plain(lead)
-            }
-        }
-        AppMatching::Supported(Desktop::Gnome) if !facts.session.x11 => Body::Linked {
-            before: format!(
-                "{lead}This build can tell which window is in front on GNOME once xremap's "
-            ),
-            link: "GNOME Shell extension",
-            url: XREMAP_GNOME_EXTENSION_URL,
-            after: " is installed and turned on; application-specific remaps depend on it."
-                .to_owned(),
-        },
-        AppMatching::Supported(desktop) => Body::Plain(format!(
-            "{lead}This build can tell which window is in front on {}, so application-specific \
-             remaps apply here.",
+        AppMatching::Supported(Desktop::Gnome) if !facts.session.x11 => linked(
+            "Application-specific remaps on GNOME also need xremap's ",
+            "GNOME Shell extension",
+            XREMAP_GNOME_EXTENSION_URL,
+            ", installed and turned on.",
+        ),
+        AppMatching::Unsupported { desktop, .. } => plain(format!(
+            "This xremap can't tell which application is in front on {}, so \
+             application-specific remaps won't work here.",
             desktop.label()
         )),
-        AppMatching::Unsupported { desktop, supports } => Body::Plain(format!(
-            "{lead}This build can't tell which window is in front on {} (it can on {}), so \
-             application-specific remaps won't apply here. The full build from the xremap \
-             project page can.",
-            desktop.label(),
-            desktop_list(&supports)
+        AppMatching::NotInstalled
+        | AppMatching::Supported(_)
+        | AppMatching::Unreported
+        | AppMatching::UnknownDesktop => Body::None,
+    }
+}
+
+/// What the details add about application-specific remaps.
+fn matching_detail(facts: &Facts) -> Body {
+    match facts.app_matching() {
+        AppMatching::Supported(desktop) => plain(format!(
+            "This build can tell which window is in front on {}, which \
+             application-specific remaps depend on.",
+            desktop.label()
         )),
-        AppMatching::Unreported => Body::Plain(format!(
-            "{lead}This xremap doesn't say which desktops it supports (newer releases do), so it picks \
-             on its own how to tell which window is in front; application-specific remaps \
-             depend on its build matching this desktop."
-        )),
-        AppMatching::UnknownDesktop => Body::Plain(format!(
-            "{lead}Keyloom couldn't tell which desktop this is, so xremap picks on its own how \
-             to ask which window is in front."
-        )),
+        AppMatching::Unsupported { supports, .. } => linked(
+            if supports.is_empty() {
+                "This build can't ask any desktop which window is in front. The full build \
+                 from the "
+                    .to_owned()
+            } else {
+                format!(
+                    "This build can only ask {} which window is in front. The full build \
+                     from the ",
+                    desktop_list(&supports)
+                )
+            },
+            "xremap project page",
+            XREMAP_URL,
+            " can ask every desktop.",
+        ),
+        AppMatching::Unreported => plain(
+            "This xremap doesn't list the desktops it can ask (newer releases do), so \
+             application-specific remaps depend on its build matching this desktop.",
+        ),
+        AppMatching::UnknownDesktop => plain(
+            "Keyloom couldn't tell which desktop this is, so xremap picks on its own how to \
+             ask which window is in front.",
+        ),
+        AppMatching::NotInstalled => Body::None,
+    }
+}
+
+/// A step that only waits for the user to log out and back in.
+fn after_login(title: &str, about: String) -> StepView {
+    StepView {
+        color: color_attention(),
+        status: "Takes effect at your next login".to_owned(),
+        title: title.to_owned(),
+        body: plain("It takes effect once you log out and back in, which you can do after setup."),
+        next: Next::Continue,
+        keep: None,
+        details: Details::about(plain(about)),
     }
 }
 
 fn group_view(facts: &Facts) -> StepView {
-    let user = facts.user.as_deref();
-    let command = format!("usermod -aG {INPUT_GROUP} {}", user.unwrap_or("$USER"));
     match facts.group {
         GroupCheck::Effective => StepView {
             color: color_ok(),
-            status: "Member of the input group".to_owned(),
-            title: "Keyloom can read your keyboard".to_owned(),
+            status: "Allowed".to_owned(),
+            title: "Keyboard access is allowed".to_owned(),
             body: Body::None,
-            detail: Some(format!(
-                "Group: {INPUT_GROUP} (membership in effect for this session)"
-            )),
-            action: None,
+            next: Next::Continue,
+            keep: None,
+            details: Details::about(plain(format!(
+                "You're in the {INPUT_GROUP} group, and it's in effect for this session."
+            ))),
         },
-        GroupCheck::NeedsLogin => StepView {
-            color: color_attention(),
-            status: "Takes effect at your next login".to_owned(),
-            title: "Log out and back in".to_owned(),
-            body: Body::Plain(
-                "You've been given permission to read keyboards, but this session started \
-                   before that. Log out and back in (or restart) and remapping starts on its \
-                   own afterwards."
-                    .to_owned(),
+        GroupCheck::NeedsLogin => after_login(
+            "Keyboard access is set up",
+            format!(
+                "You're in the {INPUT_GROUP} group, but this session started before you \
+                 joined it."
             ),
-            detail: Some(format!(
-                "Group: {INPUT_GROUP} (listed, but not in this session's groups yet)\n\
-                 Applied: {command}"
-            )),
-            action: None,
-        },
-        GroupCheck::NotMember => StepView {
-            color: color_attention(),
-            status: "No permission yet".to_owned(),
-            title: "Let Keyloom read your keyboard".to_owned(),
-            body: Body::Plain(format!(
-                "Keyloom needs permission to read your keyboard so xremap can see the keys \
-                 you press. Any program running as you gains the same ability, which is worth \
-                 knowing on a shared computer. The change takes effect the next time you log \
-                 in.{}",
-                if user.is_none() {
-                    " Keyloom could not work out your user name, so run the command in the \
-                     details yourself."
-                } else {
-                    ""
-                }
-            )),
-            detail: Some(format!(
-                "Adds {} to the {INPUT_GROUP} group, which may read /dev/input:\n{command}",
-                user.unwrap_or("your user")
-            )),
-            action: user.and(fix("Add me to the input group")),
-        },
+        ),
+        GroupCheck::NotMember => {
+            let (body, next, user) = match facts.user.as_deref() {
+                Some(user) => (
+                    "Keyloom needs permission to see the keys you press. You'll be asked for \
+                     your password.",
+                    fix("Allow keyboard access", APPROVAL),
+                    shell_word(user),
+                ),
+                None => (
+                    "Keyloom needs permission to see the keys you press, but couldn't work out \
+                     your user name to ask for it. Run the command under Show details, then \
+                     check again.",
+                    Next::Recheck,
+                    "$USER".to_owned(),
+                ),
+            };
+            StepView {
+                color: color_attention(),
+                status: "Not allowed yet".to_owned(),
+                title: "Allow keyboard access".to_owned(),
+                body: plain(body),
+                next,
+                keep: None,
+                details: Details::about(plain(format!(
+                    "Keyloom adds you to the {INPUT_GROUP} group, which may read every keyboard \
+                     and mouse. Any program you run gets the same access, which is worth \
+                     knowing on a shared computer. It takes effect the next time you log in. \
+                     To do it yourself, run this in a terminal:"
+                )))
+                .commands(format!("sudo usermod -aG {INPUT_GROUP} {user}")),
+            }
+        }
         GroupCheck::NoGroup => StepView {
             color: color_blocked(),
-            status: "Can't be set up here".to_owned(),
-            title: "This system has no input group".to_owned(),
-            body: Body::Plain(
-                "Keyboards are normally readable by a group that the system creates. \
-                   Without it, Keyloom cannot grant access; xremap's guide to running \
-                   without sudo describes the manual steps."
-                    .to_owned(),
+            status: "No input group".to_owned(),
+            title: "Keyboard access isn't available".to_owned(),
+            body: plain(
+                "This system has no input group, which Keyloom relies on to allow keyboard \
+                 access, so this step can't be done here.",
             ),
-            detail: Some(format!("No {INPUT_GROUP} group in /etc/group.")),
-            action: None,
+            next: Next::Continue,
+            keep: None,
+            details: Details::about(linked(
+                format!("There's no {INPUT_GROUP} group in /etc/group. xremap's "),
+                "guide to running without sudo",
+                XREMAP_NO_SUDO_URL,
+                " describes other ways to allow access.",
+            )),
         },
     }
 }
 
 fn uinput_view(facts: &Facts) -> StepView {
-    let rule = format!("Rule: {RULE}\n→ {RULES_PATH}");
+    let by_hand = |situation: String| {
+        Details::about(plain(format!(
+            "{situation} Keyloom installs a udev rule that lets you use {UINPUT}, loads the \
+             uinput module now and at every startup, and reloads udev. To do it yourself, run \
+             these in a terminal:"
+        )))
+        .commands(uinput_commands())
+    };
+    let asks = || {
+        plain(
+            "Keyloom types your remapped keys on a virtual keyboard, which needs a one-time \
+             change to the system. You'll be asked for your password.",
+        )
+    };
     match facts.uinput {
         UinputCheck::Writable => StepView {
             color: color_ok(),
-            status: "Ready".to_owned(),
-            title: "Keyloom can create a virtual keyboard".to_owned(),
+            status: "Allowed".to_owned(),
+            title: "Virtual keyboard is allowed".to_owned(),
             body: Body::None,
-            detail: Some(format!("Device: {UINPUT} (writable from this session)")),
-            action: None,
+            next: Next::Continue,
+            keep: None,
+            details: Details::about(plain(format!("This session can use {UINPUT}."))),
         },
         UinputCheck::Missing { .. } => StepView {
             color: color_attention(),
-            status: "Not enabled".to_owned(),
-            title: "Enable the virtual keyboard".to_owned(),
-            body: Body::Plain(
-                "Remapped keys are typed on a virtual keyboard, and this system hasn't \
-                   enabled the device for it yet. Keyloom can enable it now and keep it \
-                   available after every restart."
+            status: "Not set up".to_owned(),
+            title: "Allow the virtual keyboard".to_owned(),
+            body: asks(),
+            next: fix("Allow virtual keyboard", APPROVAL),
+            keep: None,
+            details: by_hand(
+                "The uinput module isn't loaded, so there's no virtual keyboard device yet."
                     .to_owned(),
             ),
-            detail: Some(format!(
-                "Device: {UINPUT} (missing: the uinput module is not loaded)\n\
-                 Loads the module, registers it in /etc/modules-load.d/uinput.conf, \
-                 and installs the udev rule.\n{rule}"
-            )),
-            action: fix("Set up the virtual keyboard"),
         },
         UinputCheck::NotWritable {
             rule_installed: false,
         } => StepView {
             color: color_attention(),
-            status: "No permission yet".to_owned(),
-            title: "Allow access to the virtual keyboard".to_owned(),
-            body: Body::Plain(
-                "Remapped keys are typed on a virtual keyboard, and only the administrator \
-                   may use it right now. A small system rule grants you access."
-                    .to_owned(),
-            ),
-            detail: Some(format!(
-                "Device: {UINPUT} (not writable)\nInstalls the udev rule and reloads \
-                 udev.\n{rule}"
+            status: "Not allowed yet".to_owned(),
+            title: "Allow the virtual keyboard".to_owned(),
+            body: asks(),
+            next: fix("Allow virtual keyboard", APPROVAL),
+            keep: None,
+            details: by_hand(format!(
+                "Only the administrator can use {UINPUT} right now."
             )),
-            action: fix("Install the udev rule"),
         },
+        UinputCheck::NotWritable {
+            rule_installed: true,
+        } if facts.step_needs_login(Step::Uinput) => after_login(
+            "Virtual keyboard is set up",
+            format!(
+                "The rule is installed ({RULES_PATH}). It lets you use {UINPUT} through the \
+                 {INPUT_GROUP} group, which this session doesn't have yet."
+            ),
+        ),
         UinputCheck::NotWritable {
             rule_installed: true,
         } => StepView {
             color: color_attention(),
-            status: "Rule installed, not in effect yet".to_owned(),
-            title: "Access isn't in effect yet".to_owned(),
-            body: Body::Plain(
-                "The access rule is installed, but this session can't use the virtual \
-                   keyboard yet. That usually takes effect at your next login; you can also \
-                   apply the rule again now."
-                    .to_owned(),
+            status: "Not in effect".to_owned(),
+            title: "Allow the virtual keyboard".to_owned(),
+            body: plain(
+                "A system rule for the virtual keyboard is installed, but this session still \
+                 can't use it. Keyloom can set it up again; you'll be asked for your password.",
             ),
-            detail: Some(format!("Device: {UINPUT} (not writable yet)\n{rule}")),
-            action: fix("Apply the rule again"),
+            next: fix("Set up again", APPROVAL),
+            keep: None,
+            details: by_hand(format!(
+                "A rule for {UINPUT} is installed, but this session can't write to it."
+            )),
         },
     }
 }
 
 fn service_view(facts: &Facts) -> StepView {
     let config = facts.config.as_ref().map_or_else(
-        || "its configuration".to_owned(),
+        || "Keyloom's remaps".to_owned(),
         |path| path.display().to_string(),
     );
     let unit_path = service::unit_path().map_or_else(
         || service::UNIT.to_owned(),
         |path| path.display().to_string(),
     );
-    // The unit Keyloom would install, as the user will find it.
-    let planned = || {
-        let (Some(binary), Some(config)) = (facts.xremap_path(), facts.config.as_deref()) else {
-            return None;
-        };
-        Some(format!(
-            "Unit: {unit_path}\nExecStart={}",
-            crate::setup::exec_start_of(&service::unit_file(binary, config, facts.launch()))
-        ))
+    let unit = service::UNIT;
+    let installed = || Details::default().facts(format!("Service: {unit_path}\nRemaps: {config}"));
+    let systemctl = |what: &str, args: &str| {
+        Details::about(plain(format!("{what} To do it yourself, run:")))
+            .commands(format!("systemctl --user {args} {unit}"))
     };
-    let installed = || Some(format!("Unit: {unit_path}\nRemaps: {config}"));
+    let theirs = |path: Option<&Path>, exec_start: &str| {
+        format!(
+            "Your service: {}\nExecStart={}",
+            path.map_or_else(|| unit.to_owned(), |path| path.display().to_string()),
+            if exec_start.is_empty() {
+                "(could not be read)"
+            } else {
+                exec_start
+            }
+        )
+    };
+    let installable = facts.xremap_path().is_some() && facts.config.is_some();
+
     match &facts.unit {
         UnitCheck::Keyloom {
             active: true,
@@ -1713,40 +1879,146 @@ fn service_view(facts: &Facts) -> StepView {
         } => StepView {
             color: color_ok(),
             status: "Running".to_owned(),
-            title: "Remapping is running".to_owned(),
+            title: "Remapping is on".to_owned(),
             body: Body::None,
-            detail: installed(),
-            action: None,
+            next: Next::Continue,
+            keep: None,
+            details: installed(),
         },
+        UnitCheck::Keyloom {
+            active: false,
+            enabled: true,
+        } if !facts.has_effective_access() => {
+            // Remapping starts by itself once xremap may use the
+            // keyboards; say whether a login is all that takes.
+            let login = [Step::InputGroup, Step::Uinput]
+                .iter()
+                .all(|step| facts.is_step_settled(*step));
+            StepView {
+                color: color_attention(),
+                status: if login {
+                    "Starts at your next login"
+                } else {
+                    "Waiting for keyboard access"
+                }
+                .to_owned(),
+                title: "Remapping is set up".to_owned(),
+                body: plain(if login {
+                    "It starts on its own once you log out and back in."
+                } else {
+                    "It starts on its own once Keyloom may read your keyboard and use the \
+                     virtual keyboard."
+                }),
+                next: Next::Continue,
+                keep: None,
+                details: installed(),
+            }
+        }
+        UnitCheck::Foreign {
+            reads_config: true,
+            active: true,
+            exec_start,
+            path,
+        } => StepView {
+            color: color_ok(),
+            status: "Running (your own service)".to_owned(),
+            title: "Your xremap service works with Keyloom".to_owned(),
+            body: plain(
+                "It already uses Keyloom's remaps, so Keyloom leaves it alone and restarts it \
+                 whenever your remaps change.",
+            ),
+            next: Next::Continue,
+            keep: None,
+            details: Details::default().facts(theirs(path.as_deref(), exec_start)),
+        },
+        UnitCheck::Foreign {
+            reads_config: true,
+            active: false,
+            ..
+        } => StepView {
+            color: color_attention(),
+            status: "Not running (your own service)".to_owned(),
+            title: "Start your xremap service".to_owned(),
+            body: plain(
+                "It already uses Keyloom's remaps, but it isn't running. Keyloom leaves your \
+                 service as it is and only starts it.",
+            ),
+            next: fix("Start service", "Starting…"),
+            keep: None,
+            details: systemctl(
+                "Keyloom only starts your service; it never changes it.",
+                "start",
+            ),
+        },
+        UnitCheck::Unavailable => StepView {
+            color: color_blocked(),
+            status: "No systemd user session".to_owned(),
+            title: "Remapping can't be turned on here".to_owned(),
+            body: plain(
+                "Keyloom runs remapping as a systemd user service, and this session doesn't \
+                 have one.",
+            ),
+            next: Next::Continue,
+            keep: None,
+            details: match (facts.xremap_path(), facts.config.as_deref()) {
+                (Some(binary), Some(config)) => Details::about(plain(
+                    "You can run xremap on Keyloom's remaps yourself instead, for example from \
+                     your desktop's autostart:",
+                ))
+                .commands(xremap_command(binary, config, facts.launch())),
+                _ => Details::about(plain(
+                    "Once xremap is installed, you can run it on Keyloom's remaps yourself.",
+                )),
+            },
+        },
+        // Every fix below writes Keyloom's service, which needs xremap
+        // to run and a home to keep the remaps in.
+        _ if !installable => {
+            if facts.xremap_path().is_none() {
+                StepView {
+                    color: color_attention(),
+                    status: "Needs xremap".to_owned(),
+                    title: "Turn on remapping".to_owned(),
+                    body: plain("Remapping runs through xremap, so install xremap first."),
+                    next: Next::Visit(Step::Xremap, "Back to xremap"),
+                    keep: None,
+                    details: Details::about(plain(
+                        "Keyloom's service runs xremap on your remaps, so it can only be set up \
+                         once xremap is installed.",
+                    )),
+                }
+            } else {
+                StepView {
+                    color: color_blocked(),
+                    status: "No home folder".to_owned(),
+                    title: "Remapping can't be turned on here".to_owned(),
+                    body: plain("Keyloom couldn't find your home folder to keep your remaps in."),
+                    next: Next::Continue,
+                    keep: None,
+                    details: Details::about(plain(
+                        "Keyloom keeps your remaps under $XDG_CONFIG_HOME, or ~/.config when \
+                         that isn't set, and neither could be found.",
+                    )),
+                }
+            }
+        }
         UnitCheck::Keyloom {
             active: true,
             enabled: false,
         } => StepView {
             color: color_attention(),
-            status: "Running, but not at login".to_owned(),
-            title: "Start remapping at login".to_owned(),
-            body: Body::Plain(
-                "Remapping is running now, but it won't start on its own the next time \
-                   you log in."
-                    .to_owned(),
+            status: "Doesn't start at login".to_owned(),
+            title: "Keep remapping on".to_owned(),
+            body: plain(
+                "Remapping is running now, but it won't start on its own the next time you \
+                 log in.",
             ),
-            detail: installed(),
-            action: fix("Enable at login"),
-        },
-        UnitCheck::Keyloom {
-            active: false,
-            enabled: true,
-        } if !facts.has_effective_access() => StepView {
-            color: color_attention(),
-            status: "Starts after your next login".to_owned(),
-            title: "Remapping is ready".to_owned(),
-            body: Body::Plain(
-                "Everything is installed. Remapping starts on its own once you've logged \
-                   out and back in."
-                    .to_owned(),
+            next: fix("Start at login", "Working…"),
+            keep: None,
+            details: systemctl(
+                "Keyloom sets its service to start whenever you log in.",
+                "enable",
             ),
-            detail: installed(),
-            action: None,
         },
         UnitCheck::Keyloom {
             active: false,
@@ -1754,77 +2026,61 @@ fn service_view(facts: &Facts) -> StepView {
         } => StepView {
             color: color_attention(),
             status: "Not running".to_owned(),
-            title: "Remapping isn't running".to_owned(),
-            body: Body::Plain(
-                "Remapping is installed but stopped: paused from the header, or it failed \
-                   to start. Starting it applies your remaps."
-                    .to_owned(),
+            title: "Turn remapping back on".to_owned(),
+            body: plain(
+                "Remapping is set up but stopped: it was paused from the header, or it failed \
+                 to start.",
             ),
-            detail: installed(),
-            action: fix("Start remapping"),
+            next: fix("Start remapping", "Starting…"),
+            keep: None,
+            details: systemctl(
+                &format!(
+                    "Keyloom starts its service, which runs xremap on your remaps. If it fails \
+                     again, journalctl --user -u {unit} shows why."
+                ),
+                "start",
+            ),
         },
         UnitCheck::Keyloom {
             active: false,
             enabled: false,
         } => StepView {
             color: color_attention(),
-            status: "Installed but turned off".to_owned(),
-            title: "Turn remapping on".to_owned(),
-            body: Body::Plain(
-                "Remapping is installed but neither running nor set to start when you log \
-                   in."
-                .to_owned(),
-            ),
-            detail: installed(),
-            action: fix("Enable and start"),
+            status: "Turned off".to_owned(),
+            title: "Turn on remapping".to_owned(),
+            body: plain("Remapping is set up but turned off, and it won't start when you log in."),
+            next: fix("Turn on remapping", "Turning on…"),
+            keep: None,
+            // Like the fix, the command only starts xremap now where it
+            // may already use the keyboards; otherwise it would fail
+            // until the next login.
+            details: if facts.has_effective_access() {
+                systemctl(
+                    "Keyloom starts its service now and whenever you log in.",
+                    "enable --now",
+                )
+            } else {
+                systemctl(
+                    "Keyloom sets its service to start whenever you log in; remapping begins \
+                     once keyboard access is in effect.",
+                    "enable",
+                )
+            },
         },
         UnitCheck::Stale { .. } => StepView {
             color: color_attention(),
-            status: "Needs updating".to_owned(),
+            status: "Needs an update".to_owned(),
             title: "Update remapping".to_owned(),
-            body: Body::Plain(
-                "The way remapping was set up doesn't match this version of Keyloom. \
-                   Updating rewrites it and restarts remapping."
-                    .to_owned(),
+            body: plain(
+                "Remapping was set up for a different xremap or desktop than this one. \
+                 Updating fixes that and restarts remapping; no password is needed.",
             ),
-            detail: planned(),
-            action: fix("Update service"),
-        },
-        UnitCheck::Foreign {
-            reads_config: true,
-            active,
-            exec_start,
-            path,
-            ..
-        } => StepView {
-            color: if *active {
-                color_ok()
-            } else {
-                color_attention()
-            },
-            status: if *active {
-                "Running (set up by you)".to_owned()
-            } else {
-                "Not running (set up by you)".to_owned()
-            },
-            title: if *active {
-                "Your own setup already works with Keyloom".to_owned()
-            } else {
-                "Start your remapping service".to_owned()
-            },
-            body: Body::Plain(
-                "A remapping service you set up yourself already applies Keyloom's remaps, \
-                   so Keyloom leaves it alone and only restarts it when your remaps change."
-                    .to_owned(),
-            ),
-            detail: Some(format!(
-                "Unit: {}\nExecStart={exec_start}",
-                path.as_ref().map_or_else(
-                    || service::UNIT.to_owned(),
-                    |path| path.display().to_string()
-                )
-            )),
-            action: if *active { None } else { fix("Start service") },
+            next: fix("Update remapping", "Updating…"),
+            keep: None,
+            details: Details::about(plain(format!(
+                "Keyloom rewrites its service at {unit_path} for the xremap and desktop you have \
+                 now, and restarts it. The service runs xremap on {config}."
+            ))),
         },
         UnitCheck::Foreign {
             reads_config: false,
@@ -1834,65 +2090,65 @@ fn service_view(facts: &Facts) -> StepView {
         } => StepView {
             color: color_attention(),
             status: "Doesn't use Keyloom's remaps".to_owned(),
-            title: "An existing setup doesn't use Keyloom's remaps".to_owned(),
-            body: Body::Plain(
-                "A remapping service that Keyloom didn't set up already exists, and it \
-                   doesn't use Keyloom's remaps, so mappings made here have no effect. \
-                   Replacing it installs Keyloom's own (the existing file is backed up beside \
-                   it), but whatever it runs now stops being applied. Leave it if you'd \
-                   rather manage xremap yourself."
-                    .to_owned(),
+            title: "Replace your xremap service?".to_owned(),
+            body: plain(
+                "You already have an xremap service, but it doesn't use Keyloom's remaps, so \
+                 changes made here won't apply. Keyloom can replace it and keep yours as a \
+                 backup.",
             ),
-            detail: Some(format!(
-                "Unit: {}\nExecStart={}\nKeyloom's remaps: {config}",
-                path.as_ref().map_or_else(
-                    || service::UNIT.to_owned(),
-                    |path| path.display().to_string()
-                ),
-                if exec_start.is_empty() {
-                    "(could not be read)"
-                } else {
-                    exec_start
-                }
-            )),
-            action: facts.service_action().and(fix("Replace service")),
+            next: fix("Replace service", "Replacing…"),
+            keep: Some("Keep mine"),
+            details: Details::about(plain(format!(
+                "Keeping yours leaves Keyloom's remaps unused. To keep it and use them too, add \
+                 {config} to its xremap command after its own configuration file, restart it, \
+                 and check again."
+            )))
+            .facts(theirs(path.as_deref(), exec_start)),
         },
         UnitCheck::Missing => StepView {
             color: color_attention(),
-            status: "Not installed".to_owned(),
-            title: "Set up remapping".to_owned(),
-            body: Body::Plain(format!(
-                "Keyloom installs a small background service that applies your remaps, \
-                 starts when you log in, and restarts whenever a mapping changes. No \
-                 password is needed.{}",
-                if facts.service_action().is_none() {
-                    " Install xremap first."
-                } else {
-                    ""
-                }
-            )),
-            detail: planned(),
-            action: facts.service_action().and(fix("Install service")),
-        },
-        UnitCheck::Unavailable => StepView {
-            color: color_blocked(),
-            status: "Can't be set up here".to_owned(),
-            title: "Keyloom can't manage remapping here".to_owned(),
-            body: Body::Plain(
-                "Keyloom runs remapping as a background service through systemd, and this \
-                   session has none."
-                    .to_owned(),
+            status: "Not set up".to_owned(),
+            title: "Turn on remapping".to_owned(),
+            body: plain(
+                "Keyloom runs xremap in the background whenever you're logged in, so your \
+                 remaps work in every application. No password is needed.",
             ),
-            detail: Some(format!(
-                "No systemd user session. You can run xremap yourself on {config}."
-            )),
-            action: None,
+            next: fix("Turn on remapping", "Turning on…"),
+            keep: None,
+            details: Details {
+                saves_service: true,
+                ..Details::about(plain(format!(
+                    "Keyloom keeps its service at {unit_path}. It runs xremap on {config}, \
+                     starts whenever you log in, and restarts whenever your remaps change. To \
+                     turn it on yourself, save the file first; setup then shows the command \
+                     that starts it."
+                )))
+            },
         },
     }
 }
 
+/// The command line the service runs, for a shell.
+fn xremap_command(binary: &Path, config: &Path, launch: service::Launch) -> String {
+    let mut command = shell_word(&binary.to_string_lossy());
+    if let Some(desktop) = launch.desktop {
+        command.push_str(" --desktop ");
+        command.push_str(desktop.flag());
+    }
+    command.push_str(" --watch ");
+    command.push_str(&shell_word(&config.to_string_lossy()));
+    command
+}
+
 /// Every page of setup, for the progress dots.
 const SETUP_PAGES: usize = Step::ALL.len() + 2;
+
+/// Room a setup page keeps below its content: the progress dots, the
+/// buttons, and the space around them.
+const SETUP_FOOTER: f32 = 84.0;
+
+/// Padding inside the dialog cards.
+const CARD_PADDING: f32 = 28.0;
 
 fn page_index(page: SetupPage) -> usize {
     match page {
@@ -1902,23 +2158,32 @@ fn page_index(page: SetupPage) -> usize {
     }
 }
 
-/// The row of progress dots under a setup page.
-fn progress_dots(current: usize) -> Element<'static, Message> {
+/// The row of progress dots under a setup page. A step setup passes
+/// over, having nothing to ask, shows as done.
+fn progress_dots(current: usize, facts: Option<&Facts>) -> Element<'static, Message> {
     let mut dots = widget::row::with_capacity(SETUP_PAGES)
         .spacing(10)
         .align_y(Alignment::Center);
     for index in 0..SETUP_PAGES {
         let active = index == current;
+        let done = index
+            .checked_sub(1)
+            .and_then(|step| Step::ALL.get(step))
+            .zip(facts)
+            .is_some_and(|(step, facts)| !facts.wants_attention(*step));
+        let color = if active {
+            accent()
+        } else if done {
+            accent().scale_alpha(0.45)
+        } else {
+            white(0.16)
+        };
         dots = dots.push(
             container(widget::Space::new())
                 .width(Length::Fixed(if active { 18.0 } else { 6.0 }))
                 .height(Length::Fixed(6.0))
                 .class(ctheme::Container::custom(move |_| container::Style {
-                    background: Some(if active {
-                        accent().into()
-                    } else {
-                        white(0.16).into()
-                    }),
+                    background: Some(color.into()),
                     border: Border {
                         radius: 3.0.into(),
                         ..Border::default()
@@ -1953,10 +2218,38 @@ fn status_line(color: Color, text: String) -> Element<'static, Message> {
         .into()
 }
 
-/// Commands and paths, set apart from the prose.
+/// Prose in the muted body color, with its link when it has one.
+fn prose(body: Body, size: f32) -> Option<Element<'static, Message>> {
+    match body {
+        Body::None => None,
+        Body::Plain(text) => Some(txt(text, size, muted()).width(Length::Fill).into()),
+        Body::Linked {
+            before,
+            link,
+            url,
+            after,
+        } => Some(
+            rich_text([
+                span(before),
+                span(link).link(url).color(accent()).underline(true),
+                span(after),
+            ])
+            .on_link_click(Message::OpenUrl)
+            .size(size)
+            .width(Length::Fill)
+            .class(ctheme::Text::Color(muted()))
+            .into(),
+        ),
+    }
+}
+
+/// Commands, files, and paths, set apart from the prose and selectable.
 fn detail_block(text: String) -> Element<'static, Message> {
     container(
-        mono(text, 11.5, fg())
+        widget::selectable_text(text)
+            .font(Font::MONOSPACE)
+            .size(11.5)
+            .class(ctheme::Text::Color(fg()))
             .width(Length::Fill)
             .wrapping(Wrapping::WordOrGlyph),
     )
@@ -1996,21 +2289,47 @@ fn primary(label: &str, message: Option<Message>) -> Element<'static, Message> {
         .into()
 }
 
-/// The first-run setup wizard: a welcome page, one page per system
-/// step, and a summary. Clicking outside does nothing: a stray click
-/// must not skip setup, which would keep it from opening on its own
-/// again. "Skip for now", Finish, and Escape are the ways out.
-pub fn setup_dialog(setup: &Setup) -> Element<'_, Message> {
-    let content = match setup.page {
-        SetupPage::Welcome => welcome_page(),
-        SetupPage::Step(step) => step_page(setup, step),
-        SetupPage::Finish => finish_page(setup),
-    };
-    modal(dialog_card(content), None)
+/// A setup page: its content, which scrolls when the window is too
+/// short for it, above the progress dots and the buttons, which stay in
+/// view. `height` is what the dialog may take up.
+fn setup_frame<'a>(
+    content: impl Into<Element<'a, Message>>,
+    page: SetupPage,
+    facts: Option<&Facts>,
+    buttons: impl Into<Element<'a, Message>>,
+    height: f32,
+) -> Element<'a, Message> {
+    let room = (height - 2.0 * CARD_PADDING - SETUP_FOOTER).max(120.0);
+    widget::column::with_capacity(3)
+        .spacing(16)
+        .push(container(widget::scrollable(content).spacing(8)).max_height(room))
+        .push(progress_dots(page_index(page), facts))
+        .push(buttons)
+        .into()
 }
 
-fn welcome_page() -> Element<'static, Message> {
-    widget::column::with_capacity(6)
+/// The first-run setup wizard: a welcome page, one page per system
+/// step, and a summary. Each step page's one accented button does what
+/// the step needs and moves on; steps already in order are passed
+/// over. Clicking outside does nothing: a stray click must not skip
+/// setup, which would keep it from opening on its own again. "Set up
+/// later", Finish, and Escape are the ways out.
+pub fn setup_dialog<'a>(setup: &'a Setup) -> Element<'a, Message> {
+    // Pages learn the height they may use, so a tall one (details in a
+    // short window) scrolls instead of pushing its buttons out of view.
+    let page = widget::responsive(move |space| -> Element<'a, Message> {
+        let content = match setup.page {
+            SetupPage::Welcome => welcome_page(setup, space.height),
+            SetupPage::Step(step) => step_page(setup, step, space.height),
+            SetupPage::Finish => finish_page(setup, space.height),
+        };
+        container(dialog_card(content)).center(Length::Fill).into()
+    });
+    modal(page.into(), None)
+}
+
+fn welcome_page(setup: &Setup, height: f32) -> Element<'_, Message> {
+    let content = widget::column::with_capacity(3)
         .spacing(16)
         .push(eyebrow("First-run setup"))
         .push(txt_semibold("Make your keyboard your own", 24.0, fg()))
@@ -2022,29 +2341,38 @@ fn welcome_page() -> Element<'static, Message> {
                 muted(),
             )
             .width(Length::Fill),
-        )
-        .push(progress_dots(0))
-        .push(
-            widget::row::with_capacity(3)
-                .spacing(10)
-                .push(ghost("Skip for now", Some(Message::SetupSkip)))
-                .push(crate::ui::hspace())
-                .push(primary(
-                    "Start setup",
-                    Some(Message::SetupPage(SetupPage::Step(Step::Xremap))),
-                )),
-        )
-        .into()
+        );
+    let buttons = widget::row::with_capacity(3)
+        .spacing(10)
+        .push(ghost("Set up later", Some(Message::SetupLater)))
+        .push(crate::ui::hspace())
+        .push(primary("Start setup", Some(Message::SetupContinue)));
+    setup_frame(
+        content,
+        SetupPage::Welcome,
+        setup.facts.as_ref(),
+        buttons,
+        height,
+    )
 }
 
-fn step_page(setup: &Setup, step: Step) -> Element<'_, Message> {
+fn step_page(setup: &Setup, step: Step, height: f32) -> Element<'_, Message> {
     let view = setup
         .facts
         .as_ref()
         .map_or_else(|| checking(step), |facts| step_view(facts, step));
-    let busy = setup.busy == Some(step);
+    let error = setup
+        .error
+        .as_ref()
+        .filter(|(failed, _)| *failed == step)
+        .map(|(_, error)| error);
+    // Without pkexec, asking again cannot work: the way on is by hand.
+    let next = match (view.next, error) {
+        (Next::Fix { .. }, Some(ActionError::NoPolkit)) => Next::Recheck,
+        (next, _) => next,
+    };
 
-    let mut column = widget::column::with_capacity(9)
+    let mut content = widget::column::with_capacity(7)
         .spacing(16)
         .push(eyebrow(&format!(
             "First-run setup · Step {} of {}",
@@ -2052,15 +2380,14 @@ fn step_page(setup: &Setup, step: Step) -> Element<'_, Message> {
             Step::ALL.len()
         )))
         .push(txt_semibold(view.title, 24.0, fg()));
-    // Paths, units, and commands stay behind a toggle beside the
-    // status: most people never need them, and the page reads better
-    // without them.
+    // What the step changes, and how to do it by hand, stay behind a
+    // toggle beside the status: most people never need them.
     let mut status = widget::row::with_capacity(3)
         .spacing(10)
         .width(Length::Fill)
         .align_y(Alignment::Center)
         .push(status_line(view.color, view.status));
-    if view.detail.is_some() {
+    if !view.details.is_empty() {
         status = status.push(crate::ui::hspace()).push(ghost(
             if setup.details {
                 "Hide details"
@@ -2070,92 +2397,153 @@ fn step_page(setup: &Setup, step: Step) -> Element<'_, Message> {
             Some(Message::SetupToggleDetails),
         ));
     }
-    column = column.push(status);
-    match view.body {
-        Body::None => {}
-        Body::Plain(text) => {
-            column = column.push(txt(text, 14.0, muted()).width(Length::Fill));
-        }
-        Body::Linked {
-            before,
-            link,
-            url,
-            after,
-        } => {
-            column = column.push(
-                rich_text([
-                    span(before),
-                    span(link).link(url).color(accent()).underline(true),
-                    span(after),
-                ])
-                .on_link_click(Message::OpenUrl)
-                .size(14)
-                .width(Length::Fill)
-                .class(ctheme::Text::Color(muted())),
-            );
-        }
+    content = content.push(status);
+    if let Some(body) = prose(view.body, 14.0) {
+        content = content.push(body);
     }
-    if setup.details
-        && let Some(detail) = view.detail
-    {
-        column = column.push(detail_block(detail));
-    }
-    if let Some((_, error)) = setup.error.as_ref().filter(|(failed, _)| *failed == step) {
-        column = column.push(
+    // A failure stays above the details it opens, where it is seen.
+    if let Some(error) = error {
+        content = content.push(
             txt(
-                format!("Could not finish this step: {error}"),
+                format!("Couldn't finish this step: {error}"),
                 13.0,
                 color_blocked(),
             )
             .width(Length::Fill),
         );
     }
-
-    // The fix on offer, then a way to look again after doing something
-    // by hand. Nothing else shares this row, so it cannot outgrow the
-    // card.
-    let mut actions = widget::row::with_capacity(2)
-        .spacing(10)
-        .align_y(Alignment::Center);
-    if let Some(label) = view.action {
-        // The xremap step's only fix is a download, which is worth
-        // naming while it runs.
-        let working = match step {
-            Step::Xremap => "Downloading…",
-            Step::InputGroup | Step::Uinput | Step::Service => "Working…",
-        };
-        actions = actions.push(primary(
-            if busy { working } else { label },
-            (!busy).then_some(Message::SetupAct(step)),
+    if setup.details && !view.details.is_empty() {
+        content = content.push(details_panel(
+            setup,
+            step,
+            next,
+            view.details,
+            view.keep.is_none(),
         ));
     }
-    actions = actions.push(ghost(
-        if setup.probing {
-            "Checking…"
-        } else {
-            "Check again"
-        },
-        (!setup.probing).then_some(Message::SetupRecheck),
-    ));
-    column = column.push(actions);
 
-    column = column.push(progress_dots(page_index(SetupPage::Step(step))));
     let back = step.previous().map_or(SetupPage::Welcome, SetupPage::Step);
-    let next = step.next().map_or(SetupPage::Finish, SetupPage::Step);
-    column
-        .push(
-            widget::row::with_capacity(4)
-                .spacing(10)
-                .push(ghost("Skip for now", Some(Message::SetupSkip)))
-                .push(crate::ui::hspace())
-                .push(ghost("Back", Some(Message::SetupPage(back))))
-                .push(primary("Continue", Some(Message::SetupPage(next)))),
-        )
-        .into()
+    let mut buttons = widget::row::with_capacity(5)
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .push(ghost("Set up later", Some(Message::SetupLater)))
+        .push(crate::ui::hspace())
+        .push(ghost("Back", Some(Message::SetupPage(back))));
+    if let Some(keep) = view.keep {
+        buttons = buttons.push(ghost(
+            keep,
+            (!setup.is_working(step)).then_some(Message::SetupContinue),
+        ));
+    }
+    buttons = buttons.push(main_button(setup, step, next));
+    setup_frame(
+        content,
+        SetupPage::Step(step),
+        setup.facts.as_ref(),
+        buttons,
+        height,
+    )
 }
 
-fn finish_page(setup: &Setup) -> Element<'_, Message> {
+/// The one accented button on a step page.
+fn main_button(setup: &Setup, step: Step, next: Next) -> Element<'static, Message> {
+    let (label, message) = match next {
+        Next::Wait => ("Checking…", None),
+        Next::Fix { working, .. } if setup.is_working(step) => (working, None),
+        // One fix at a time.
+        Next::Fix { label, .. } => (
+            label,
+            (!setup.is_acting()).then_some(Message::SetupAct(step)),
+        ),
+        Next::Recheck if setup.probing => ("Checking…", None),
+        Next::Recheck => (
+            "Check again",
+            (!setup.is_acting()).then_some(Message::SetupRecheck),
+        ),
+        Next::Visit(target, label) => (label, Some(Message::SetupPage(SetupPage::Step(target)))),
+        Next::Continue => ("Continue", Some(Message::SetupContinue)),
+    };
+    primary(label, message)
+}
+
+/// What "Show details" reveals: what the step changes, how to do it by
+/// hand, a way to look again afterwards, and a way past the step for
+/// those who would rather not have Keyloom do it.
+fn details_panel(
+    setup: &Setup,
+    step: Step,
+    next: Next,
+    details: Details,
+    can_skip: bool,
+) -> Element<'static, Message> {
+    let mut panel = widget::column::with_capacity(4)
+        .spacing(12)
+        .push(crate::ui::keyboard_view::rule(white(0.08)));
+    if let Some(about) = prose(details.about, 13.0) {
+        panel = panel.push(about);
+    }
+    let copy = details.text.clone().filter(|_| details.copyable);
+    if let Some(text) = details.text {
+        panel = panel.push(detail_block(text));
+    }
+
+    let mut actions = widget::row::with_capacity(5)
+        .spacing(10)
+        .align_y(Alignment::Center);
+    if details.saves_service {
+        actions = actions.push(ghost(
+            if setup.saving {
+                "Saving…"
+            } else {
+                "Save service file"
+            },
+            (!setup.probing && !setup.is_acting()).then_some(Message::SetupSaveService),
+        ));
+    }
+    if let Some(text) = copy {
+        actions = actions.push(ghost(
+            if setup.copied { "Copied" } else { "Copy" },
+            Some(Message::SetupCopy(text)),
+        ));
+    }
+    // The main button already looks again where that is the way on.
+    if next != Next::Recheck {
+        actions = actions.push(ghost(
+            if setup.probing {
+                "Checking…"
+            } else {
+                "Check again"
+            },
+            (!setup.probing && !setup.is_acting()).then_some(Message::SetupRecheck),
+        ));
+    }
+    if can_skip && matches!(next, Next::Fix { .. } | Next::Recheck | Next::Visit(..)) {
+        actions = actions.push(crate::ui::hspace()).push(ghost(
+            "Skip this step",
+            (!setup.is_working(step)).then_some(Message::SetupContinue),
+        ));
+    }
+    panel.push(actions).into()
+}
+
+/// Where an unfinished setup picks up again: the first step the user
+/// can still do something about.
+fn resume_step(facts: &Facts) -> Option<Step> {
+    if facts.is_configured() {
+        return None;
+    }
+    Step::ALL.into_iter().find(|step| {
+        facts.wants_attention(*step)
+            && matches!(
+                step_view(facts, *step).next,
+                Next::Fix { .. } | Next::Recheck | Next::Visit(..)
+            )
+    })
+}
+
+fn finish_page(setup: &Setup, height: f32) -> Element<'_, Message> {
     let facts = setup.facts.as_ref();
+    let resume = facts.and_then(resume_step);
     let (title, body) = match facts {
         None => (
             "Checking your system…",
@@ -2163,53 +2551,81 @@ fn finish_page(setup: &Setup) -> Element<'_, Message> {
         ),
         Some(facts) if facts.is_all_ok() => (
             "You're all set",
-            "Click any key on the keyboard to choose what it should do. Mappings save and \
-             apply on their own, and the Tester shows what your keyboard sends.",
+            "Click any key on the keyboard to choose what it does. Your changes save and apply \
+             on their own.",
         ),
         Some(facts) if facts.is_configured() => (
             "Almost there",
-            "Log out and back in to finish. Remapping starts on its own afterwards, and \
-             mappings you make now are kept.",
+            "Log out and back in to finish. Remapping starts on its own after that, and \
+             anything you set up now is kept.",
+        ),
+        Some(_) if resume.is_some() => (
+            "Setup isn't finished",
+            "Some steps still need you. Continue now, or come back any time from the ⋯ menu. \
+             Anything you've set up is kept.",
         ),
         Some(_) => (
             "Setup isn't finished",
-            "Some steps still need attention. Go back to them now, or return to setup any \
-             time from the ⋯ menu or the remapping status in the header. Mappings you make \
-             are saved and apply once remapping runs.",
+            "Some steps can't be done on this system; select one to see why. Anything you've \
+             set up is kept.",
         ),
     };
 
-    let mut summary = widget::column::with_capacity(Step::ALL.len()).spacing(8);
+    // Each step's row leads back to its page.
+    let mut summary = widget::column::with_capacity(Step::ALL.len()).spacing(2);
     for step in Step::ALL {
         let view = facts.map_or_else(|| checking(step), |facts| step_view(facts, step));
         summary = summary.push(
-            widget::row::with_capacity(3)
-                .spacing(10)
-                .align_y(Alignment::Center)
-                .push(status_line(view.color, step_name(step).to_owned()))
-                .push(crate::ui::hspace())
-                .push(txt(view.status, 12.0, muted())),
+            widget::button::custom(
+                widget::row::with_capacity(4)
+                    .spacing(10)
+                    .align_y(Alignment::Center)
+                    .push(status_line(view.color, step_name(step).to_owned()))
+                    .push(crate::ui::hspace())
+                    .push(txt(view.status, 12.0, muted()))
+                    .push(txt("›", 14.0, muted())),
+            )
+            .class(menu_row(false))
+            .padding([7, 10])
+            .width(Length::Fill)
+            .on_press(Message::SetupPage(SetupPage::Step(step))),
         );
     }
 
-    widget::column::with_capacity(6)
+    let mut content = widget::column::with_capacity(5)
         .spacing(16)
         .push(eyebrow("First-run setup"))
         .push(txt_semibold(title, 24.0, fg()))
         .push(txt(body, 14.0, muted()).width(Length::Fill))
-        .push(container(summary).padding([4, 0]))
-        .push(progress_dots(page_index(SetupPage::Finish)))
-        .push(
-            widget::row::with_capacity(3)
-                .spacing(10)
-                .push(ghost(
-                    "Back",
-                    Some(Message::SetupPage(SetupPage::Step(Step::Service))),
-                ))
-                .push(crate::ui::hspace())
-                .push(primary("Finish", Some(Message::SetupFinish))),
-        )
-        .into()
+        .push(summary);
+    // Once remapping works, a word on what application-specific remaps
+    // need beyond it, which the steps themselves pass over.
+    if let Some(note) = facts
+        .filter(|facts| facts.is_configured())
+        .and_then(|facts| prose(matching_note(facts), 13.0))
+    {
+        content = content.push(note);
+    }
+
+    let buttons = widget::row::with_capacity(4)
+        .spacing(10)
+        .push(ghost(
+            "Back",
+            Some(Message::SetupPage(SetupPage::Step(Step::Service))),
+        ))
+        .push(crate::ui::hspace());
+    // While something is left that the user can do, carrying on is the
+    // way forward, and closing is the quiet alternative.
+    let buttons = match resume {
+        Some(step) => buttons
+            .push(ghost("Set up later", Some(Message::SetupLater)))
+            .push(primary(
+                "Continue setup",
+                Some(Message::SetupPage(SetupPage::Step(step))),
+            )),
+        None => buttons.push(primary("Finish", Some(Message::SetupFinish))),
+    };
+    setup_frame(content, SetupPage::Finish, facts, buttons, height)
 }
 
 #[cfg(test)]
@@ -2283,6 +2699,272 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    /// Facts for every combination of the states the step pages tell
+    /// apart.
+    fn every_system() -> Vec<Facts> {
+        use crate::session::Session;
+        use std::path::PathBuf;
+
+        let cosmic = Session {
+            desktop: Some(Desktop::Cosmic),
+            x11: false,
+        };
+        let found =
+            |desktops: Option<Vec<Desktop>>, managed: bool, version: &str| XremapCheck::Found {
+                path: if managed {
+                    install::managed_path().unwrap_or_else(|| PathBuf::from("/xremap"))
+                } else {
+                    PathBuf::from("/usr/bin/xremap")
+                },
+                version: Some(version.to_owned()),
+                desktops,
+                managed,
+            };
+        let xremaps = [
+            XremapCheck::Missing,
+            found(Some(vec![Desktop::Cosmic]), false, "0.15.13"),
+            found(Some(vec![Desktop::Gnome]), false, "0.15.13"),
+            found(None, false, "0.15.12"),
+            found(Some(Desktop::ALL.to_vec()), true, install::RELEASE),
+            found(Some(Desktop::ALL.to_vec()), true, "0.15.12"),
+        ];
+        let groups = [
+            GroupCheck::Effective,
+            GroupCheck::NeedsLogin,
+            GroupCheck::NotMember,
+            GroupCheck::NoGroup,
+        ];
+        let uinputs = [
+            UinputCheck::Writable,
+            UinputCheck::Missing {
+                rule_installed: false,
+            },
+            UinputCheck::NotWritable {
+                rule_installed: false,
+            },
+            UinputCheck::NotWritable {
+                rule_installed: true,
+            },
+        ];
+        let foreign = |reads_config, active| UnitCheck::Foreign {
+            exec_start: "/usr/bin/xremap /home/me/mine.yml".to_owned(),
+            reads_config,
+            active,
+            path: Some(PathBuf::from(
+                "/home/me/.config/systemd/user/xremap.service",
+            )),
+        };
+        let units = [
+            UnitCheck::Keyloom {
+                active: true,
+                enabled: true,
+            },
+            UnitCheck::Keyloom {
+                active: true,
+                enabled: false,
+            },
+            UnitCheck::Keyloom {
+                active: false,
+                enabled: true,
+            },
+            UnitCheck::Keyloom {
+                active: false,
+                enabled: false,
+            },
+            UnitCheck::Stale { active: true },
+            foreign(true, true),
+            foreign(true, false),
+            foreign(false, true),
+            UnitCheck::Missing,
+            UnitCheck::Unavailable,
+        ];
+
+        let mut systems = Vec::new();
+        for xremap in &xremaps {
+            for group in groups {
+                for uinput in uinputs {
+                    for unit in &units {
+                        for user in [Some("me"), None] {
+                            for config in [Some("/home/me/.config/xremap/keyloom.yml"), None] {
+                                systems.push(Facts {
+                                    user: user.map(str::to_owned),
+                                    xremap: xremap.clone(),
+                                    group,
+                                    uinput,
+                                    unit: unit.clone(),
+                                    config: config.map(PathBuf::from),
+                                    session: cosmic,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        systems
+    }
+
+    #[test]
+    fn a_page_offers_exactly_the_fix_setup_would_run() {
+        for facts in every_system() {
+            for step in Step::ALL {
+                let view = step_view(&facts, step);
+                assert_eq!(
+                    matches!(view.next, Next::Fix { .. }),
+                    facts.can_fix(step),
+                    "{step:?} on {facts:?}"
+                );
+                // A page setup passes over must agree there is nothing
+                // left to do on it.
+                if !facts.wants_attention(step) {
+                    assert_eq!(view.next, Next::Continue, "{step:?} on {facts:?}");
+                    assert!(view.keep.is_none());
+                }
+                // The only choice beside the fix is keeping a service.
+                if view.keep.is_some() {
+                    assert!(matches!(view.next, Next::Fix { .. }));
+                }
+                assert!(!view.title.is_empty() && !view.status.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn a_page_that_needs_the_user_to_act_by_hand_says_how() {
+        for facts in every_system() {
+            for step in Step::ALL {
+                let view = step_view(&facts, step);
+                match view.next {
+                    // Anything left to do comes with details, which say
+                    // how to do it by hand and hold the way past it.
+                    Next::Fix { .. } | Next::Recheck => {
+                        assert!(!view.details.is_empty(), "{step:?} on {facts:?}");
+                    }
+                    Next::Visit(target, _) => {
+                        assert_ne!(target, step);
+                        assert!(!view.details.is_empty(), "{step:?} on {facts:?}");
+                    }
+                    Next::Wait | Next::Continue => {}
+                }
+                // Commands to copy are only ever offered as commands.
+                if view.details.copyable {
+                    assert!(view.details.text.is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_unfinished_summary_picks_up_where_the_user_can_act() {
+        for facts in every_system() {
+            match resume_step(&facts) {
+                Some(step) => {
+                    assert!(!facts.is_configured());
+                    assert!(facts.wants_attention(step));
+                    // Nothing earlier was left for the user to do.
+                    for earlier in &Step::ALL[..step.index()] {
+                        assert!(
+                            !facts.wants_attention(*earlier)
+                                || step_view(&facts, *earlier).next == Next::Continue,
+                            "{earlier:?} on {facts:?}"
+                        );
+                    }
+                }
+                // A finished summary, or one whose open steps are all
+                // beyond the user's reach, only closes.
+                None => assert!(
+                    facts.is_configured()
+                        || Step::ALL.iter().all(|step| {
+                            !facts.wants_attention(*step)
+                                || step_view(&facts, *step).next == Next::Continue
+                        }),
+                    "{facts:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn turning_the_service_on_by_hand_saves_the_file_before_any_command() {
+        let unit_path = service::unit_path().map_or_else(
+            || service::UNIT.to_owned(),
+            |path| path.display().to_string(),
+        );
+        let systems = every_system();
+        for facts in &systems {
+            let details = step_view(facts, Step::Service).details;
+            // Saving is offered exactly where the file is missing and
+            // could be written, and never beside commands that would
+            // need it in place.
+            assert_eq!(details.saves_service, facts.can_save_service(), "{facts:?}");
+            if details.saves_service {
+                assert!(details.text.is_none(), "{facts:?}");
+                let Body::Plain(about) = &details.about else {
+                    panic!("the service step explains itself in plain text");
+                };
+                assert!(about.contains(&unit_path), "{about}");
+                let config = facts.config.as_ref().expect("a configuration to run");
+                assert!(about.contains(&*config.to_string_lossy()), "{about}");
+            }
+            // Any systemctl command shown acts on a unit that exists.
+            if let Some(text) = &details.text
+                && text.contains("systemctl")
+            {
+                assert!(
+                    !matches!(facts.unit, UnitCheck::Missing | UnitCheck::Unavailable),
+                    "{facts:?}"
+                );
+            }
+        }
+
+        // Once saved, the page shows the command that turns it on, which
+        // starts xremap right away only where it may use the keyboards.
+        let saved = UnitCheck::Keyloom {
+            active: false,
+            enabled: false,
+        };
+        for (access, command) in [
+            (true, "systemctl --user enable --now xremap.service"),
+            (false, "systemctl --user enable xremap.service"),
+        ] {
+            let facts = systems
+                .iter()
+                .find(|facts| {
+                    facts.unit == saved
+                        && facts.has_effective_access() == access
+                        && facts.can_fix(Step::Service)
+                })
+                .expect("a system with the file saved");
+            let details = step_view(facts, Step::Service).details;
+            assert!(details.copyable);
+            assert_eq!(details.text.as_deref(), Some(command));
+            assert!(!details.saves_service);
+        }
+    }
+
+    #[test]
+    fn manual_commands_quote_what_a_shell_would_split() {
+        assert_eq!(shell_word("/usr/bin/xremap"), "/usr/bin/xremap");
+        assert_eq!(shell_word("$USER"), "$USER");
+        assert_eq!(
+            shell_word("/home/Jo Doe/.config/xremap/keyloom.yml"),
+            "'/home/Jo Doe/.config/xremap/keyloom.yml'"
+        );
+        assert_eq!(shell_word("it's"), r"'it'\''s'");
+        assert_eq!(shell_word(""), "''");
+        assert_eq!(
+            xremap_command(
+                Path::new("/usr/bin/xremap"),
+                Path::new("/home/Jo Doe/keyloom.yml"),
+                service::Launch {
+                    desktop: Some(Desktop::Cosmic),
+                    wait_for_wayland: true,
+                },
+            ),
+            "/usr/bin/xremap --desktop cosmic --watch '/home/Jo Doe/keyloom.yml'"
+        );
     }
 
     #[test]

@@ -207,11 +207,26 @@ pub struct Setup {
     pub probing: bool,
     /// The step whose fix is running.
     pub busy: Option<setup::Step>,
+    /// The step whose fix just worked: setup moves past its page once
+    /// the checks that follow agree.
+    advancing: Option<setup::Step>,
+    /// The service file is being saved, for turning remapping on by
+    /// hand.
+    pub saving: bool,
     /// Why the last fix failed, and which step it belonged to.
     pub error: Option<(setup::Step, setup::ActionError)>,
-    /// Whether the technical details (paths, the unit, the commands)
-    /// are shown; off until asked for.
+    /// Whether the technical details (what a step changes, and how to
+    /// do it by hand) are shown; off until asked for.
     pub details: bool,
+    /// The details were opened by a failure rather than by the user,
+    /// so they close again once setup moves on.
+    details_for_failure: bool,
+    /// The page's commands were just copied, which the Copy button
+    /// acknowledges for a moment.
+    pub copied: bool,
+    /// Copies made so far, so only the latest one's acknowledgment
+    /// ends it.
+    copies: u64,
 }
 
 impl Setup {
@@ -221,8 +236,52 @@ impl Setup {
             facts: None,
             probing: true,
             busy: None,
+            advancing: None,
+            saving: false,
             error: None,
             details: false,
+            details_for_failure: false,
+            copied: false,
+            copies: 0,
+        }
+    }
+
+    /// Whether the step's fix is running, or has just worked and waits
+    /// for the checks to confirm it.
+    pub fn is_working(&self, step: setup::Step) -> bool {
+        self.busy == Some(step) || self.advancing == Some(step)
+    }
+
+    /// Whether any change to the system is running or being confirmed;
+    /// changes run one at a time.
+    pub fn is_acting(&self) -> bool {
+        self.busy.is_some() || self.advancing.is_some() || self.saving
+    }
+
+    /// Where moving on from the current page leads: the next step that
+    /// still wants attention, passing over those in order, else the
+    /// summary. Before the checks land, the steps come in order.
+    fn next_page(&self) -> SetupPage {
+        let after = match self.page {
+            SetupPage::Welcome => None,
+            SetupPage::Step(step) => Some(step),
+            SetupPage::Finish => return SetupPage::Finish,
+        };
+        let next = match &self.facts {
+            Some(facts) => facts.next_attention(after),
+            None => after.map_or(Some(setup::Step::Xremap), setup::Step::next),
+        };
+        next.map_or(SetupPage::Finish, SetupPage::Step)
+    }
+
+    /// Turn to a page, leaving behind what belonged to the last one.
+    fn show(&mut self, page: SetupPage) {
+        if self.page != page {
+            self.page = page;
+            self.copied = false;
+            if std::mem::take(&mut self.details_for_failure) {
+                self.details = false;
+            }
         }
     }
 }
@@ -390,10 +449,21 @@ pub enum Message {
     SetupProbed(setup::Facts),
     /// Show another page of setup.
     SetupPage(SetupPage),
+    /// Move on to the next setup step that wants attention.
+    SetupContinue,
     /// Run the setup checks again.
     SetupRecheck,
     /// Show or hide the technical details on setup's step pages.
     SetupToggleDetails,
+    /// Save the service file without turning it on, for doing the
+    /// service step by hand.
+    SetupSaveService,
+    /// How saving the service file went.
+    SetupServiceSaved(Result<(), setup::ActionError>),
+    /// Copy a step's commands for doing it by hand.
+    SetupCopy(String),
+    /// The acknowledgment of the given copy has been shown long enough.
+    SetupCopyShown(u64),
     /// Open a web page in the user's browser.
     OpenUrl(&'static str),
     /// Whether the browser could be asked to open the page.
@@ -408,8 +478,8 @@ pub enum Message {
         step: setup::Step,
         result: Result<(), setup::ActionError>,
     },
-    /// Close setup before its last page.
-    SetupSkip,
+    /// Close setup before its last page, to come back to later.
+    SetupLater,
     /// Close setup from its last page.
     SetupFinish,
     MenuReset,
@@ -875,30 +945,25 @@ impl App {
     }
 
     /// Run the fix a setup step offers; [`Message::SetupActed`]
-    /// reports how it went. Steps without a fix, and steps whose fix
-    /// is already running, do nothing.
+    /// reports how it went. Steps without a fix do nothing, and so does
+    /// every step while a fix is running or being confirmed.
     fn setup_act(&mut self, step: setup::Step) -> Task<Message> {
         let Some(setup) = &mut self.setup else {
             return Task::none();
         };
-        if setup.busy.is_some() {
+        if setup.is_acting() {
             return Task::none();
         }
-        let Some(facts) = setup.facts.clone() else {
+        let Some(facts) = setup.facts.clone().filter(|facts| facts.can_fix(step)) else {
             return Task::none();
         };
         let task = match step {
-            setup::Step::Xremap => {
-                if facts.xremap_action().is_none() {
-                    return Task::none();
+            setup::Step::Xremap => cosmic::task::future(async move {
+                Message::SetupActed {
+                    step,
+                    result: setup::install_xremap(&facts).await,
                 }
-                cosmic::task::future(async move {
-                    Message::SetupActed {
-                        step,
-                        result: setup::install_xremap(&facts).await,
-                    }
-                })
-            }
+            }),
             setup::Step::InputGroup => {
                 let Some(user) = facts.user else {
                     return Task::none();
@@ -3215,12 +3280,28 @@ impl cosmic::Application for App {
             Message::SetupProbed(facts) => {
                 if let Some(setup) = &mut self.setup {
                     setup.probing = false;
+                    // A fix that worked moves setup on from its page once
+                    // the checks agree; one the checks disagree with
+                    // stays, showing where the step stands now.
+                    let moves_on = setup.advancing.take().is_some_and(|step| {
+                        setup.page == SetupPage::Step(step) && !facts.wants_attention(step)
+                    });
                     setup.facts = Some(facts);
+                    if moves_on {
+                        let next = setup.next_page();
+                        setup.show(next);
+                    }
                 }
             }
             Message::SetupPage(page) => {
                 if let Some(setup) = &mut self.setup {
-                    setup.page = page;
+                    setup.show(page);
+                }
+            }
+            Message::SetupContinue => {
+                if let Some(setup) = &mut self.setup {
+                    let next = setup.next_page();
+                    setup.show(next);
                 }
             }
             Message::SetupRecheck => {
@@ -3234,6 +3315,52 @@ impl cosmic::Application for App {
             Message::SetupToggleDetails => {
                 if let Some(setup) = &mut self.setup {
                     setup.details = !setup.details;
+                    setup.details_for_failure = false;
+                }
+            }
+            Message::SetupSaveService => {
+                if let Some(setup) = &mut self.setup
+                    && !setup.is_acting()
+                    && let Some(facts) = setup.facts.clone().filter(setup::Facts::can_save_service)
+                {
+                    setup.saving = true;
+                    setup.error = None;
+                    return cosmic::task::future(async move {
+                        Message::SetupServiceSaved(setup::save_service(&facts).await)
+                    });
+                }
+            }
+            Message::SetupServiceSaved(result) => {
+                // Like a fix's, the outcome is checked rather than
+                // assumed: a saved file turns the page into the one
+                // that shows how to turn it on.
+                let Some(setup) = &mut self.setup else {
+                    return service_status_task();
+                };
+                setup.saving = false;
+                setup.error = result.err().map(|err| (setup::Step::Service, err));
+                setup.probing = true;
+                return Task::batch([setup_probe_task(), service_status_task()]);
+            }
+            Message::SetupCopy(text) => {
+                if let Some(setup) = &mut self.setup {
+                    setup.copies += 1;
+                    setup.copied = true;
+                    let copy = setup.copies;
+                    return Task::batch([
+                        cosmic::iced::clipboard::write(text),
+                        cosmic::task::future(async move {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            Message::SetupCopyShown(copy)
+                        }),
+                    ]);
+                }
+            }
+            Message::SetupCopyShown(copy) => {
+                if let Some(setup) = &mut self.setup
+                    && setup.copies == copy
+                {
+                    setup.copied = false;
                 }
             }
             Message::OpenUrl(url) => {
@@ -3262,11 +3389,25 @@ impl cosmic::Application for App {
                     return service_status_task();
                 };
                 setup.busy = None;
-                setup.error = result.err().map(|err| (step, err));
+                match result {
+                    Ok(()) => {
+                        setup.advancing = Some(step);
+                        setup.error = None;
+                    }
+                    Err(err) => {
+                        // Beyond a dismissed prompt, the way on may be
+                        // doing the step by hand, which the details show.
+                        if err != setup::ActionError::Cancelled && !setup.details {
+                            setup.details = true;
+                            setup.details_for_failure = true;
+                        }
+                        setup.error = Some((step, err));
+                    }
+                }
                 setup.probing = true;
                 return Task::batch([setup_probe_task(), service_status_task()]);
             }
-            Message::SetupSkip | Message::SetupFinish => self.leave_setup(),
+            Message::SetupLater | Message::SetupFinish => self.leave_setup(),
             Message::MenuReset => {
                 self.popover = None;
                 if self.view != View::Tester {
@@ -4889,9 +5030,34 @@ mod tests {
 
         // Reopening starts hidden again.
         let _ = app.update(Message::SetupToggleDetails);
-        let _ = app.update(Message::SetupSkip);
+        let _ = app.update(Message::SetupLater);
         let _ = app.update(Message::MenuShowSetup);
         assert!(!app.setup.as_ref().unwrap().details);
+
+        // Details a failure opened close again once setup moves on.
+        let failed = |app: &mut App| {
+            let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Uinput)));
+            let _ = app.update(Message::SetupProbed(fresh_facts()));
+            let _ = app.update(Message::SetupAct(setup::Step::Uinput));
+            let _ = app.update(Message::SetupActed {
+                step: setup::Step::Uinput,
+                result: Err(setup::ActionError::NoPolkit),
+            });
+        };
+        failed(&mut app);
+        assert!(app.setup.as_ref().unwrap().details);
+        let _ = app.update(Message::SetupContinue);
+        assert!(!app.setup.as_ref().unwrap().details);
+
+        // Details the user chose, before or after the failure, stay.
+        failed(&mut app);
+        let _ = app.update(Message::SetupToggleDetails);
+        let _ = app.update(Message::SetupToggleDetails);
+        let _ = app.update(Message::SetupContinue);
+        assert!(app.setup.as_ref().unwrap().details);
+        failed(&mut app);
+        let _ = app.update(Message::SetupContinue);
+        assert!(app.setup.as_ref().unwrap().details);
     }
 
     #[test]
@@ -4899,7 +5065,7 @@ mod tests {
         // Skipped before the checks landed: come back later.
         let mut app = app();
         let _ = app.update(Message::MenuShowSetup);
-        let _ = app.update(Message::SetupSkip);
+        let _ = app.update(Message::SetupLater);
         assert!(app.setup.is_none());
         assert_eq!(app.setup_state, SetupState::Deferred);
 
@@ -4913,7 +5079,7 @@ mod tests {
         // Everything in order: complete, even when skipped.
         let _ = app.update(Message::MenuShowSetup);
         let _ = app.update(Message::SetupProbed(ready_facts()));
-        let _ = app.update(Message::SetupSkip);
+        let _ = app.update(Message::SetupLater);
         assert_eq!(app.setup_state, SetupState::Complete);
 
         // Waiting only for a new login counts as complete too.
@@ -4933,7 +5099,7 @@ mod tests {
         // Reopening a completed setup never makes it incomplete again.
         let _ = app.update(Message::MenuShowSetup);
         let _ = app.update(Message::SetupProbed(fresh_facts()));
-        let _ = app.update(Message::SetupSkip);
+        let _ = app.update(Message::SetupLater);
         assert_eq!(app.setup_state, SetupState::Complete);
     }
 
@@ -4960,6 +5126,7 @@ mod tests {
         });
         let setup = app.setup.as_ref().unwrap();
         assert_eq!(setup.busy, None);
+        assert_eq!(setup.advancing, None, "a failed fix does not move on");
         assert_eq!(
             setup.error,
             Some((
@@ -4968,6 +5135,10 @@ mod tests {
             ))
         );
         assert!(setup.probing, "the outcome is checked, not assumed");
+        assert!(
+            setup.details,
+            "a failure shows the details, with the way to do it by hand"
+        );
     }
 
     #[test]
@@ -5007,6 +5178,10 @@ mod tests {
             Some((setup::Step::InputGroup, setup::ActionError::Cancelled))
         );
         assert!(setup.probing, "the outcome is checked, not assumed");
+        assert!(
+            !setup.details,
+            "a dismissed prompt only needs asking again, not the manual way"
+        );
 
         // The next attempt clears the old failure.
         let _ = app.update(Message::SetupProbed(fresh_facts()));
@@ -5018,7 +5193,12 @@ mod tests {
             step: setup::Step::Uinput,
             result: Ok(()),
         });
-        assert_eq!(app.setup.as_ref().unwrap().error, None);
+        let setup = app.setup.as_ref().unwrap();
+        assert_eq!(setup.error, None);
+        assert_eq!(setup.advancing, Some(setup::Step::Uinput));
+        // Nothing else runs until the checks have confirmed the fix.
+        let _ = app.update(Message::SetupAct(setup::Step::Service));
+        assert_eq!(app.setup.as_ref().unwrap().busy, None);
 
         // The service step acts only when the facts offer something.
         let _ = app.update(Message::SetupProbed(ready_facts()));
@@ -5029,12 +5209,240 @@ mod tests {
         assert_eq!(app.setup.as_ref().unwrap().busy, Some(setup::Step::Service));
 
         // A result arriving after setup was closed is simply dropped.
-        let _ = app.update(Message::SetupSkip);
+        let _ = app.update(Message::SetupLater);
         let _ = app.update(Message::SetupActed {
             step: setup::Step::Service,
             result: Ok(()),
         });
         assert!(app.setup.is_none());
+
+        // A system without an input group has nothing to join.
+        let mut app = self::app();
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupProbed(setup::Facts {
+            group: setup::GroupCheck::NoGroup,
+            ..fresh_facts()
+        }));
+        let _ = app.update(Message::SetupAct(setup::Step::InputGroup));
+        assert_eq!(app.setup.as_ref().unwrap().busy, None);
+    }
+
+    #[test]
+    fn moving_on_passes_over_steps_already_in_order() {
+        let mut app = app();
+        let _ = app.update(Message::MenuShowSetup);
+        let page = |app: &App| app.setup.as_ref().unwrap().page;
+
+        // Before the checks land, the steps come in order.
+        let _ = app.update(Message::SetupContinue);
+        assert_eq!(page(&app), SetupPage::Step(setup::Step::Xremap));
+        let _ = app.update(Message::SetupPage(SetupPage::Welcome));
+
+        // xremap is installed on the fresh system, so setup starts with
+        // keyboard access, and moves through what is left.
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        for expected in [
+            SetupPage::Step(setup::Step::InputGroup),
+            SetupPage::Step(setup::Step::Uinput),
+            SetupPage::Step(setup::Step::Service),
+            SetupPage::Finish,
+            SetupPage::Finish,
+        ] {
+            let _ = app.update(Message::SetupContinue);
+            assert_eq!(page(&app), expected);
+        }
+
+        // Back still shows every page, and moving on from a finished
+        // one skips ahead again.
+        let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Xremap)));
+        let _ = app.update(Message::SetupProbed(setup::Facts {
+            uinput: setup::UinputCheck::Writable,
+            ..fresh_facts()
+        }));
+        let _ = app.update(Message::SetupContinue);
+        assert_eq!(page(&app), SetupPage::Step(setup::Step::InputGroup));
+        let _ = app.update(Message::SetupContinue);
+        assert_eq!(
+            page(&app),
+            SetupPage::Step(setup::Step::Service),
+            "the virtual keyboard is already allowed"
+        );
+
+        // With everything in order, starting goes straight to the summary.
+        let _ = app.update(Message::SetupPage(SetupPage::Welcome));
+        let _ = app.update(Message::SetupProbed(ready_facts()));
+        let _ = app.update(Message::SetupContinue);
+        assert_eq!(page(&app), SetupPage::Finish);
+    }
+
+    #[test]
+    fn a_fix_that_worked_moves_setup_on_once_the_checks_agree() {
+        let mut app = app();
+        let _ = app.update(Message::MenuShowSetup);
+        let page = |app: &App| app.setup.as_ref().unwrap().page;
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let _ = app.update(Message::SetupContinue);
+        assert_eq!(page(&app), SetupPage::Step(setup::Step::InputGroup));
+
+        let joined = setup::Facts {
+            group: setup::GroupCheck::NeedsLogin,
+            ..fresh_facts()
+        };
+        let _ = app.update(Message::SetupAct(setup::Step::InputGroup));
+        assert!(
+            app.setup
+                .as_ref()
+                .unwrap()
+                .is_working(setup::Step::InputGroup)
+        );
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::InputGroup,
+            result: Ok(()),
+        });
+        assert!(
+            app.setup
+                .as_ref()
+                .unwrap()
+                .is_working(setup::Step::InputGroup),
+            "the button keeps working until the checks confirm the fix"
+        );
+        assert_eq!(page(&app), SetupPage::Step(setup::Step::InputGroup));
+        // Joining waits for a login, which is as done as it gets now.
+        let _ = app.update(Message::SetupProbed(joined.clone()));
+        let setup = app.setup.as_ref().unwrap();
+        assert_eq!(setup.page, SetupPage::Step(setup::Step::Uinput));
+        assert!(!setup.is_acting());
+
+        // A fix the checks disagree with stays on its page, which now
+        // shows where the step stands.
+        let _ = app.update(Message::SetupAct(setup::Step::Uinput));
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::Uinput,
+            result: Ok(()),
+        });
+        let _ = app.update(Message::SetupProbed(setup::Facts {
+            uinput: setup::UinputCheck::NotWritable {
+                rule_installed: true,
+            },
+            group: setup::GroupCheck::Effective,
+            ..joined.clone()
+        }));
+        let setup = app.setup.as_ref().unwrap();
+        assert_eq!(setup.page, SetupPage::Step(setup::Step::Uinput));
+        assert!(!setup.is_acting());
+
+        // Leaving the page while the fix runs keeps the user where they went.
+        let _ = app.update(Message::SetupAct(setup::Step::Uinput));
+        let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Xremap)));
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::Uinput,
+            result: Ok(()),
+        });
+        let _ = app.update(Message::SetupProbed(setup::Facts {
+            uinput: setup::UinputCheck::Writable,
+            ..joined
+        }));
+        assert_eq!(page(&app), SetupPage::Step(setup::Step::Xremap));
+
+        // The last step's fix leads to the summary.
+        let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Service)));
+        let _ = app.update(Message::SetupProbed(setup::Facts {
+            unit: setup::UnitCheck::Missing,
+            ..ready_facts()
+        }));
+        let _ = app.update(Message::SetupAct(setup::Step::Service));
+        let _ = app.update(Message::SetupActed {
+            step: setup::Step::Service,
+            result: Ok(()),
+        });
+        let _ = app.update(Message::SetupProbed(ready_facts()));
+        assert_eq!(page(&app), SetupPage::Finish);
+    }
+
+    #[test]
+    fn the_service_file_can_be_saved_to_turn_on_by_hand() {
+        let mut app = app();
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Service)));
+
+        // Nothing to save before the checks land, or where a service
+        // already exists.
+        let _ = app.update(Message::SetupSaveService);
+        assert!(!app.setup.as_ref().unwrap().saving);
+        let _ = app.update(Message::SetupProbed(ready_facts()));
+        let _ = app.update(Message::SetupSaveService);
+        assert!(!app.setup.as_ref().unwrap().saving);
+
+        // The task itself is dropped here, so nothing is written.
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let _ = app.update(Message::SetupSaveService);
+        let setup = app.setup.as_ref().unwrap();
+        assert!(setup.saving);
+        assert!(setup.is_acting(), "fixes wait for the save");
+        let _ = app.update(Message::SetupAct(setup::Step::Service));
+        assert_eq!(app.setup.as_ref().unwrap().busy, None);
+
+        let _ = app.update(Message::SetupServiceSaved(Err(setup::ActionError::Failed(
+            "read-only home".to_owned(),
+        ))));
+        let setup = app.setup.as_ref().unwrap();
+        assert!(!setup.saving);
+        assert_eq!(
+            setup.error,
+            Some((
+                setup::Step::Service,
+                setup::ActionError::Failed("read-only home".to_owned())
+            ))
+        );
+        assert!(setup.probing, "the outcome is checked, not assumed");
+
+        // A saved file leaves the page where it is, for the command that
+        // turns the service on.
+        let _ = app.update(Message::SetupProbed(fresh_facts()));
+        let _ = app.update(Message::SetupSaveService);
+        let _ = app.update(Message::SetupServiceSaved(Ok(())));
+        let setup = app.setup.as_ref().unwrap();
+        assert_eq!(setup.error, None);
+        assert!(setup.probing);
+        let _ = app.update(Message::SetupProbed(setup::Facts {
+            unit: setup::UnitCheck::Keyloom {
+                active: false,
+                enabled: false,
+            },
+            ..fresh_facts()
+        }));
+        assert_eq!(
+            app.setup.as_ref().unwrap().page,
+            SetupPage::Step(setup::Step::Service)
+        );
+
+        // A result arriving after setup was closed is dropped.
+        let _ = app.update(Message::SetupLater);
+        let _ = app.update(Message::SetupServiceSaved(Ok(())));
+        assert!(app.setup.is_none());
+    }
+
+    #[test]
+    fn copying_commands_is_acknowledged_for_a_moment() {
+        let mut app = app();
+        let _ = app.update(Message::SetupCopy("sudo true".to_owned()));
+        assert!(app.setup.is_none(), "nothing to copy from while closed");
+
+        let _ = app.update(Message::MenuShowSetup);
+        let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Uinput)));
+        let _ = app.update(Message::SetupCopy("sudo true".to_owned()));
+        assert!(app.setup.as_ref().unwrap().copied);
+        let _ = app.update(Message::SetupCopy("sudo true".to_owned()));
+        // The first copy's time is up, but the second one's is not.
+        let _ = app.update(Message::SetupCopyShown(1));
+        assert!(app.setup.as_ref().unwrap().copied);
+        let _ = app.update(Message::SetupCopyShown(2));
+        assert!(!app.setup.as_ref().unwrap().copied);
+
+        // Another page starts without the acknowledgment.
+        let _ = app.update(Message::SetupCopy("sudo true".to_owned()));
+        let _ = app.update(Message::SetupPage(SetupPage::Step(setup::Step::Service)));
+        assert!(!app.setup.as_ref().unwrap().copied);
     }
 
     #[test]

@@ -339,8 +339,8 @@ existing onboarding walkthrough.
   and skips its wait for a Wayland socket on X11 sessions, where none
   appears.
 - [ ] **Follow a desktop change on its own.** The unit names the desktop
-  setup saw; logging into another desktop leaves it stale until "Update
-  service" is clicked in setup. Keyloom could refresh its own unit at
+  setup saw; logging into another desktop leaves it stale until setup's
+  "Update remapping" is used. Keyloom could refresh its own unit at
   launch when the detected desktop or session type changed.
 - [x] **Guide input-group membership.** Membership in effect (this
   process's groups) is told apart from membership on record (`/etc/group`),
@@ -352,7 +352,8 @@ existing onboarding walkthrough.
   `00-xremap-input.rules` under `/etc/udev/rules.d` (the packaged rule under
   `/usr/lib` is recognized), loads `uinput` and registers it in
   `modules-load.d`, reloads udev, and re-triggers the device. A rule that is
-  installed but not in effect points at the next login.
+  installed but not in effect points at the next login while joining the
+  input group waits for one, and is offered again otherwise.
 - [x] **Request system authorization graphically.** Privileged changes run
   through `pkexec`; a dismissed or refused prompt is reported on the step
   with the fix still on offer, and a missing `pkexec` shows the commands to

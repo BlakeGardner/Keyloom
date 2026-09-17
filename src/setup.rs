@@ -61,6 +61,11 @@ pub const XREMAP_URL: &str = "https://github.com/xremap/xremap#installation";
 /// match on GNOME's Wayland session.
 pub const XREMAP_GNOME_EXTENSION_URL: &str = "https://extensions.gnome.org/extension/5060/xremap/";
 
+/// xremap's own guide to the permissions setup grants, for systems
+/// Keyloom cannot set up itself.
+pub const XREMAP_NO_SUDO_URL: &str =
+    "https://github.com/xremap/xremap/blob/master/doc/running_without_sudo.md";
+
 /// What runs as the administrator to prepare `/dev/uinput`: install the
 /// rule, make sure the module is loaded now and at boot, and apply the
 /// rule to the existing device node.
@@ -72,6 +77,19 @@ pub const UINPUT_SCRIPT: &str = "set -e\n\
     udevadm control --reload-rules\n\
     udevadm trigger --subsystem-match=misc --sysname-match=uinput\n\
     udevadm settle\n";
+
+/// [`UINPUT_SCRIPT`] as commands to paste into a terminal, for doing
+/// the step by hand.
+pub fn uinput_commands() -> String {
+    format!(
+        "echo '{RULE}' | sudo tee {RULES_PATH}\n\
+         sudo mkdir -p /etc/modules-load.d\n\
+         echo uinput | sudo tee /etc/modules-load.d/uinput.conf\n\
+         sudo modprobe uinput\n\
+         sudo udevadm control --reload-rules\n\
+         sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput"
+    )
+}
 
 /// The setup steps, in the order the wizard walks them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -333,13 +351,16 @@ impl Facts {
         match step {
             Step::Xremap => false,
             Step::InputGroup => self.group == GroupCheck::NeedsLogin,
+            // The rule grants access through the input group, so a login
+            // helps only while joining the group waits for one. With
+            // membership in effect, it is the rule that isn't working.
             Step::Uinput => {
                 matches!(
                     self.uinput,
                     UinputCheck::NotWritable {
                         rule_installed: true
                     }
-                ) && self.group != GroupCheck::NotMember
+                ) && self.group == GroupCheck::NeedsLogin
             }
             Step::Service => {
                 !self.has_effective_access()
@@ -367,6 +388,41 @@ impl Facts {
     /// Every step settled: nothing left but a new login, if that.
     pub fn is_configured(&self) -> bool {
         Step::ALL.iter().all(|step| self.is_step_settled(*step))
+    }
+
+    /// Whether Keyloom can fix the step itself: the fix its page offers
+    /// is the only one setup runs.
+    pub fn can_fix(&self, step: Step) -> bool {
+        match step {
+            Step::Xremap => self.xremap_action().is_some(),
+            Step::InputGroup => self.group == GroupCheck::NotMember && self.user.is_some(),
+            Step::Uinput => !self.is_step_settled(step),
+            Step::Service => self.service_action().is_some(),
+        }
+    }
+
+    /// Whether Keyloom can save its service file for the user to turn
+    /// on by hand: there is no service yet, and something to point one
+    /// at.
+    pub fn can_save_service(&self) -> bool {
+        self.service_action() == Some(ServiceAction::Install)
+    }
+
+    /// Whether setup should stop at the step on its way forward: it is
+    /// not settled, or it offers an update. Setup passes over the rest.
+    pub fn wants_attention(&self, step: Step) -> bool {
+        !self.is_step_settled(step) || (step == Step::Xremap && self.xremap_action().is_some())
+    }
+
+    /// The first step after `after` (from the first step when `None`)
+    /// that wants attention; `None` when none of the rest do.
+    pub fn next_attention(&self, after: Option<Step>) -> Option<Step> {
+        let start = after.map_or(0, |step| step.index() + 1);
+        Step::ALL
+            .iter()
+            .skip(start)
+            .copied()
+            .find(|step| self.wants_attention(*step))
     }
 
     /// The change the service step offers, if any. Installing needs the
@@ -852,7 +908,7 @@ impl fmt::Display for ActionError {
             Self::NotAuthorized => f.write_str("authorization was refused, so nothing was changed"),
             Self::NoPolkit => f.write_str(
                 "pkexec is not installed, so Keyloom cannot ask for administrator access \
-                 (run the commands shown here in a terminal instead)",
+                 (run the commands below in a terminal instead)",
             ),
             Self::Failed(text) => f.write_str(text),
         }
@@ -957,6 +1013,26 @@ pub async fn run_service_action(action: ServiceAction, facts: &Facts) -> Result<
         // Their unit, their file: only start it.
         return Ok(service::restart().await?);
     }
+    save_service(facts).await?;
+    service::enable().await?;
+    // Without keyboard access the service cannot do anything yet; it
+    // starts on its own at the next login instead of failing now.
+    if facts.has_effective_access() {
+        service::restart().await?;
+    }
+    Ok(())
+}
+
+/// Write the service file Keyloom would install now and have systemd
+/// read it, leaving it neither enabled nor started. The service step's
+/// fix goes on to do both; turning remapping on by hand starts here, so
+/// the `systemctl` commands setup shows next have a unit to act on.
+///
+/// # Errors
+///
+/// When there is nothing to point the service at, the file cannot be
+/// written, or `systemctl` refuses the reload.
+pub async fn save_service(facts: &Facts) -> Result<(), ActionError> {
     let (Some(binary), Some(config)) = (facts.xremap_path(), facts.config.as_deref()) else {
         return Err(ActionError::Failed(
             "xremap must be installed before the service can be set up".to_owned(),
@@ -972,12 +1048,6 @@ pub async fn run_service_action(action: ServiceAction, facts: &Facts) -> Result<
         .map_err(|err| write_failed(&err))?
         .map_err(|err| write_failed(&err))?;
     service::daemon_reload().await?;
-    service::enable().await?;
-    // Without keyboard access the service cannot do anything yet; it
-    // starts on its own at the next login instead of failing now.
-    if facts.has_effective_access() {
-        service::restart().await?;
-    }
     Ok(())
 }
 
@@ -1161,6 +1231,37 @@ mod tests {
         assert!(UINPUT_SCRIPT.contains("/etc/modules-load.d/uinput.conf"));
         assert!(UINPUT_SCRIPT.contains(&format!("'{RULE}'")));
         assert!(UINPUT_SCRIPT.starts_with("set -e\n"));
+    }
+
+    #[test]
+    fn the_manual_uinput_commands_do_what_the_script_does() {
+        let commands = uinput_commands();
+        assert!(commands.starts_with(&format!(
+            "echo 'KERNEL==\"uinput\", GROUP=\"input\", TAG+=\"uaccess\"' | sudo tee {RULES_PATH}\n"
+        )));
+        assert!(commands.contains("\necho uinput | sudo tee /etc/modules-load.d/uinput.conf\n"));
+        // Every command the script runs, other than its shell options,
+        // the files it writes (above), and waiting for udev, is run the
+        // same way by hand.
+        for line in UINPUT_SCRIPT.lines().map(str::trim) {
+            if line.is_empty()
+                || line.starts_with("set ")
+                || line.starts_with("printf ")
+                || line == "udevadm settle"
+            {
+                continue;
+            }
+            assert!(
+                commands
+                    .lines()
+                    .any(|command| command == format!("sudo {line}")),
+                "{line} is missing from the manual commands"
+            );
+        }
+        assert!(
+            commands.lines().all(|command| command.contains("sudo ")),
+            "every command needs the administrator"
+        );
     }
 
     #[test]
@@ -1493,6 +1594,17 @@ mod tests {
             "starting cannot help before the login"
         );
 
+        // With the group already in effect, a login cannot make an
+        // installed rule work: the step stays open for its fix.
+        let mut ineffective = facts.clone();
+        ineffective.uinput = UinputCheck::NotWritable {
+            rule_installed: true,
+        };
+        assert!(!ineffective.step_needs_login(Step::Uinput));
+        assert!(!ineffective.is_step_settled(Step::Uinput));
+        ineffective.group = GroupCheck::NotMember;
+        assert!(!ineffective.is_step_settled(Step::Uinput));
+
         let mut fresh = facts.clone();
         fresh.group = GroupCheck::NotMember;
         fresh.uinput = UinputCheck::NotWritable {
@@ -1502,6 +1614,10 @@ mod tests {
         assert!(!fresh.is_configured());
         assert!(!fresh.step_needs_login(Step::Uinput));
         assert_eq!(fresh.service_action(), Some(ServiceAction::Install));
+        assert!(
+            fresh.can_save_service(),
+            "the file can be saved to start by hand"
+        );
 
         let mut no_xremap = fresh.clone();
         no_xremap.xremap = XremapCheck::Missing;
@@ -1510,6 +1626,7 @@ mod tests {
             None,
             "nothing to point a unit at"
         );
+        assert!(!no_xremap.can_save_service());
 
         let mut paused = facts.clone();
         paused.unit = UnitCheck::Keyloom {
@@ -1530,6 +1647,10 @@ mod tests {
         let mut stale = facts.clone();
         stale.unit = UnitCheck::Stale { active: true };
         assert_eq!(stale.service_action(), Some(ServiceAction::Update));
+        assert!(
+            !stale.can_save_service(),
+            "an existing service is updated, not saved beside"
+        );
 
         let foreign = |reads_config, active| UnitCheck::Foreign {
             exec_start: String::new(),
@@ -1551,6 +1672,53 @@ mod tests {
         no_systemd.unit = UnitCheck::Unavailable;
         assert!(!no_systemd.is_configured());
         assert_eq!(no_systemd.service_action(), None);
+    }
+
+    #[test]
+    fn setup_stops_only_where_something_is_left_to_do() {
+        let ready = facts();
+        for step in Step::ALL {
+            assert!(!ready.wants_attention(step), "{step:?} is in order");
+        }
+        assert_eq!(ready.next_attention(None), None);
+
+        // Joined and installed, waiting only for a login: passed over.
+        let mut waiting = ready.clone();
+        waiting.group = GroupCheck::NeedsLogin;
+        waiting.uinput = UinputCheck::NotWritable {
+            rule_installed: true,
+        };
+        waiting.unit = UnitCheck::Keyloom {
+            active: false,
+            enabled: true,
+        };
+        assert_eq!(waiting.next_attention(None), None);
+
+        let mut fresh = ready.clone();
+        fresh.group = GroupCheck::NotMember;
+        fresh.unit = UnitCheck::Missing;
+        assert_eq!(fresh.next_attention(None), Some(Step::InputGroup));
+        assert_eq!(
+            fresh.next_attention(Some(Step::InputGroup)),
+            Some(Step::Service),
+            "the virtual keyboard is already in order"
+        );
+        assert_eq!(fresh.next_attention(Some(Step::Service)), None);
+
+        // A step Keyloom cannot fix still gets a stop, to explain itself.
+        let mut blocked = ready.clone();
+        blocked.unit = UnitCheck::Unavailable;
+        assert_eq!(blocked.next_attention(None), Some(Step::Service));
+
+        if install::asset().is_some() && install::managed_path().is_some() {
+            // An update for Keyloom's own xremap is worth a stop too,
+            // though the xremap it has works.
+            let mut outdated = ready;
+            outdated.xremap = managed("0.15.12");
+            assert!(outdated.is_step_settled(Step::Xremap));
+            assert_eq!(outdated.next_attention(None), Some(Step::Xremap));
+            assert_eq!(outdated.next_attention(Some(Step::Xremap)), None);
+        }
     }
 
     #[test]
