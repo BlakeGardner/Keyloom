@@ -1,0 +1,14 @@
+<!-- Source services of the "keyloom-rust-toolchain" package on the Open
+     Build Service: upload this file there as "_service". The Rust
+     toolchain workflow keeps keyloom-rust-toolchain-source.tar on the
+     GitHub pre-release tagged rust-toolchain and triggers these services
+     with a service token. See packaging/README.md. -->
+<services>
+  <service name="download_url">
+    <param name="url">https://github.com/BlakeGardner/Keyloom/releases/download/rust-toolchain/keyloom-rust-toolchain-source.tar</param>
+  </service>
+  <service name="extract_file">
+    <param name="archive">*keyloom-rust-toolchain-source.tar</param>
+    <param name="files">keyloom-rust-toolchain_*</param>
+  </service>
+</services>

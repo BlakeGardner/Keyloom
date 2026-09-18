@@ -1,0 +1,18 @@
+Source: keyloom-rust-toolchain
+Section: devel
+Priority: optional
+Maintainer: Blake Gardner <blakerg@gmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Homepage: https://www.rust-lang.org/
+Rules-Requires-Root: no
+
+Package: keyloom-rust-toolchain
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, gcc, libc6-dev
+Description: Rust toolchain used to build Keyloom packages
+ The upstream Rust compiler, standard library, and Cargo, installed under
+ /usr/lib/keyloom-rust-toolchain so that Keyloom can be built on
+ distributions whose own Rust packages are older than Keyloom's
+ dependencies require. It is a build dependency of the keyloom package
+ and is not needed to run Keyloom.

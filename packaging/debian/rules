@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+# Builds Keyloom from the crates vendored into the orig tarball, with the
+# Rust toolchain from the keyloom-rust-toolchain package. The tarball's
+# .cargo/config.toml points Cargo at vendor/. See packaging/README.md.
+
+export PATH := /usr/lib/keyloom-rust-toolchain/bin:$(PATH)
+export CARGO_HOME := $(CURDIR)/debian/cargo-home
+export CARGO_TARGET_DIR := $(CURDIR)/target
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo --version
+	cargo build --release --frozen
+
+# The project's CI runs the test suite on every commit before a release is
+# tagged; the package build compiles only what ships.
+override_dh_auto_test:
+
+override_dh_auto_install:
+	install -Dm755 target/release/keyloom debian/keyloom/usr/bin/keyloom
+	install -Dm644 data/io.github.blakegardner.Keyloom.desktop \
+		debian/keyloom/usr/share/applications/io.github.blakegardner.Keyloom.desktop
+	install -Dm644 data/io.github.blakegardner.Keyloom.svg \
+		debian/keyloom/usr/share/icons/hicolor/scalable/apps/io.github.blakegardner.Keyloom.svg
+
+override_dh_auto_clean:
+	rm -rf target debian/cargo-home
+
+# dh_clean deletes every *.orig file as cruft, but vendored crates ship
+# such files (Cargo.toml.orig, patched protocol XML) that Cargo checks
+# against each crate's checksum.
+override_dh_clean:
+	dh_clean -Xvendor/

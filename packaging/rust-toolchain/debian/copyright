@@ -1,0 +1,18 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Rust
+Source: https://static.rust-lang.org/dist/
+
+Files: *
+Copyright: The Rust Project Developers
+License: MIT or Apache-2.0
+ The Rust toolchain is dual-licensed under the MIT license and the Apache
+ License, Version 2.0; the bundled LLVM libraries are under the Apache
+ License, Version 2.0 with LLVM exceptions. The complete license texts are
+ installed with the toolchain under
+ /usr/lib/keyloom-rust-toolchain/share/doc.
+
+Files: debian/*
+Copyright: 2026 Blake Gardner
+License: GPL-3.0-only
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in "/usr/share/common-licenses/GPL-3".

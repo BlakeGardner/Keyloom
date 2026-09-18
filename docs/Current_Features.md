@@ -17,9 +17,14 @@ first-run setup installs that unit and walks through the input permissions
 ## Application shell
 
 - Native Rust + libcosmic application; runs on Wayland and X11.
-- Menu launcher and application icon assets are ready for packaging in
-  `data/`; they must be installed alongside the binary for desktop integration.
-  See the [packaging notes](../data/README.md).
+- Menu launcher and application icon assets live in `data/` and must be
+  installed alongside the binary for desktop integration. See the
+  [packaging notes](../data/README.md).
+- Debian and Ubuntu packages are built on the Open Build Service from each
+  GitHub release and attached to it: Debian 13, testing, and unstable, and
+  Ubuntu 24.04, 25.10, and 26.04, for x86_64 and aarch64. See
+  [packaging/README.md](../packaging/README.md). Other package formats are
+  not produced.
 - Follows the desktop's light/dark preference: directly on COSMIC, and
   through the XDG settings portal on other desktops (GNOME, KDE, and any
   compositor with a portal backend), updating live when it changes.

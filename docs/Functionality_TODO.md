@@ -303,6 +303,15 @@ through the generated configuration. The tasks below are 0.1.0 blockers.
   install paths and validation; building with Cargo does not install them.
 - [x] **Choose a license** — GPLv3-only (`GPL-3.0-only`), with the full text
   in [LICENSE](../LICENSE), Cargo package metadata, and a README license summary.
+- [x] **Automated Debian and Ubuntu packages.** Publishing a GitHub release
+  builds a Debian source package with the crates vendored, attaches it to
+  the release, has the Open Build Service fetch and build it, and attaches
+  the resulting `.deb` files to the release. Builds cover Debian 13, testing, and unstable, and Ubuntu 24.04,
+  25.10, and 26.04, on x86_64 and aarch64, using a packaged upstream Rust
+  toolchain because those distributions' Rust is older than libcosmic
+  needs. Setup and operation: [packaging/README.md](../packaging/README.md).
+- [ ] **Other package formats and AppStream metadata.** RPM and Flatpak
+  builds, and AppStream metadata so software centers describe Keyloom.
 
 ## 9. First-run system setup (0.1.0 blocker)
 

@@ -1,0 +1,56 @@
+#!/usr/bin/make -f
+# Installs upstream's Rust release tarballs for the build architecture
+# under /usr/lib/keyloom-rust-toolchain. The orig tarball carries the
+# rustc, rust-std, and cargo tarballs for every supported architecture;
+# scripts/build-rust-toolchain-source.sh assembles it. See
+# packaging/README.md.
+
+include /usr/share/dpkg/pkg-info.mk
+include /usr/share/dpkg/architecture.mk
+
+PREFIX = /usr/lib/keyloom-rust-toolchain
+DESTDIR = $(CURDIR)/debian/keyloom-rust-toolchain
+COMPONENTS = rustc rust-std cargo
+
+ifeq ($(DEB_HOST_ARCH),amd64)
+TRIPLE = x86_64-unknown-linux-gnu
+else ifeq ($(DEB_HOST_ARCH),arm64)
+TRIPLE = aarch64-unknown-linux-gnu
+else
+$(error keyloom-rust-toolchain carries no Rust tarballs for $(DEB_HOST_ARCH))
+endif
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	for component in $(COMPONENTS); do \
+		tar -xf $$component-$(DEB_VERSION_UPSTREAM)-$(TRIPLE).tar.xz; \
+	done
+
+override_dh_auto_install:
+	for component in $(COMPONENTS); do \
+		./$$component-$(DEB_VERSION_UPSTREAM)-$(TRIPLE)/install.sh \
+			--destdir=$(DESTDIR) --prefix=$(PREFIX) --disable-ldconfig; \
+	done
+	# Installer bookkeeping, shell completions, and manual pages have no
+	# use in a private, build-only toolchain.
+	rm -f $(DESTDIR)$(PREFIX)/lib/rustlib/install.log \
+		$(DESTDIR)$(PREFIX)/lib/rustlib/uninstall.sh \
+		$(DESTDIR)$(PREFIX)/lib/rustlib/rust-installer-version \
+		$(DESTDIR)$(PREFIX)/lib/rustlib/components \
+		$(DESTDIR)$(PREFIX)/lib/rustlib/manifest-*
+	rm -rf $(DESTDIR)$(PREFIX)/etc $(DESTDIR)$(PREFIX)/share/man \
+		$(DESTDIR)$(PREFIX)/share/zsh
+
+override_dh_auto_clean:
+	rm -rf $(foreach c,$(COMPONENTS),$(c)-$(DEB_VERSION_UPSTREAM)-$(TRIPLE))
+
+# The binaries are upstream's release builds and ship as they are. Their
+# private shared libraries live next to them, so no shlibs file is
+# generated and dpkg-shlibdeps must not demand one.
+override_dh_strip:
+override_dh_dwz:
+override_dh_makeshlibs:
+override_dh_shlibdeps:
+	dh_shlibdeps -l$(DESTDIR)$(PREFIX)/lib -- --ignore-missing-info -xkeyloom-rust-toolchain

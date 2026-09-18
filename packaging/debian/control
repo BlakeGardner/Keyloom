@@ -1,0 +1,30 @@
+Source: keyloom
+Section: utils
+Priority: optional
+Maintainer: Blake Gardner <blakerg@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ keyloom-rust-toolchain (>= 1.93),
+ libxkbcommon-dev,
+ pkgconf,
+Standards-Version: 4.7.0
+Homepage: https://github.com/BlakeGardner/Keyloom
+Vcs-Git: https://github.com/BlakeGardner/Keyloom.git
+Vcs-Browser: https://github.com/BlakeGardner/Keyloom
+Rules-Requires-Root: no
+
+Package: keyloom
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, systemd
+# Loaded at run time rather than linked: the Wayland client libraries and
+# the EGL and Vulkan loaders the renderer picks from.
+Recommends: libwayland-client0, libwayland-cursor0, libwayland-egl1, libegl1, libvulkan1, mesa-vulkan-drivers
+Description: Visual keyboard customization for Linux
+ Keyloom puts your keyboard front and center: click a key and choose what
+ it should do. Remap keys, give a key one job when tapped and another when
+ held, build layers, keep application-specific mappings, and switch
+ profiles as your day changes.
+ .
+ Keyloom does its remapping through xremap. A guided first-run setup
+ downloads it when it is not installed, then takes care of the background
+ service and input permissions.

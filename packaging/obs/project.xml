@@ -1,0 +1,39 @@
+<!-- Project metadata for the Open Build Service project that builds
+     Keyloom's packages. Replace OBS_USERNAME with the account name, then:
+       osc meta prj -F packaging/obs/project.xml home:OBS_USERNAME:Keyloom
+     See packaging/README.md. -->
+<project name="home:OBS_USERNAME:Keyloom">
+  <title>Keyloom</title>
+  <description>Keyloom, a visual keyboard customization app for Linux, built from the releases at https://github.com/BlakeGardner/Keyloom. The keyloom-rust-toolchain package exists only to build Keyloom; it is not needed to run it.</description>
+  <person userid="OBS_USERNAME" role="maintainer"/>
+  <repository name="Debian_13">
+    <path project="Debian:13" repository="standard"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+  <repository name="Debian_Testing">
+    <path project="Debian:Testing" repository="update"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+  <repository name="Debian_Unstable">
+    <path project="Debian:Next" repository="standard"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+  <repository name="xUbuntu_24.04">
+    <path project="Ubuntu:24.04" repository="universe"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+  <repository name="xUbuntu_25.10">
+    <path project="Ubuntu:25.10" repository="universe"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+  <repository name="xUbuntu_26.04">
+    <path project="Ubuntu:26.04" repository="universe"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+</project>

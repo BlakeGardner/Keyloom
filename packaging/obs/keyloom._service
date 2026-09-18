@@ -1,0 +1,15 @@
+<!-- Source services of the "keyloom" package on the Open Build Service:
+     upload this file there as "_service". Each release workflow run
+     attaches keyloom-debian-source.tar (the .dsc and its tarballs) to the
+     GitHub release and triggers these services with a service token; they
+     fetch the bundle of GitHub's latest release and unpack it. See
+     packaging/README.md. -->
+<services>
+  <service name="download_url">
+    <param name="url">https://github.com/BlakeGardner/Keyloom/releases/latest/download/keyloom-debian-source.tar</param>
+  </service>
+  <service name="extract_file">
+    <param name="archive">*keyloom-debian-source.tar</param>
+    <param name="files">keyloom_*</param>
+  </service>
+</services>
