@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Builds the keyloom-rust-toolchain Debian source package: upstream's rustc,
+# Builds the keyloom-rust-toolchain source packages: upstream's rustc,
 # rust-std, and cargo release tarballs for x86_64 and aarch64, verified
 # against their published checksums, wrapped as an orig tarball with the
-# packaging from packaging/rust-toolchain. The version comes from
-# packaging/rust-toolchain/version. See packaging/README.md.
+# Debian packaging from packaging/rust-toolchain/debian, plus the RPM spec
+# from packaging/rust-toolchain/rpm that builds from the same tarball. The
+# version comes from packaging/rust-toolchain/version. See
+# packaging/README.md.
 #
 # Usage: scripts/build-rust-toolchain-source.sh OUTPUT_DIR
 #
@@ -12,8 +14,8 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-# shellcheck source=scripts/lib/debian-source.sh
-. "$repo/scripts/lib/debian-source.sh"
+# shellcheck source=scripts/lib/source-packages.sh
+. "$repo/scripts/lib/source-packages.sh"
 
 out=${1:?usage: $0 OUTPUT_DIR}
 mkdir -p "$out"
@@ -24,6 +26,8 @@ srcdir="$name-$version"
 dist=https://static.rust-lang.org/dist
 triples=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
 components=(rustc rust-std cargo)
+date=$(date -Ru)
+notes="Rust $version from the upstream release tarballs."
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -47,8 +51,8 @@ done
 
 cat > "$work/$srcdir/README" <<README
 Rust $version release tarballs from $dist, verified against the
-SHA-256 sums published there. debian/rules installs the set for the build
-architecture under /usr/lib/keyloom-rust-toolchain.
+SHA-256 sums published there. debian/rules and the RPM spec install the
+set for the build architecture under /usr/lib/keyloom-rust-toolchain.
 README
 
 echo "Creating the orig tarball"
@@ -56,8 +60,7 @@ echo "Creating the orig tarball"
 tar -C "$work" -cf - "$srcdir" | gzip -1 > "$work/${name}_$version.orig.tar.gz"
 
 cp -r "$repo/packaging/rust-toolchain/debian" "$work/$srcdir/debian"
-write_debian_changelog "$work/$srcdir/debian/changelog" "$name" "$version-1" \
-    "$(date -Ru)" "Rust $version from the upstream release tarballs."
+write_debian_changelog "$work/$srcdir/debian/changelog" "$name" "$version-1" "$date" "$notes"
 
 (cd "$work" && dpkg-source -b "$srcdir")
 
@@ -66,3 +69,8 @@ for file in "${files[@]}"; do
     mv "$file" "$out/"
     echo "  $out/$(basename "$file")"
 done
+
+echo "Writing the RPM spec"
+write_rpm_spec "$repo/packaging/rust-toolchain/rpm/$name.spec.in" "$out/$name.spec" "$version" \
+    "$date" "$notes"
+echo "  $out/$name.spec"

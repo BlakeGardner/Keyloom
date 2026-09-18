@@ -36,4 +36,19 @@
     <arch>x86_64</arch>
     <arch>aarch64</arch>
   </repository>
+  <repository name="Fedora_43">
+    <path project="Fedora:43" repository="standard"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+  <repository name="Fedora_44">
+    <path project="Fedora:44" repository="standard"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
+  <repository name="Fedora_Rawhide">
+    <path project="Fedora:Rawhide" repository="standard"/>
+    <arch>x86_64</arch>
+    <arch>aarch64</arch>
+  </repository>
 </project>

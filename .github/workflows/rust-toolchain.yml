@@ -1,11 +1,12 @@
 name: Rust toolchain package
 
-# Keyloom's dependencies need a newer Rust than Debian 13 and Ubuntu 24.04
-# ship, so the Open Build Service builds Keyloom with upstream's toolchain,
-# packaged from packaging/rust-toolchain. This publishes that source
-# package on the GitHub pre-release tagged rust-toolchain (a fixed address
-# the OBS package fetches from) and tells OBS to fetch it. Run it once when
-# setting up the project; it also runs when packaging/rust-toolchain
+# Keyloom's dependencies need a newer Rust than Debian 13, Ubuntu 24.04,
+# and the Fedora releases ship, so the Open Build Service builds Keyloom
+# with upstream's toolchain, packaged from packaging/rust-toolchain. This
+# publishes that package's sources (a Debian source package and an RPM
+# spec) on the GitHub pre-release tagged rust-toolchain (a fixed address
+# the OBS package fetches from) and tells OBS to fetch them. Run it once
+# when setting up the project; it also runs when packaging/rust-toolchain
 # changes on main. The Keyloom builds pick up the new package on their
 # own. See packaging/README.md.
 
@@ -16,6 +17,7 @@ on:
     paths:
       - packaging/rust-toolchain/**
       - scripts/build-rust-toolchain-source.sh
+      - scripts/lib/source-packages.sh
 
 concurrency:
   group: ${{ github.workflow }}
@@ -33,7 +35,7 @@ jobs:
       OBS_PROJECT: ${{ vars.OBS_PROJECT }}
     steps:
       - uses: actions/checkout@v7
-      - name: Build the source package
+      - name: Build the source packages
         run: ./scripts/build-rust-toolchain-source.sh dist
       - name: Publish it on the rust-toolchain release
         run: |
@@ -41,11 +43,11 @@ jobs:
             echo "Set the OBS_PROJECT repository variable (see packaging/README.md)" >&2
             exit 1
           fi
-          (cd dist && tar -cf ../keyloom-rust-toolchain-source.tar keyloom-rust-toolchain_*)
+          (cd dist && tar -cf ../keyloom-rust-toolchain-source.tar keyloom-rust-toolchain_* keyloom-rust-toolchain.spec)
           if ! gh release view rust-toolchain >/dev/null 2>&1; then
             gh release create rust-toolchain --prerelease --target "$GITHUB_SHA" \
               --title "Rust toolchain for package builds" \
-              --notes "Not a Keyloom release. This holds the Rust toolchain source package that the Open Build Service uses to build Keyloom's Debian and Ubuntu packages; see packaging/README.md. The asset is replaced whenever the toolchain version changes."
+              --notes "Not a Keyloom release. This holds the Rust toolchain source packages that the Open Build Service uses to build Keyloom's Debian, Ubuntu, and Fedora packages; see packaging/README.md. The asset is replaced whenever the toolchain version changes."
           fi
           gh release upload rust-toolchain keyloom-rust-toolchain-source.tar --clobber
       - name: Tell OBS to fetch it and wait for the builds

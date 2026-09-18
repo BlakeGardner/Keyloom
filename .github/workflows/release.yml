@@ -1,12 +1,14 @@
 name: Release packages
 
 # Publishing a GitHub release (or running this by hand for an existing
-# release) builds Keyloom's Debian source package, attaches it to the
-# release, and tells the Open Build Service to fetch it from there. OBS
-# builds the .deb packages for every configured Debian and Ubuntu release,
-# and the workflow then attaches those to the GitHub release as well. OBS
-# fetches GitHub's latest release, so pre-releases are packaged only on
-# GitHub. See packaging/README.md for the one-time setup.
+# release) builds Keyloom's source packages (a Debian source package and an
+# RPM spec), attaches them to the release, and tells the Open Build Service
+# to fetch them from there. OBS builds the .deb packages for every
+# configured Debian and Ubuntu release and the .rpm packages for every
+# configured Fedora release, and the workflow then attaches those to the
+# GitHub release as well. OBS fetches GitHub's latest release, so
+# pre-releases are packaged only on GitHub. See packaging/README.md for
+# the one-time setup.
 
 on:
   release:
@@ -28,7 +30,7 @@ concurrency:
 
 jobs:
   source:
-    name: Debian source package
+    name: Source packages
     # Every release is a Keyloom release except the one carrying the build
     # toolchain.
     if: (github.event.release.tag_name || inputs.tag) != 'rust-toolchain'
@@ -47,11 +49,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-vendor-filterer
         run: cargo install --locked cargo-vendor-filterer
-      - name: Build the source package
-        run: ./scripts/build-deb-source.sh dist --tag "$TAG"
+      - name: Build the source packages
+        run: ./scripts/build-source-packages.sh dist --tag "$TAG"
       - uses: actions/upload-artifact@v4
         with:
-          name: debian-source
+          name: source-packages
           path: dist
           if-no-files-found: error
 
@@ -73,7 +75,7 @@ jobs:
           ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
-          name: debian-source
+          name: source-packages
           path: dist
       - name: Check the release
         id: release
@@ -87,12 +89,12 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
           echo "dsc=$(basename dist/*.dsc)" >> "$GITHUB_OUTPUT"
-      - name: Attach the source package to the release
+      - name: Attach the source packages to the release
         if: steps.release.outputs.skip != 'true'
         run: |
-          (cd dist && tar -cf ../keyloom-debian-source.tar keyloom_*)
-          gh release upload "$TAG" keyloom-debian-source.tar --clobber
-      - name: Tell OBS to fetch it
+          (cd dist && tar -cf ../keyloom-source-packages.tar keyloom_* keyloom.spec)
+          gh release upload "$TAG" keyloom-source-packages.tar --clobber
+      - name: Tell OBS to fetch them
         if: steps.release.outputs.skip != 'true'
         run: ./scripts/obs.py trigger "$OBS_PROJECT" keyloom
       - name: Wait for OBS to take the sources
@@ -105,11 +107,11 @@ jobs:
         if: steps.release.outputs.skip != 'true'
         run: |
           ./scripts/obs.py fetch "$OBS_PROJECT" keyloom packages
-          gh release upload "$TAG" packages/*.deb --clobber
+          gh release upload "$TAG" packages/* --clobber
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: debian-packages
+          name: packages
           path: packages
           if-no-files-found: ignore
       # Last, so that a distribution OBS cannot build at the moment (its

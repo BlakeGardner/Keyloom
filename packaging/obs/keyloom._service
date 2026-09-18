@@ -1,15 +1,18 @@
 <!-- Source services of the "keyloom" package on the Open Build Service:
      upload this file there as "_service". Each release workflow run
-     attaches keyloom-debian-source.tar (the .dsc and its tarballs) to the
-     GitHub release and triggers these services with a service token; they
-     fetch the bundle of GitHub's latest release and unpack it. See
+     attaches keyloom-source-packages.tar (the .dsc, its tarballs, and the
+     RPM spec, which builds from the same orig tarball) to the GitHub
+     release and triggers these services with a service token; they fetch
+     the bundle of GitHub's latest release and unpack it. OBS builds the
+     .dsc on Debian and Ubuntu and the .spec on Fedora. See
      packaging/README.md. -->
 <services>
   <service name="download_url">
-    <param name="url">https://github.com/BlakeGardner/Keyloom/releases/latest/download/keyloom-debian-source.tar</param>
+    <param name="url">https://github.com/BlakeGardner/Keyloom/releases/latest/download/keyloom-source-packages.tar</param>
   </service>
   <service name="extract_file">
-    <param name="archive">*keyloom-debian-source.tar</param>
+    <param name="archive">*keyloom-source-packages.tar</param>
     <param name="files">keyloom_*</param>
+    <param name="files">keyloom.spec</param>
   </service>
 </services>

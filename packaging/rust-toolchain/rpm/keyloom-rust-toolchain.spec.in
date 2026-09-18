@@ -1,0 +1,82 @@
+# RPM recipe for the keyloom-rust-toolchain package: installs upstream's
+# Rust release tarballs for the build architecture under
+# /usr/lib/keyloom-rust-toolchain, the same layout as the Debian package.
+# scripts/build-rust-toolchain-source.sh fills in the version and the
+# changelog entry's date, and names the result keyloom-rust-toolchain.spec;
+# the source tarball carries the rustc, rust-std, and cargo tarballs for
+# every supported architecture. See packaging/README.md.
+
+%global toolchain_dir /usr/lib/keyloom-rust-toolchain
+%global rust_triple %{_arch}-unknown-linux-gnu
+%global components rustc rust-std cargo
+
+# The binaries are upstream's release builds and ship as they are: no
+# debuginfo extraction, stripping, or run-path checks. Their private shared
+# libraries (LLVM, the compiler driver, the standard library) are found
+# through the binaries' own run paths, so they are neither exported as
+# provides nor demanded as requires.
+%global debug_package %{nil}
+%global __brp_strip %{nil}
+%global __brp_strip_comment_note %{nil}
+%global __brp_strip_static_archive %{nil}
+%global __brp_strip_lto %{nil}
+%global __brp_check_rpaths %{nil}
+%global __provides_exclude_from ^%{toolchain_dir}/.*$
+%global __requires_exclude ^lib(LLVM\\.so|rustc_driver-|std-|test-)
+
+Name:           keyloom-rust-toolchain
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Rust toolchain used to build Keyloom packages
+# The toolchain is MIT or Apache-2.0; the bundled LLVM is Apache-2.0 with
+# LLVM exceptions.
+License:        (MIT OR Apache-2.0) AND Apache-2.0 WITH LLVM-exception
+URL:            https://www.rust-lang.org/
+# The Debian source package's orig tarball, shared with the .dsc.
+Source0:        keyloom-rust-toolchain_%{version}.orig.tar.gz
+
+ExclusiveArch:  x86_64 aarch64
+# A linker and the C runtime objects, which rustc links every binary with.
+Requires:       gcc
+Requires:       glibc-devel
+
+%description
+The upstream Rust compiler, standard library, and Cargo, installed under
+/usr/lib/keyloom-rust-toolchain so that Keyloom can be built on
+distributions whose own Rust packages are older than Keyloom's
+dependencies require. It is a build dependency of the keyloom package
+and is not needed to run Keyloom.
+
+%prep
+%autosetup -n %{name}-%{version}
+for component in %{components}; do
+    tar -xf "$component-%{version}-%{rust_triple}.tar.xz"
+done
+
+%build
+# Nothing to compile: the tarballs hold upstream's release builds.
+
+%install
+for component in %{components}; do
+    "./$component-%{version}-%{rust_triple}/install.sh" \
+        --destdir=%{buildroot} --prefix=%{toolchain_dir} --disable-ldconfig
+done
+# Installer bookkeeping, shell completions, and manual pages have no use
+# in a private, build-only toolchain.
+rm -f %{buildroot}%{toolchain_dir}/lib/rustlib/install.log \
+    %{buildroot}%{toolchain_dir}/lib/rustlib/uninstall.sh \
+    %{buildroot}%{toolchain_dir}/lib/rustlib/rust-installer-version \
+    %{buildroot}%{toolchain_dir}/lib/rustlib/components \
+    %{buildroot}%{toolchain_dir}/lib/rustlib/manifest-*
+rm -rf %{buildroot}%{toolchain_dir}/etc %{buildroot}%{toolchain_dir}/share/man \
+    %{buildroot}%{toolchain_dir}/share/zsh
+
+%files
+%license rustc-%{version}-%{rust_triple}/COPYRIGHT
+%license rustc-%{version}-%{rust_triple}/LICENSE-APACHE
+%license rustc-%{version}-%{rust_triple}/LICENSE-MIT
+%{toolchain_dir}
+
+%changelog
+* @DATE@ Blake Gardner <blakerg@gmail.com> - @VERSION@-1
+- Rust @VERSION@ from the upstream release tarballs.

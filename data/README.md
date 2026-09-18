@@ -40,9 +40,9 @@ removing a package. Packages must also account for runtime dependencies:
 Keyloom uses systemd user services and drives xremap, which its first-run
 setup downloads into the user's `~/.local/bin` when the system has none (a
 package may instead depend on an xremap of at least version 0.15.13, which
-setup then uses as it is). The Debian package recipe that installs these
-files lives in [`packaging/`](../packaging/README.md); AppStream metadata
-is not provided yet.
+setup then uses as it is). The Debian and RPM package recipes that install
+these files live in [`packaging/`](../packaging/README.md); AppStream
+metadata is not provided yet.
 
 ## Validation
 

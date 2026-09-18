@@ -1,0 +1,71 @@
+# RPM recipe for the keyloom package: builds Keyloom from the crates
+# vendored into the source tarball with the Rust toolchain from the
+# keyloom-rust-toolchain package. The tarball's .cargo/config.toml points
+# Cargo at vendor/. scripts/build-source-packages.sh fills in the version
+# and the changelog entry's date and notes, and names the result
+# keyloom.spec. See packaging/README.md.
+
+Name:           keyloom
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Visual keyboard customization for Linux
+License:        GPL-3.0-only
+URL:            https://github.com/BlakeGardner/Keyloom
+# The Debian source package's orig tarball, shared with the .dsc.
+Source0:        keyloom_%{version}.orig.tar.xz
+
+ExclusiveArch:  x86_64 aarch64
+BuildRequires:  desktop-file-utils
+BuildRequires:  gcc
+BuildRequires:  keyloom-rust-toolchain >= 1.93
+BuildRequires:  pkgconfig(xkbcommon)
+Requires:       systemd
+# Loaded at run time rather than linked: the Wayland client libraries and
+# the EGL and Vulkan loaders the renderer picks from.
+Recommends:     libwayland-client
+Recommends:     libwayland-cursor
+Recommends:     libwayland-egl
+Recommends:     mesa-libEGL
+Recommends:     vulkan-loader
+Recommends:     mesa-vulkan-drivers
+
+%description
+Keyloom puts your keyboard front and center: click a key and choose what
+it should do. Remap keys, give a key one job when tapped and another when
+held, build layers, keep application-specific mappings, and switch
+profiles as your day changes.
+
+Keyloom does its remapping through xremap. A guided first-run setup
+downloads it when it is not installed, then takes care of the background
+service and input permissions.
+
+%prep
+%autosetup -n keyloom-%{version}
+
+%build
+export PATH=/usr/lib/keyloom-rust-toolchain/bin:$PATH
+export CARGO_HOME=$PWD/cargo-home
+cargo --version
+cargo build --release --frozen
+
+%install
+install -Dm755 target/release/keyloom %{buildroot}%{_bindir}/keyloom
+install -Dm644 data/io.github.blakegardner.Keyloom.desktop \
+    %{buildroot}%{_datadir}/applications/io.github.blakegardner.Keyloom.desktop
+install -Dm644 data/io.github.blakegardner.Keyloom.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/io.github.blakegardner.Keyloom.svg
+
+# The project's CI runs the test suite on every commit before a release is
+# tagged; the package build compiles only what ships.
+%check
+desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.blakegardner.Keyloom.desktop
+
+%files
+%license LICENSE
+%{_bindir}/keyloom
+%{_datadir}/applications/io.github.blakegardner.Keyloom.desktop
+%{_datadir}/icons/hicolor/scalable/apps/io.github.blakegardner.Keyloom.svg
+
+%changelog
+* @DATE@ Blake Gardner <blakerg@gmail.com> - @VERSION@-1
+- @NOTES@

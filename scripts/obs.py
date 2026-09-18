@@ -20,11 +20,13 @@ Subcommands:
   check PROJECT PACKAGE
       Fail if any build of the package did not succeed.
   fetch PROJECT PACKAGE DEST
-      Download the .deb files of every successful build into DEST, each
-      renamed to say which distribution it is for
+      Download the .deb and .rpm files of every successful build into
+      DEST, each renamed to say which distribution it is for
       (keyloom_0.1.0-1_amd64.deb from xUbuntu_24.04 becomes
-      keyloom_0.1.0-1_amd64_ubuntu-24.04.deb). Debug-symbol packages are
-      skipped.
+      keyloom_0.1.0-1_amd64_ubuntu-24.04.deb, and
+      keyloom-0.1.0-1.fc43.x86_64.rpm from Fedora_43 becomes
+      keyloom-0.1.0-1.fc43.x86_64_fedora-43.rpm). Source and debug-symbol
+      packages are skipped.
 """
 
 import os
@@ -191,10 +193,19 @@ def check(project, package, fatal=True):
 
 
 def distribution_name(repository):
-    # Debian_13 -> debian-13, xUbuntu_24.04 -> ubuntu-24.04
+    # Debian_13 -> debian-13, xUbuntu_24.04 -> ubuntu-24.04, Fedora_Rawhide -> fedora-rawhide
     if repository.startswith("xUbuntu"):
         repository = repository[1:]
     return repository.replace("_", "-").lower()
+
+
+def is_package(name):
+    """Whether a build result file is a binary package worth attaching to the release."""
+    if name.endswith(".deb"):
+        return "-dbgsym_" not in name
+    if name.endswith(".rpm"):
+        return not name.endswith(".src.rpm") and "-debuginfo-" not in name and "-debugsource-" not in name
+    return False
 
 
 def fetch(project, package, dest):
@@ -205,9 +216,10 @@ def fetch(project, package, dest):
         base = f"/public/build/{quoted(project, r['repository'], r['arch'], package)}"
         for binary in fetch_xml(base).findall("binary"):
             name = binary.get("filename")
-            if not name.endswith(".deb") or "-dbgsym_" in name:
+            if not is_package(name):
                 continue
-            target = os.path.join(dest, f"{name[:-4]}_{distribution_name(r['repository'])}.deb")
+            stem, extension = os.path.splitext(name)
+            target = os.path.join(dest, f"{stem}_{distribution_name(r['repository'])}{extension}")
             with open(target, "wb") as out:
                 out.write(request(f"{base}/{urllib.parse.quote(name)}"))
             print(f"  {os.path.basename(target)}")

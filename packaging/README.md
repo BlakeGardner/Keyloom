@@ -1,19 +1,19 @@
 # Packaging
 
-Keyloom's Debian and Ubuntu packages are built on the
+Keyloom's Debian, Ubuntu, and Fedora packages are built on the
 [Open Build Service](https://build.opensuse.org/) (OBS). Publishing a GitHub
 release starts the pipeline; nothing is built on GitHub's runners except
-the source package.
+the source packages.
 
 ```text
 GitHub release published
   └─ .github/workflows/release.yml
-       ├─ scripts/build-deb-source.sh    sources + vendored crates → .dsc
-       ├─ gh release upload              keyloom-debian-source.tar on the release
-       ├─ scripts/obs.py trigger         service token → OBS runs its _service:
+       ├─ scripts/build-source-packages.sh   sources + vendored crates → .dsc and .spec
+       ├─ gh release upload                  keyloom-source-packages.tar on the release
+       ├─ scripts/obs.py trigger             service token → OBS runs its _service:
        │    └─ OBS downloads the bundle from the release, unpacks it,
        │       and builds keyloom for every repository and architecture
-       └─ scripts/obs.py wait + fetch    attach the .debs to the release
+       └─ scripts/obs.py wait + fetch        attach the .debs and .rpms to the release
 ```
 
 OBS never receives an account credential: the only secret GitHub holds is
@@ -21,30 +21,37 @@ a service token that can do nothing but run one package's source services,
 and everything the workflow reads from OBS comes from its public API.
 
 Users install from the OBS repository for their distribution (OBS publishes
-an apt repository per distribution under
+an apt repository for each Debian and Ubuntu release and a dnf repository
+for each Fedora release under
 `https://download.opensuse.org/repositories/<project>/`) or download a
-`.deb` from the GitHub release.
+`.deb` or `.rpm` from the GitHub release.
 
-## Why a private Rust toolchain
+## One source tarball, two recipes, one Rust toolchain
 
 libcosmic and its dependencies need Rust 1.93 or newer. Debian 13 ships
-1.85 and Ubuntu 24.04 backports stop at 1.91, and OBS builds have no
-network access, so the build service cannot use `rustup`. The
+1.85, Ubuntu 24.04 backports stop at 1.91, and a Fedora release repository
+carries whatever Rust was current when that release shipped; OBS builds
+have no network access, so the build service cannot use `rustup`. The
 `keyloom-rust-toolchain` package (`packaging/rust-toolchain`) wraps
 upstream's `rustc`, `rust-std`, and `cargo` release tarballs for x86_64 and
 aarch64, verified against the checksums published on static.rust-lang.org,
 and installs them under `/usr/lib/keyloom-rust-toolchain`. Every Keyloom
 build uses it, on every distribution, so the packages are built the same
-way everywhere. Its source package lives on the GitHub pre-release tagged
+way everywhere. Its source packages live on the GitHub pre-release tagged
 `rust-toolchain`, a fixed address the OBS package fetches from. Change
 `packaging/rust-toolchain/version` to move to a newer Rust; pushing that
 change to `main` replaces the bundle and re-triggers OBS
 (`.github/workflows/rust-toolchain.yml`).
 
-The Keyloom source package carries the crates it depends on under
-`vendor/`, filtered to Linux targets, so OBS can build offline. The build
-recipe is `packaging/debian`; `scripts/build-deb-source.sh` adds the
-generated `debian/changelog`.
+The Keyloom source tarball carries the crates it depends on under
+`vendor/`, filtered to Linux targets, so OBS can build offline. Both
+recipes build from that one tarball: `packaging/debian` for Debian and
+Ubuntu, and `packaging/rpm` for Fedora. `scripts/build-source-packages.sh`
+adds the generated `debian/changelog` and fills the version and changelog
+into `keyloom.spec`; the toolchain package is assembled the same way from
+`packaging/rust-toolchain/debian` and `packaging/rust-toolchain/rpm`. An
+OBS package holds the `.dsc` and the `.spec` side by side and builds each
+repository with the recipe of its format.
 
 ## One-time setup
 
@@ -62,16 +69,20 @@ interface:
    project's **Meta** tab (under **Advanced**) and save.
 2. On the project's **Repositories** tab, **Add from a Distribution** for
    Debian 13, Debian Testing, Debian Unstable, Ubuntu 24.04, Ubuntu 25.10,
-   and Ubuntu 26.04. Edit each repository to add the `aarch64` architecture
-   next to `x86_64`.
+   Ubuntu 26.04, Fedora 43, Fedora 44, and Fedora Rawhide. Edit each
+   repository to add the `aarch64` architecture next to `x86_64`. To add
+   or drop a distribution later, change the repositories here and in
+   `packaging/obs/project.xml`, which mirrors them; nothing else needs to
+   change for a Debian- or RPM-based distribution OBS offers.
 3. Create two packages in the project: `keyloom` and
    `keyloom-rust-toolchain` (**Create Package**, name only).
 4. In each package, **Add file** and upload the matching file from
    `packaging/obs/` with the name `_service`:
    `keyloom._service` for `keyloom` and `keyloom-rust-toolchain._service`
    for `keyloom-rust-toolchain`. These tell OBS where on GitHub to fetch
-   the sources from. The first service run fails until the workflows have
-   published something there; that is expected.
+   the sources from and which files (the `.dsc` with its tarballs, and the
+   `.spec`) to take from the bundle. The first service run fails until the
+   workflows have published something there; that is expected.
 
 Or do the same from a terminal with `osc` (`pipx install osc`;
 `osc ls home:<username>` asks for and stores your credentials the first
@@ -110,7 +121,7 @@ finished packages through OBS's public API.
 
 Run the **Rust toolchain package** workflow from the **Actions** tab
 (**Run workflow**). It downloads the pinned Rust release, builds the source
-package, publishes it on a GitHub pre-release tagged `rust-toolchain`
+packages, publishes them on a GitHub pre-release tagged `rust-toolchain`
 (clearly marked as not being a Keyloom release), triggers the OBS package,
 and waits for OBS to build it for every repository. The first Keyloom
 build in a repository waits for this package to be built there.
@@ -122,17 +133,18 @@ tag is `v` followed by that version, for example `v0.1.0`. The **Release
 packages** workflow fails with a clear message on a tag of any other
 shape, and on one that does not match `Cargo.toml`.
 
-The workflow attaches `keyloom-debian-source.tar` to the release, triggers
-the OBS package, waits for OBS to finish every build (up to five hours),
-and attaches the `.deb` files to the release, named like
-`keyloom_0.1.0-1_amd64_ubuntu-24.04.deb`. A distribution whose build
+The workflow attaches `keyloom-source-packages.tar` to the release,
+triggers the OBS package, waits for OBS to finish every build (up to five
+hours), and attaches the `.deb` and `.rpm` files to the release, named
+like `keyloom_0.1.0-1_amd64_ubuntu-24.04.deb` and
+`keyloom-0.1.0-1.fc43.x86_64_fedora-43.rpm`. A distribution whose build
 failed is reported and fails the run, but only after the packages of the
 others are attached: OBS's base system for a rolling distribution such as
-Debian Unstable breaks now and then through no fault of the package, and
-that should not withhold the rest. Build logs live on OBS:
-`https://build.opensuse.org/package/show/<project>/keyloom`. To retry the
-OBS part for an existing release, run the workflow by hand with the tag as
-input (`gh workflow run "Release packages" -f tag=v0.1.0`).
+Debian Unstable or Fedora Rawhide breaks now and then through no fault of
+the package, and that should not withhold the rest. Build logs live on
+OBS: `https://build.opensuse.org/package/show/<project>/keyloom`. To retry
+the OBS part for an existing release, run the workflow by hand with the
+tag as input (`gh workflow run "Release packages" -f tag=v0.1.0`).
 
 OBS fetches the bundle from GitHub's *latest* release, so two things
 follow. A release marked as a pre-release (a version such as
@@ -143,25 +155,38 @@ latest release instead.
 
 ## Building locally
 
-Both source packages can be built on a developer machine without touching
-OBS; the scripts need `dpkg-dev`, and the Keyloom one also
+Both sets of source packages can be built on a developer machine without
+touching OBS; the scripts need `dpkg-dev`, and the Keyloom one also
 `cargo-vendor-filterer` (`cargo install --locked cargo-vendor-filterer`):
 
 ```sh
 scripts/build-rust-toolchain-source.sh /tmp/keyloom-packages
-scripts/build-deb-source.sh /tmp/keyloom-packages
+scripts/build-source-packages.sh /tmp/keyloom-packages
 ```
 
-To build the binary packages the way OBS does, unpack each `.dsc` with
-`dpkg-source -x` in a clean chroot or container of the target release,
-install its build dependencies (`apt-get build-dep ./`), and run
+To build the Debian binary packages the way OBS does, unpack each `.dsc`
+with `dpkg-source -x` in a clean chroot or container of the target
+release, install its build dependencies (`apt-get build-dep ./`), and run
 `dpkg-buildpackage -us -uc -b`. Build and install `keyloom-rust-toolchain`
 first; the `keyloom` package depends on it.
 
+To build the RPM packages the way OBS does, use a clean container of the
+target Fedora release with `rpm-build` and `dnf5-plugins` installed, and
+from the directory holding the source packages run, again toolchain
+first:
+
+```sh
+dnf builddep keyloom-rust-toolchain.spec
+rpmbuild --define "_sourcedir $PWD" --define "_topdir $PWD/rpmbuild" -bb keyloom-rust-toolchain.spec
+dnf install rpmbuild/RPMS/*/keyloom-rust-toolchain-*.rpm
+dnf builddep keyloom.spec
+rpmbuild --define "_sourcedir $PWD" --define "_topdir $PWD/rpmbuild" -bb keyloom.spec
+```
+
 ## Not covered yet
 
-- Only Debian-format packages are produced. RPM, Flatpak, and other
-  formats are not set up.
+- RPM packages are built for Fedora only; openSUSE and other RPM
+  distributions, Flatpak, and other formats are not set up.
 - Packages are unsigned beyond OBS's own repository signing.
 - Pre-releases get no OBS builds (see above).
 - No AppStream metadata is installed, so software centers show no
