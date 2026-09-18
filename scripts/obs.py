@@ -47,13 +47,31 @@ def die(message):
     sys.exit(1)
 
 
+class ServiceInProgress(Exception):
+    pass
+
+
 def request(path, method="GET", token=None):
     headers = {"User-Agent": "keyloom-release"}
     if token:
         headers["Authorization"] = f"Token {token}"
     req = urllib.request.Request(API + path, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=300) as response:
-        return response.read()
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=300) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            body = error.read().decode(errors="replace")
+            if error.code == 400 and "service in progress" in body:
+                raise ServiceInProgress() from error
+            # The API answers 502/504 now and then under load.
+            if error.code not in (502, 503, 504) or attempt == 4:
+                error.body = body
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == 4:
+                raise
+        time.sleep(15)
 
 
 def fetch_xml(path):
@@ -72,19 +90,22 @@ def trigger(project, package):
     try:
         body = request(f"/trigger/runservice?{query}", method="POST", token=token)
     except urllib.error.HTTPError as error:
-        die(f"Could not trigger the services of {project}/{package}: HTTP {error.code}\n"
-            f"{error.read().decode(errors='replace')}")
+        die(f"Could not trigger the services of {project}/{package}: HTTP {error.code}\n{error.body}")
     print(body.decode(errors="replace").strip())
 
 
 def source_state(project, package):
-    """Returns (service state or None, set of file names without the _service: prefix)."""
-    info = fetch_xml(f"/public/source/{quoted(project, package)}?view=info")
-    service = info.find("serviceinfo")
-    state = service.get("code") if service is not None else None
-    error = service.findtext("error") if service is not None else None
-    # Only the expanded listing includes the files the services generated.
-    listing = fetch_xml(f"/public/source/{quoted(project, package)}?expand=1")
+    """Returns (service state or None, error text or None, file names without the _service: prefix)."""
+    try:
+        info = fetch_xml(f"/public/source/{quoted(project, package)}?view=info")
+        service = info.find("serviceinfo")
+        state = service.get("code") if service is not None else None
+        error = service.findtext("error") if service is not None else None
+        # Only the expanded listing includes the files the services generated,
+        # and OBS refuses to expand while a service is still running.
+        listing = fetch_xml(f"/public/source/{quoted(project, package)}?expand=1")
+    except ServiceInProgress:
+        return "running", None, set()
     names = set()
     for entry in listing.findall("entry"):
         name = entry.get("name")
