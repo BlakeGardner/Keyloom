@@ -81,7 +81,8 @@ def source_state(project, package):
     service = info.find("serviceinfo")
     state = service.get("code") if service is not None else None
     error = service.findtext("error") if service is not None else None
-    listing = fetch_xml(f"/public/source/{quoted(project, package)}")
+    # Only the expanded listing includes the files the services generated.
+    listing = fetch_xml(f"/public/source/{quoted(project, package)}?expand=1")
     names = set()
     for entry in listing.findall("entry"):
         name = entry.get("name")
