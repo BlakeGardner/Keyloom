@@ -41,7 +41,7 @@ jobs:
             echo "Set the OBS_PROJECT repository variable (see packaging/README.md)" >&2
             exit 1
           fi
-          tar -cf keyloom-rust-toolchain-source.tar -C dist keyloom-rust-toolchain_*
+          (cd dist && tar -cf ../keyloom-rust-toolchain-source.tar keyloom-rust-toolchain_*)
           if ! gh release view rust-toolchain >/dev/null 2>&1; then
             gh release create rust-toolchain --prerelease --target "$GITHUB_SHA" \
               --title "Rust toolchain for package builds" \

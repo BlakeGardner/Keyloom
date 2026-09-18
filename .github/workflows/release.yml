@@ -84,7 +84,7 @@ jobs:
       - name: Attach the source package to the release
         if: steps.release.outputs.skip != 'true'
         run: |
-          tar -cf keyloom-debian-source.tar -C dist keyloom_*
+          (cd dist && tar -cf ../keyloom-debian-source.tar keyloom_*)
           gh release upload "$TAG" keyloom-debian-source.tar --clobber
       - name: Tell OBS to fetch it
         if: steps.release.outputs.skip != 'true'
