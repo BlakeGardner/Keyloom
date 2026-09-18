@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag of an existing release to package, for example v0.1.0
+        description: Tag of an existing release to package, for example 0.1.0
         required: true
         type: string
 
@@ -29,9 +29,9 @@ concurrency:
 jobs:
   source:
     name: Debian source package
-    # Only version tags are Keyloom releases; the rust-toolchain release
-    # carries the build toolchain.
-    if: startsWith(github.event.release.tag_name || inputs.tag, 'v')
+    # Every release is a Keyloom release except the one carrying the build
+    # toolchain.
+    if: (github.event.release.tag_name || inputs.tag) != 'rust-toolchain'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

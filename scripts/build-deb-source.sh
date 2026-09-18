@@ -73,7 +73,7 @@ tar -C "$work" -cf - "$srcdir" | xz -T0 > "$work/${name}_$debian_version.orig.ta
 cp -r "$repo/packaging/debian" "$work/$srcdir/debian"
 write_debian_changelog "$work/$srcdir/debian/changelog" "$name" "$debian_version-1" \
     "$commit_date" \
-    "Keyloom $version. Release notes: https://github.com/BlakeGardner/Keyloom/releases/tag/v$version"
+    "Keyloom $version. Release notes: https://github.com/BlakeGardner/Keyloom/releases/tag/${tag:-$version}"
 
 (cd "$work" && dpkg-source -b "$srcdir")
 
