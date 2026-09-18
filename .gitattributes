@@ -1,0 +1,3 @@
+# README demo recordings: versioned here, but kept out of `git archive`, which
+# scripts/build-deb-source.sh uses to make the Debian source tarball.
+docs/media/ export-ignore
