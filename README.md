@@ -13,27 +13,22 @@ stay simple, with real power when you want it.
 Pick a key and give it a new job. Here F7, F8, and F9 become media
 controls like Previous, Play/Pause, and Next.
 
-[![The key editor open on F8, showing the media actions Play/Pause, Next, and Previous](docs/media/basic-remaps.png)](docs/media/basic-remaps.mp4)
 
-▶ **[Watch the demo](docs/media/basic-remaps.mp4)** · 30 seconds
+https://github.com/user-attachments/assets/3785f148-b780-4f1a-956a-c0d8ba299605
 
 ## Remap keys in one application
 
 A key can behave differently in one application and stay normal
 everywhere else. Here Caps Lock becomes Escape in Visual Studio Code.
 
-[![The keyboard view scoped to Visual Studio Code, where Caps Lock sends Escape](docs/media/application-remaps.png)](docs/media/application-remaps.mp4)
-
-▶ **[Watch the demo](docs/media/application-remaps.mp4)** · 24 seconds
+https://github.com/user-attachments/assets/39a8468d-6dc6-4d0e-a82e-4ccac93a25f0
 
 ## Test your keyboard
 
 See keys light up as you press them, and what each one sends. Keyloom
 works out your keyboard's size and layout for you.
 
-[![The tester with T and Right Shift lit on the keyboard, and the key's name, code, and source keyboard beside it](docs/media/keyboard-tester.png)](docs/media/keyboard-tester.mp4)
-
-▶ **[Watch the demo](docs/media/keyboard-tester.mp4)** · 26 seconds
+https://github.com/user-attachments/assets/2430f87a-9767-4bc9-8b00-454ced1da319
 
 ## More in Keyloom
 
@@ -50,8 +45,6 @@ works out your keyboard's size and layout for you.
   Launchpad keys.
 - **Changes apply themselves**: no Apply button, and one click pauses
   remapping when you want your original keys back.
-- **At home on your desktop**: a native app for Wayland and X11 that
-  follows your light/dark theme, and your accent color on COSMIC.
 
 ## Get Keyloom
 
