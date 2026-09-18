@@ -118,9 +118,9 @@ build in a repository waits for this package to be built there.
 ### 4. Publish a release
 
 Bump `version` in `Cargo.toml`, commit, and publish a GitHub release whose
-tag is that version, with or without a leading `v` (`0.1.0` or `v0.1.0`).
-The **Release packages** workflow refuses a tag that does not match
-`Cargo.toml`.
+tag is `v` followed by that version, for example `v0.1.0`. The **Release
+packages** workflow fails with a clear message on a tag of any other
+shape, and on one that does not match `Cargo.toml`.
 
 The workflow attaches `keyloom-debian-source.tar` to the release, triggers
 the OBS package, waits for OBS to finish every build (up to five hours),
@@ -132,7 +132,7 @@ Debian Unstable breaks now and then through no fault of the package, and
 that should not withhold the rest. Build logs live on OBS:
 `https://build.opensuse.org/package/show/<project>/keyloom`. To retry the
 OBS part for an existing release, run the workflow by hand with the tag as
-input (`gh workflow run "Release packages" -f tag=0.1.0`).
+input (`gh workflow run "Release packages" -f tag=v0.1.0`).
 
 OBS fetches the bundle from GitHub's *latest* release, so two things
 follow. A release marked as a pre-release (a version such as

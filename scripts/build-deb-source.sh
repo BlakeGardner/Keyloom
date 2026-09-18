@@ -6,7 +6,7 @@
 # packaging/README.md.
 #
 # Usage: scripts/build-deb-source.sh OUTPUT_DIR [--tag TAG] [--ref REF]
-#   --tag TAG   Fail unless Cargo.toml's version matches TAG (v1.2.3 or 1.2.3).
+#   --tag TAG   Fail unless TAG is Cargo.toml's version with a leading v (v1.2.3).
 #   --ref REF   Git ref to package (default: HEAD). Only committed files are
 #               packaged; packaging/debian is taken from the working tree.
 #
@@ -40,8 +40,8 @@ fi
 # The [package] table is the first table in Cargo.toml.
 version=$(awk -F'"' '/^\[package\]/ { p = 1; next } /^\[/ { p = 0 }
     p && /^version *=/ { print $2; exit }' "$repo/Cargo.toml")
-if [ -n "$tag" ] && [ "${tag#v}" != "$version" ]; then
-    echo "Tag $tag does not match Cargo.toml version $version" >&2
+if [ -n "$tag" ] && [ "$tag" != "v$version" ]; then
+    echo "Tag $tag does not match Cargo.toml version $version (expected v$version)" >&2
     exit 1
 fi
 # Debian sorts 1.0.0~rc.1 before 1.0.0, as a pre-release should.
@@ -73,7 +73,7 @@ tar -C "$work" -cf - "$srcdir" | xz -T0 > "$work/${name}_$debian_version.orig.ta
 cp -r "$repo/packaging/debian" "$work/$srcdir/debian"
 write_debian_changelog "$work/$srcdir/debian/changelog" "$name" "$debian_version-1" \
     "$commit_date" \
-    "Keyloom $version. Release notes: https://github.com/BlakeGardner/Keyloom/releases/tag/${tag:-$version}"
+    "Keyloom $version. Release notes: https://github.com/BlakeGardner/Keyloom/releases/tag/v$version"
 
 (cd "$work" && dpkg-source -b "$srcdir")
 
