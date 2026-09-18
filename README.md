@@ -13,27 +13,27 @@ stay simple, with real power when you want it.
 Pick a key and give it a new job. Here F7, F8, and F9 become media
 controls like Previous, Play/Pause, and Next.
 
-[![The key editor open on F8, showing the media actions Play/Pause, Next, and Previous](https://raw.githubusercontent.com/BlakeGardner/Keyloom/main/docs/media/basic-remaps.png)](https://github.com/BlakeGardner/Keyloom/blob/main/docs/media/basic-remaps.mp4)
+[![The key editor open on F8, showing the media actions Play/Pause, Next, and Previous](docs/media/basic-remaps.png)](docs/media/basic-remaps.mp4)
 
-▶ **[Watch the demo](https://github.com/BlakeGardner/Keyloom/blob/main/docs/media/basic-remaps.mp4)** · 30 seconds
+▶ **[Watch the demo](docs/media/basic-remaps.mp4)** · 30 seconds
 
 ## Remap keys in one application
 
 A key can behave differently in one application and stay normal
 everywhere else. Here Caps Lock becomes Escape in Visual Studio Code.
 
-[![The keyboard view scoped to Visual Studio Code, where Caps Lock sends Escape](https://raw.githubusercontent.com/BlakeGardner/Keyloom/main/docs/media/application-remaps.png)](https://github.com/BlakeGardner/Keyloom/blob/main/docs/media/application-remaps.mp4)
+[![The keyboard view scoped to Visual Studio Code, where Caps Lock sends Escape](docs/media/application-remaps.png)](docs/media/application-remaps.mp4)
 
-▶ **[Watch the demo](https://github.com/BlakeGardner/Keyloom/blob/main/docs/media/application-remaps.mp4)** · 24 seconds
+▶ **[Watch the demo](docs/media/application-remaps.mp4)** · 24 seconds
 
 ## Test your keyboard
 
 See keys light up as you press them, and what each one sends. Keyloom
 works out your keyboard's size and layout for you.
 
-[![The tester with T and Right Shift lit on the keyboard, and the key's name, code, and source keyboard beside it](https://raw.githubusercontent.com/BlakeGardner/Keyloom/main/docs/media/keyboard-tester.png)](https://github.com/BlakeGardner/Keyloom/blob/main/docs/media/keyboard-tester.mp4)
+[![The tester with T and Right Shift lit on the keyboard, and the key's name, code, and source keyboard beside it](docs/media/keyboard-tester.png)](docs/media/keyboard-tester.mp4)
 
-▶ **[Watch the demo](https://github.com/BlakeGardner/Keyloom/blob/main/docs/media/keyboard-tester.mp4)** · 26 seconds
+▶ **[Watch the demo](docs/media/keyboard-tester.mp4)** · 26 seconds
 
 ## More in Keyloom
 
