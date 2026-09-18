@@ -36,6 +36,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 API = os.environ.get("OBS_API", "https://api.opensuse.org")
+# Show progress as it happens in a CI log rather than at the end.
+sys.stdout.reconfigure(line_buffering=True)
 WAITING = {"blocked", "scheduled", "dispatching", "building", "signing", "finished"}
 SKIPPED = {"excluded", "disabled"}
 
