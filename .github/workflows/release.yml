@@ -106,3 +106,8 @@ jobs:
           name: debian-packages
           path: packages
           if-no-files-found: ignore
+      # Last, so that a distribution OBS cannot build at the moment (its
+      # base system breaks now and then) does not withhold the others.
+      - name: Fail if any build did not succeed
+        if: steps.release.outputs.skip != 'true'
+        run: ./scripts/obs.py check "$OBS_PROJECT" keyloom

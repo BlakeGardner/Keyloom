@@ -54,3 +54,4 @@ jobs:
           ./scripts/obs.py trigger "$OBS_PROJECT" keyloom-rust-toolchain
           ./scripts/obs.py wait-sources "$OBS_PROJECT" keyloom-rust-toolchain "keyloom-rust-toolchain_$version-1.dsc"
           ./scripts/obs.py wait-builds "$OBS_PROJECT" keyloom-rust-toolchain
+          ./scripts/obs.py check "$OBS_PROJECT" keyloom-rust-toolchain

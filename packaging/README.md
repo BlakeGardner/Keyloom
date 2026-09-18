@@ -124,7 +124,11 @@ packages** workflow refuses a tag that does not match `Cargo.toml`.
 The workflow attaches `keyloom-debian-source.tar` to the release, triggers
 the OBS package, waits for OBS to finish every build (up to five hours),
 and attaches the `.deb` files to the release, named like
-`keyloom_0.1.0-1_amd64_ubuntu-24.04.deb`. Build logs live on OBS:
+`keyloom_0.1.0-1_amd64_ubuntu-24.04.deb`. A distribution whose build
+failed is reported and fails the run, but only after the packages of the
+others are attached: OBS's base system for a rolling distribution such as
+Debian Unstable breaks now and then through no fault of the package, and
+that should not withhold the rest. Build logs live on OBS:
 `https://build.opensuse.org/package/show/<project>/keyloom`. To retry the
 OBS part for an existing release, run the workflow by hand with the tag as
 input.

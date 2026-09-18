@@ -14,8 +14,11 @@ Subcommands:
       keyloom_0.1.0-1.dsc). Fails when the services report an error or
       when they end with a different version than expected.
   wait-builds PROJECT PACKAGE
-      Wait until every repository has finished building the package, then
-      fail if any build did not succeed.
+      Wait until every repository has finished building the package and
+      report the outcome of each. Does not fail on failed builds, so the
+      successful ones can still be fetched; run `check` afterwards.
+  check PROJECT PACKAGE
+      Fail if any build of the package did not succeed.
   fetch PROJECT PACKAGE DEST
       Download the .deb files of every successful build into DEST, each
       renamed to say which distribution it is for
@@ -148,12 +151,19 @@ def wait_builds(project, package):
         if not pending:
             break
         time.sleep(60)
+    print("All builds finished")
+    check(project, package, fatal=False)
+
+
+def check(project, package, fatal=True):
+    rows = results(project, package)
     failed = [r for r in rows if r["code"] not in {"succeeded"} | SKIPPED]
     for r in failed:
-        print(f"{r['repository']}/{r['arch']}: {r['code']} {r['details']}".rstrip(), file=sys.stderr)
-    if failed:
+        print(f"::warning::{package} on {r['repository']}/{r['arch']}: {r['code']} {r['details']}".rstrip())
+    if failed and fatal:
         die(f"Some builds did not succeed; see https://build.opensuse.org/package/show/{project}/{package}")
-    print("All builds succeeded")
+    if not failed:
+        print("All builds succeeded")
 
 
 def distribution_name(repository):
@@ -180,7 +190,8 @@ def fetch(project, package, dest):
 
 
 def main(argv):
-    commands = {"trigger": (trigger, 2), "wait-sources": (wait_sources, 3), "wait-builds": (wait_builds, 2), "fetch": (fetch, 3)}
+    commands = {"trigger": (trigger, 2), "wait-sources": (wait_sources, 3), "wait-builds": (wait_builds, 2),
+                "check": (check, 2), "fetch": (fetch, 3)}
     if len(argv) < 2 or argv[1] not in commands:
         die(__doc__)
     function, arity = commands[argv[1]]
