@@ -108,3 +108,25 @@ jobs:
         with:
           command: check advisories bans sources
           rust-version: stable
+
+  screenshots:
+    name: Setup screenshots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        # Open Sans is the interface font the screenshots are rendered
+        # with; without it the runner would substitute another face.
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev fonts-open-sans
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Render the setup wizard
+        # Ignored in the ordinary test run; the software renderer needs
+        # no display or GPU (src/app/screenshots.rs).
+        run: cargo test --locked screenshots -- --ignored
+      - name: Upload the screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-screenshots
+          path: target/setup-shots
+          if-no-files-found: error

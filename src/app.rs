@@ -3627,6 +3627,9 @@ fn opens_setup_on_launch(state: SetupState) -> bool {
 }
 
 #[cfg(test)]
+mod screenshots;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use cosmic::Application;

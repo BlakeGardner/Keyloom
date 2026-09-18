@@ -28,3 +28,6 @@ features = [
     "winit",
     "xdg-portal",
 ]
+
+[dev-dependencies]
+png = "0.18"
