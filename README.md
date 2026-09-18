@@ -2,51 +2,49 @@
 
 **Your keyboard, the way you want it.**
 
-Keyloom is a visual keyboard customization app for Linux. It puts your
-keyboard front and center: click a key and choose what it should do.
-Visual first, so simple things stay simple — with power without complexity
-when you want more control. From one quick remap to a setup for every
-routine, make your keyboard work the way you do.
+Keyloom is a visual keyboard customization app for Linux. Click a key,
+choose what it should do, and it takes effect right away. Simple things
+stay simple, with real power when you want it.
 
 **[Download Keyloom →](https://github.com/BlakeGardner/Keyloom/releases)**
 
 ## Remap keys visually
 
-Turn **Caps Lock into Escape**, swap two keys, or give an unused key a useful
-job like Play/Pause. See your mappings directly on the keyboard and restore
-any key when you want its original behavior back.
+Pick a key and give it a new job. Here F7, F8, and F9 become media
+controls like Previous, Play/Pause, and Next.
 
-Need one key to do more? Set it to **Escape when tapped and Control when held**,
-or give it a whole **layer**: hold Caps Lock and H/J/K/L become arrow keys,
-while every other key keeps working normally. Keys can also act differently
-**in one application**: keep Caps Lock as it is in your editor, or send the
-terminal's copy shortcut when you press Super+C there.
 
-> **Screenshot placeholder — Visual remapping**
->
-> The keyboard view with the Caps Lock editor open, showing Escape on tap
-> and Control on hold.
+https://github.com/user-attachments/assets/3785f148-b780-4f1a-956a-c0d8ba299605
 
-## Create setups for every routine
+## Remap keys in one application
 
-Keep separate profiles for **work, gaming, or Mac-style controls**, and
-switch between them as your day changes. Customize your laptop keyboard
-and external keyboard independently, so each feels right under your fingers.
+A key can behave differently in one application and stay normal
+everywhere else. Here Caps Lock becomes Escape in Visual Studio Code.
 
-> **Screenshot placeholder — Profiles and keyboards**
->
-> The profile picker open with Work and Gaming profiles, and a specific
-> keyboard selected in the "Applies to" control.
+https://github.com/user-attachments/assets/39a8468d-6dc6-4d0e-a82e-4ccac93a25f0
 
 ## Test your keyboard
 
-See keys light up as you press them and check what your keyboard is sending.
-Use the built-in tester to investigate an unfamiliar key or check a keyboard's
-response. Pause remapping from the app when you need to test its original keys.
+See keys light up as you press them, and what each one sends. Keyloom
+works out your keyboard's size and layout for you.
 
-> **Screenshot placeholder — See your keys in action**
->
-> The keyboard tester with a pressed key highlighted.
+https://github.com/user-attachments/assets/2430f87a-9767-4bc9-8b00-454ced1da319
+
+## More in Keyloom
+
+- **Tap and hold**: Escape when tapped, Control when held.
+- **Layers**: hold Caps Lock and H/J/K/L become arrow keys, while every
+  other key keeps working normally.
+- **Shortcuts**: turn one chord into another, so Super+C sends the
+  terminal's Ctrl+Shift+C.
+- **Profiles**: keep separate setups for work, gaming, or Mac-style
+  controls and switch as your day changes.
+- **One keyboard at a time**: customize your laptop and external keyboards
+  independently.
+- **Unusual keys too**: media, brightness, and Apple's Mission Control and
+  Launchpad keys.
+- **Changes apply themselves**: no Apply button, and one click pauses
+  remapping when you want your original keys back.
 
 ## Get Keyloom
 
