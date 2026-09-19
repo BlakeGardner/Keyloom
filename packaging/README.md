@@ -143,8 +143,11 @@ others are attached: OBS's base system for a rolling distribution such as
 Debian Unstable or Fedora Rawhide breaks now and then through no fault of
 the package, and that should not withhold the rest. Build logs live on
 OBS: `https://build.opensuse.org/package/show/<project>/keyloom`. To retry
-the OBS part for an existing release, run the workflow by hand with the
-tag as input (`gh workflow run "Release packages" -f tag=v0.1.0`).
+an existing release, run the workflow by hand with the tag as input
+(`gh workflow run "Release packages" -f tag=v0.1.0`). The sources always
+come from the tag, while the recipes and scripts come from the branch the
+workflow runs on, so a re-run picks up packaging fixes made since the
+release.
 
 OBS fetches the bundle from GitHub's *latest* release, so two things
 follow. A release marked as a pre-release (a version such as

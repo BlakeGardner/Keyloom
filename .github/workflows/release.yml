@@ -7,8 +7,10 @@ name: Release packages
 # configured Debian and Ubuntu release and the .rpm packages for every
 # configured Fedora release, and the workflow then attaches those to the
 # GitHub release as well. OBS fetches GitHub's latest release, so
-# pre-releases are packaged only on GitHub. See packaging/README.md for
-# the one-time setup.
+# pre-releases are packaged only on GitHub. The sources come from the
+# release's tag; the packaging recipes and scripts come from the commit
+# this workflow runs on, so an older release can be re-run with current
+# packaging. See packaging/README.md for the one-time setup.
 
 on:
   release:
@@ -44,13 +46,14 @@ jobs:
           esac
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          # The whole history, so that the tag can be archived.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-vendor-filterer
         run: cargo install --locked cargo-vendor-filterer
       - name: Build the source packages
-        run: ./scripts/build-source-packages.sh dist --tag "$TAG"
+        run: ./scripts/build-source-packages.sh dist --tag "$TAG" --ref "$TAG"
       - uses: actions/upload-artifact@v4
         with:
           name: source-packages
@@ -71,8 +74,6 @@ jobs:
       OBS_TOKEN: ${{ secrets.OBS_TOKEN_KEYLOOM }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
           name: source-packages

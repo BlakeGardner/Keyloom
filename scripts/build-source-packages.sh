@@ -7,10 +7,11 @@
 # packaging/README.md.
 #
 # Usage: scripts/build-source-packages.sh OUTPUT_DIR [--tag TAG] [--ref REF]
-#   --tag TAG   Fail unless TAG is Cargo.toml's version with a leading v (v1.2.3).
 #   --ref REF   Git ref to package (default: HEAD). Only committed files are
-#               packaged; packaging/debian and packaging/rpm are taken from
-#               the working tree.
+#               packaged, and the version is the ref's Cargo.toml version;
+#               packaging/debian and packaging/rpm are taken from the working
+#               tree, so an older release can be packaged with current recipes.
+#   --tag TAG   Fail unless TAG is that version with a leading v (v1.2.3).
 #
 # Needs cargo, cargo-vendor-filterer, dpkg-source, git, tar, and xz, plus
 # network access to fetch the crates.
@@ -40,10 +41,14 @@ if ! cargo vendor-filterer --version >/dev/null 2>&1; then
 fi
 
 # The [package] table is the first table in Cargo.toml.
-version=$(awk -F'"' '/^\[package\]/ { p = 1; next } /^\[/ { p = 0 }
-    p && /^version *=/ { print $2; exit }' "$repo/Cargo.toml")
+version=$(git -C "$repo" show "$ref:Cargo.toml" | awk -F'"' '/^\[package\]/ { p = 1; next } /^\[/ { p = 0 }
+    p && /^version *=/ { print $2; exit }')
+if [ -z "$version" ]; then
+    echo "Could not read the version from Cargo.toml at $ref" >&2
+    exit 1
+fi
 if [ -n "$tag" ] && [ "$tag" != "v$version" ]; then
-    echo "Tag $tag does not match Cargo.toml version $version (expected v$version)" >&2
+    echo "Tag $tag does not match the Cargo.toml version $version at $ref (expected v$version)" >&2
     exit 1
 fi
 # Debian and RPM both sort 1.0.0~rc.1 before 1.0.0, as a pre-release should.
