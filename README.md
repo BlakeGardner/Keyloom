@@ -155,11 +155,6 @@ Prefer a one-off download? The
 a `.deb` and an `.rpm` for each of these, for 64-bit Intel/AMD and ARM,
 along with the release notes.
 
-Keyloom is in early development. It does its remapping through
-[xremap](https://github.com/xremap/xremap): a guided first-run setup
-downloads it if it isn't installed, then takes care of the background
-service and input permissions.
-
 ## What's next
 
 See the [upcoming features roadmap](docs/Upcoming_Features.md) for plans
