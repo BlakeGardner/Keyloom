@@ -8,27 +8,24 @@ stay simple, with real power when you want it.
 
 **[Install Keyloom →](#install-keyloom)**
 
-## Remap keys visually
+![Choosing Play/Pause for F8 in the key editor, and the key taking on its
+new job right away](docs/media/basic-remaps.gif)
 
-Pick a key and give it a new job. Here F7, F8, and F9 become media
-controls like Previous, Play/Pause, and Next.
+## Remap keys in any application
 
-
-https://github.com/user-attachments/assets/3785f148-b780-4f1a-956a-c0d8ba299605
-
-## Remap keys in one application
-
-A key can behave differently in one application and stay normal
+A key can behave differently in any application and stay normal
 everywhere else. Here Caps Lock becomes Escape in Visual Studio Code.
 
-https://github.com/user-attachments/assets/39a8468d-6dc6-4d0e-a82e-4ccac93a25f0
+![Scoping the keyboard to Visual Studio Code and mapping Caps Lock to
+Escape there, leaving it alone everywhere else](docs/media/application-remaps.gif)
 
 ## Test your keyboard
 
 See keys light up as you press them, and what each one sends. Keyloom
 works out your keyboard's size and layout for you.
 
-https://github.com/user-attachments/assets/2430f87a-9767-4bc9-8b00-454ced1da319
+![Keys lighting up on the tester as they are pressed, with each key's
+name, code, and source keyboard beside it](docs/media/keyboard-tester.gif)
 
 ## More in Keyloom
 
