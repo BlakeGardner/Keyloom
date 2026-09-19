@@ -23,10 +23,12 @@ first-run setup installs that unit and walks through the input permissions
 - Debian, Ubuntu, and Fedora packages are built on the Open Build Service
   from each GitHub release: Debian 13, testing, and unstable, Ubuntu
   24.04, 25.10, and 26.04, and Fedora 43, 44, and Rawhide, for x86_64 and
-  aarch64. Users install them either from the apt or dnf repository the
-  build service publishes for their distribution, which also delivers
-  updates, or as a one-off `.deb` or `.rpm` attached to the release; the
-  [README](../README.md) gives the commands per distribution. See
+  aarch64. A distribution built on one of these uses its repository:
+  Pop!_OS 24.04 installs the Ubuntu 24.04 packages. Users install either
+  from the apt or dnf repository the build service publishes, which also
+  delivers updates, or as a one-off `.deb` or `.rpm` attached to the
+  release; the [README](../README.md) gives the commands per
+  distribution. See
   [packaging/README.md](../packaging/README.md). Other package formats are
   not produced.
 - Follows the desktop's light/dark preference: directly on COSMIC, and

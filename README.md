@@ -51,6 +51,8 @@ https://github.com/user-attachments/assets/2430f87a-9767-4bc9-8b00-454ced1da319
 Add Keyloom's repository for your distribution, and Keyloom updates with
 the rest of your system. Pick yours below for the commands.
 
+### Debian
+
 <details>
 <summary><b>Debian 13</b></summary>
 
@@ -75,8 +77,13 @@ sudo apt install keyloom
 
 </details>
 
+### Ubuntu / Pop!_OS
+
+Pop!_OS builds on Ubuntu, so it uses the repository for the Ubuntu
+release underneath it: Pop!_OS 24.04 takes the Ubuntu 24.04 commands.
+
 <details>
-<summary><b>Ubuntu 24.04</b></summary>
+<summary><b>Ubuntu 24.04 or Pop!_OS 24.04</b></summary>
 
 ```sh
 echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
@@ -110,6 +117,8 @@ sudo apt install keyloom
 ```
 
 </details>
+
+### Fedora
 
 <details>
 <summary><b>Fedora 43</b></summary>
