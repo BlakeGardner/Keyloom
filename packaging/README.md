@@ -5,15 +5,26 @@ Keyloom's Debian, Ubuntu, and Fedora packages are built on the
 release starts the pipeline; nothing is built on GitHub's runners except
 the source packages.
 
-```text
-GitHub release published
-  └─ .github/workflows/release.yml
-       ├─ scripts/build-source-packages.sh   sources + vendored crates → .dsc and .spec
-       ├─ gh release upload                  keyloom-source-packages.tar on the release
-       ├─ scripts/obs.py trigger             service token → OBS runs its _service:
-       │    └─ OBS downloads the bundle from the release, unpacks it,
-       │       and builds keyloom for every repository and architecture
-       └─ scripts/obs.py wait + fetch        attach the .debs and .rpms to the release
+```mermaid
+flowchart TB
+    published(["GitHub release published<br>(or the workflow re-run with the tag)"])
+    build["Actions: build the source packages<br>scripts/build-source-packages.sh<br>tarball with vendored crates, .dsc, .spec"]
+    bundle[["Release: keyloom-source-packages.tar<br>attached as an asset"]]
+    trigger["Actions: trigger OBS<br>scripts/obs.py trigger, with a service token"]
+    service["OBS: run the package's _service<br>download the bundle from the latest release, extract it"]
+    builds["OBS: build every repository and architecture<br>offline, with the keyloom-rust-toolchain package"]
+    fetch["Actions: wait, then fetch the packages<br>scripts/obs.py wait-builds and fetch, public API only"]
+    packages[["Release: .deb and .rpm files<br>named after their distribution"]]
+    published --> build --> bundle
+    build --> trigger --> service
+    bundle -.-> service
+    service --> builds --> fetch --> packages
+    classDef actions fill:#EEEDFE,stroke:#7F77DD,color:#26215C
+    classDef release fill:#F1EFE8,stroke:#888780,color:#2C2C2A
+    classDef obs fill:#E1F5EE,stroke:#1D9E75,color:#04342C
+    class build,trigger,fetch actions
+    class published,bundle,packages release
+    class service,builds obs
 ```
 
 OBS never receives an account credential: the only secret GitHub holds is
@@ -53,80 +64,27 @@ into `keyloom.spec`; the toolchain package is assembled the same way from
 OBS package holds the `.dsc` and the `.spec` side by side and builds each
 repository with the recipe of its format.
 
-## One-time setup
+## What the workflows expect
 
-### 1. Create the OBS project and packages
+The OBS side is configured once by hand and is not part of the repository:
+a project whose repositories match `packaging/obs/project.xml`, holding
+the packages `keyloom` and `keyloom-rust-toolchain`, each with the
+matching `packaging/obs/*._service` file uploaded as `_service`. The
+workflows find it through the repository variable `OBS_PROJECT` and
+authenticate with the secrets `OBS_TOKEN_KEYLOOM` and
+`OBS_TOKEN_TOOLCHAIN`: one OBS service token per package, each able only
+to run that package's services. To add or drop a distribution, change
+the project's repositories on OBS and in `packaging/obs/project.xml`,
+which mirrors them; nothing else needs to change for a Debian- or
+RPM-based distribution OBS offers.
 
-With an account on https://build.opensuse.org, either use the web
-interface:
-
-1. Open your home project, choose **Subprojects → Create subproject**, and
-   name it `Keyloom` (the project becomes `home:<username>:Keyloom`). A
-   subproject keeps Keyloom's repositories separate from anything else you
-   build. Leave the SCM (git) URL field empty: a project "managed in SCM"
-   takes its packages from that repository and offers no way to create
-   them by hand. If it was set, remove the `<scmsync>` line on the
-   project's **Meta** tab (under **Advanced**) and save.
-2. On the project's **Repositories** tab, **Add from a Distribution** for
-   Debian 13, Debian Testing, Debian Unstable, Ubuntu 24.04, Ubuntu 25.10,
-   Ubuntu 26.04, Fedora 43, Fedora 44, and Fedora Rawhide. Edit each
-   repository to add the `aarch64` architecture next to `x86_64`. To add
-   or drop a distribution later, change the repositories here and in
-   `packaging/obs/project.xml`, which mirrors them; nothing else needs to
-   change for a Debian- or RPM-based distribution OBS offers.
-3. Create two packages in the project: `keyloom` and
-   `keyloom-rust-toolchain` (**Create Package**, name only).
-4. In each package, **Add file** and upload the matching file from
-   `packaging/obs/` with the name `_service`:
-   `keyloom._service` for `keyloom` and `keyloom-rust-toolchain._service`
-   for `keyloom-rust-toolchain`. These tell OBS where on GitHub to fetch
-   the sources from and which files (the `.dsc` with its tarballs, and the
-   `.spec`) to take from the bundle. The first service run fails until the
-   workflows have published something there; that is expected.
-
-Or do the same from a terminal with `osc` (`pipx install osc`;
-`osc ls home:<username>` asks for and stores your credentials the first
-time):
-
-```sh
-project="home:<username>:Keyloom"
-sed "s/OBS_USERNAME/<username>/g" packaging/obs/project.xml | osc meta prj -F - "$project"
-for package in keyloom keyloom-rust-toolchain; do
-    osc meta pkg -F - "$project" "$package" <<XML
-<package name="$package"><title>$package</title><description/></package>
-XML
-    osc checkout "$project" "$package"
-    cp "packaging/obs/$package._service" "$project/$package/_service"
-    (cd "$project/$package" && osc add _service && osc commit -m "Fetch sources from GitHub")
-done
-```
-
-### 2. Create the service tokens
-
-On build.opensuse.org open **Your Profile → Tokens → Create Token** and
-create two tokens of type **service**, each limited to the project and
-one package: one for `keyloom`, one for `keyloom-rust-toolchain`. A
-service token can only run that package's `_service`; it cannot read or
-change anything else. Then, in the GitHub repository under **Settings →
-Secrets and variables → Actions**:
-
-- Secret `OBS_TOKEN_KEYLOOM`: the token for `keyloom`.
-- Secret `OBS_TOKEN_TOOLCHAIN`: the token for `keyloom-rust-toolchain`.
-- Variable `OBS_PROJECT`: `home:<username>:Keyloom`.
-
-Nothing else is needed: the workflows read build states and download the
-finished packages through OBS's public API.
-
-### 3. Publish the Rust toolchain package
-
-Run the **Rust toolchain package** workflow from the **Actions** tab
-(**Run workflow**). It downloads the pinned Rust release, builds the source
-packages, publishes them on a GitHub pre-release tagged `rust-toolchain`
-(clearly marked as not being a Keyloom release), triggers the OBS package,
-and waits for OBS to build it for every repository. The first Keyloom
+The **Rust toolchain package** workflow publishes the toolchain sources
+on the `rust-toolchain` pre-release and waits for OBS to build them for
+every repository. It runs whenever `packaging/rust-toolchain` changes on
+`main` and can be run by hand from the **Actions** tab; the first Keyloom
 build in a repository waits for this package to be built there.
 
-### 4. Publish a release
+## Publishing a release
 
 Bump `version` in `Cargo.toml`, commit, and publish a GitHub release whose
 tag is `v` followed by that version, for example `v0.1.0`. The **Release
@@ -138,17 +96,19 @@ triggers the OBS package, waits for OBS to finish every build (up to five
 hours), and attaches the `.deb` and `.rpm` files to the release, named
 like `keyloom_0.1.0-1_amd64_ubuntu-24.04.deb` and
 `keyloom-0.1.0-7.1.x86_64_fedora-43.rpm` (OBS numbers an RPM's release
-itself, without a distribution tag, hence the suffix). A distribution whose build
-failed is reported and fails the run, but only after the packages of the
-others are attached: OBS's base system for a rolling distribution such as
-Debian Unstable or Fedora Rawhide breaks now and then through no fault of
-the package, and that should not withhold the rest. Build logs live on
-OBS: `https://build.opensuse.org/package/show/<project>/keyloom`. To retry
-an existing release, run the workflow by hand with the tag as input
-(`gh workflow run "Release packages" -f tag=v0.1.0`). The sources always
-come from the tag, while the recipes and scripts come from the branch the
-workflow runs on, so a re-run picks up packaging fixes made since the
-release.
+itself, without a distribution tag, hence the suffix). A distribution
+whose build failed is reported and fails the run, but only after the
+packages of the others are attached: OBS's base system for a rolling
+distribution such as Debian Unstable or Fedora Rawhide breaks now and
+then through no fault of the package, and that should not withhold the
+rest. Build logs live on OBS:
+`https://build.opensuse.org/package/show/<project>/keyloom`.
+
+To retry an existing release, run the workflow by hand with the tag as
+input (`gh workflow run "Release packages" -f tag=v0.1.0`). The sources
+always come from the tag, while the recipes and scripts come from the
+branch the workflow runs on, so a re-run picks up packaging fixes made
+since the release.
 
 OBS fetches the bundle from GitHub's *latest* release, so two things
 follow. A release marked as a pre-release (a version such as
