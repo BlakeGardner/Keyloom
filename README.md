@@ -6,7 +6,7 @@ Keyloom is a visual keyboard customization app for Linux. Click a key,
 choose what it should do, and it takes effect right away. Simple things
 stay simple, with real power when you want it.
 
-**[Download Keyloom →](https://github.com/BlakeGardner/Keyloom/releases)**
+**[Install Keyloom →](#install-keyloom)**
 
 ## Remap keys visually
 
@@ -46,10 +46,105 @@ https://github.com/user-attachments/assets/2430f87a-9767-4bc9-8b00-454ced1da319
 - **Changes apply themselves**: no Apply button, and one click pauses
   remapping when you want your original keys back.
 
-## Get Keyloom
+## Install Keyloom
 
-Visit the **[releases page](https://github.com/BlakeGardner/Keyloom/releases)**
-for downloads and release notes.
+Add Keyloom's repository for your distribution, and Keyloom updates with
+the rest of your system. Pick yours below for the commands.
+
+<details>
+<summary><b>Debian 13</b></summary>
+
+```sh
+echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+sudo apt update
+sudo apt install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Debian testing</b></summary>
+
+```sh
+echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+sudo apt update
+sudo apt install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Ubuntu 24.04</b></summary>
+
+```sh
+echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+sudo apt update
+sudo apt install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Ubuntu 25.10</b></summary>
+
+```sh
+echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_25.10/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_25.10/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+sudo apt update
+sudo apt install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Ubuntu 26.04</b></summary>
+
+```sh
+echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_26.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_26.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+sudo apt update
+sudo apt install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Fedora 43</b></summary>
+
+```sh
+sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_43/home:BlakeGardner:Keyloom.repo
+sudo dnf install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Fedora 44</b></summary>
+
+```sh
+sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_44/home:BlakeGardner:Keyloom.repo
+sudo dnf install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Fedora Rawhide</b></summary>
+
+```sh
+sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_Rawhide/home:BlakeGardner:Keyloom.repo
+sudo dnf install keyloom
+```
+
+</details>
+
+Prefer a one-off download? The
+[releases page](https://github.com/BlakeGardner/Keyloom/releases) carries
+a `.deb` and an `.rpm` for each of these, for 64-bit Intel/AMD and ARM,
+along with the release notes.
 
 Keyloom is in early development. It does its remapping through
 [xremap](https://github.com/xremap/xremap): a guided first-run setup
