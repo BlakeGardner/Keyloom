@@ -137,7 +137,8 @@ The workflow attaches `keyloom-source-packages.tar` to the release,
 triggers the OBS package, waits for OBS to finish every build (up to five
 hours), and attaches the `.deb` and `.rpm` files to the release, named
 like `keyloom_0.1.0-1_amd64_ubuntu-24.04.deb` and
-`keyloom-0.1.0-1.fc43.x86_64_fedora-43.rpm`. A distribution whose build
+`keyloom-0.1.0-7.1.x86_64_fedora-43.rpm` (OBS numbers an RPM's release
+itself, without a distribution tag, hence the suffix). A distribution whose build
 failed is reported and fails the run, but only after the packages of the
 others are attached: OBS's base system for a rolling distribution such as
 Debian Unstable or Fedora Rawhide breaks now and then through no fault of

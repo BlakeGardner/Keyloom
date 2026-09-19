@@ -24,8 +24,8 @@ Subcommands:
       DEST, each renamed to say which distribution it is for
       (keyloom_0.1.0-1_amd64.deb from xUbuntu_24.04 becomes
       keyloom_0.1.0-1_amd64_ubuntu-24.04.deb, and
-      keyloom-0.1.0-1.fc43.x86_64.rpm from Fedora_43 becomes
-      keyloom-0.1.0-1.fc43.x86_64_fedora-43.rpm). Source and debug-symbol
+      keyloom-0.1.0-7.1.x86_64.rpm from Fedora_43 becomes
+      keyloom-0.1.0-7.1.x86_64_fedora-43.rpm). Source and debug-symbol
       packages are skipped.
 """
 

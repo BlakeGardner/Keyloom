@@ -19,6 +19,11 @@ BuildRequires:  desktop-file-utils
 BuildRequires:  gcc
 BuildRequires:  keyloom-rust-toolchain >= 1.93
 BuildRequires:  pkgconfig(xkbcommon)
+# Not used directly: libxkbcommon-devel needs pkgconfig(libxml-2.0), and
+# when a Fedora release offers it from two packages (Rawhide has a compat
+# libxml2_2.13-devel next to libxml2-devel) the Open Build Service refuses
+# to choose one; naming the regular package settles it.
+BuildRequires:  libxml2-devel
 Requires:       systemd
 # Loaded at run time rather than linked: the Wayland client libraries and
 # the EGL and Vulkan loaders the renderer picks from.
