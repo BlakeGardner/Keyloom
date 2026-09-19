@@ -8,8 +8,7 @@
 
 <p align="center">
   Keyloom is a visual keyboard customization app for Linux. Click a key,
-  choose what it should do, and it takes effect right away.<br>
-  Works on Wayland and X11, on COSMIC, GNOME, KDE, and other desktops.
+  choose what it should do, and it takes effect right away.
 </p>
 
 <p align="center"><a href="#install-keyloom"><strong>Install Keyloom →</strong></a></p>
