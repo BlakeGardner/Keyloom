@@ -29,13 +29,20 @@ tracked in [Functionality TODO](Functionality_TODO.md).
 - [ ] Provide an in-app viewer for remapping service logs so users can
   investigate failures without opening a terminal.
 
-## Ship xremap in packages
+## Undo first-run setup
 
-- [ ] Provide xremap as a package dependency, or bundle it, for supported
-  distributions, so packaged installs need no download. Version 0.1.0's
-  first-run setup downloads the pinned xremap release into the user's
-  `~/.local/bin` when none is installed, and uses a distribution's xremap
-  when there is one.
+- [ ] Offer an uninstall action that reverses the system changes first-run
+  setup made: stop and disable the remapping service, remove the user unit
+  Keyloom wrote, delete the xremap Keyloom downloaded into `~/.local/bin`,
+  and remove the udev rule and `uinput` module configuration it installed
+  with administrator rights. Keyloom should undo only what it installed,
+  leaving a distribution's xremap, a unit it did not write, and an
+  administrator's own udev rules alone; changes that need administrator
+  rights should be summarised before Keyloom asks for them, and offered as
+  commands to run by hand when the prompt is unavailable. Removing the
+  user's `input` group membership and deciding what happens to saved
+  profiles need their own confirmation, since both can affect more than
+  Keyloom.
 
 ## Broader service-manager support
 
