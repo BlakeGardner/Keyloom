@@ -379,15 +379,17 @@ moving on without the fix.
   link to the project page, and "Check again" instead. Editing keeps working
   throughout.
 - **Keyboard access** — checks membership in the `input` group, telling
-  membership that is in effect apart from membership that still needs a
-  new login. The fix runs `usermod -aG input`; the details explain that any
-  program running as the user gains the same access.
+  membership that is in effect apart from membership that is not yet. Setup
+  asks for a restart rather than a new login, since the systemd user
+  manager that runs xremap can outlive a logout and keep its old groups.
+  The fix runs `usermod -aG input`; the details explain that any program
+  running as the user gains the same access.
 - **Virtual keyboard** — checks that `/dev/uinput` opens for writing. The
   fix installs the rule `KERNEL=="uinput", GROUP="input", TAG+="uaccess"`
   as `/etc/udev/rules.d/00-xremap-input.rules`, loads the `uinput` module
   now and at boot, and reloads udev. A rule the xremap packages ship is
-  recognized. An installed rule that is not in effect waits for the next
-  login while joining the input group does, and is offered again otherwise.
+  recognized. An installed rule that is not in effect waits for the restart
+  while joining the input group does, and is offered again otherwise.
 - **Remapping service** — installs Keyloom's own `xremap.service` user unit
   under `~/.config/systemd/user/`, modeled on a hand-written unit proven on
   COSMIC: on Wayland sessions it waits for the compositor's socket (X11
@@ -398,8 +400,8 @@ moving on without the fix.
   desktop's client, are left to choose for themselves), keeps xremap
   running, and logs at info level (xremap's debug level would write every
   key press to the journal). Setup then reloads systemd, enables the unit,
-  and starts it when access is already in effect (otherwise it starts at the
-  next login). No password is needed. To turn it on by hand instead, the
+  and starts it when access is already in effect (otherwise it starts after
+  the restart). No password is needed. To turn it on by hand instead, the
   details save the file (and reload systemd) without enabling or starting
   it, then show the `systemctl --user enable` command that does, with
   `--now` only when access is already in effect. An existing unit is
@@ -412,12 +414,12 @@ moving on without the fix.
 A failed fix is reported on its step with the fix still on offer; any
 failure other than a dismissed prompt also opens the details, so the manual
 commands are at hand (without `pkexec`, the main button becomes "Check
-again"). The summary page says whether everything works, only a logout and
-login remain, or steps still need attention; each step's row reopens that
+again"). The summary page says whether everything works, only a restart
+remains, or steps still need attention; each step's row reopens that
 step, and an unfinished setup offers "Continue setup" back to the first step
 the user can still act on. Setup opens by itself only on the first launch:
 closing it records completion when every step is in order (or only waits for
-a login) and deferral otherwise, so it never nags. Only "Set up later",
+a restart) and deferral otherwise, so it never nags. Only "Set up later",
 Finish, or Escape close the wizard; a click outside it is ignored so a stray
 click cannot skip setup. A page taller than the window scrolls while its
 buttons stay in view.

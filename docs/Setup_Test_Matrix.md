@@ -32,7 +32,7 @@ is its main button. "Continue" means the page has nothing to fix.
 | W1 | Welcome, checks still running (`facts: None`, `probing`) | *First-run setup* · **Start setup** disabled or waiting |
 | W2 | Welcome, checks done | **Start setup**, "Set up later" |
 | F1 | Finish, every step in order (`is_all_ok`) | remapping works now |
-| F2 | Finish, only a login outstanding (`is_configured`) | works after the next login |
+| F2 | Finish, only a login outstanding (`is_configured`) | works after a restart |
 | F3 | Finish, a step left that Keyloom can act on | the step listed with its status, resumes there (`resume_step`) |
 | F4 | Finish, steps left that Keyloom cannot act on (no systemd, no home) | listed, closes only |
 | F5 | Reopened from the menu after completion | every step Continue, then F1 (captured as storyboard SB5) |
@@ -70,7 +70,7 @@ row above that found a binary:
 | ID | State | Shows |
 | --- | --- | --- |
 | G1 | `Effective` | *Allowed · Keyboard access is allowed* · Continue |
-| G2 | `NeedsLogin` (on record, not in this session) | *Takes effect at your next login* · Continue |
+| G2 | `NeedsLogin` (on record, not in this session) | *Takes effect after a restart* · Continue |
 | G3 | `NotMember`, user name known | *Not allowed yet · Allow keyboard access* · **Allow keyboard access** (asks for the password) |
 | G4 | `NotMember`, user name unknown (`user: None`) | same status and title · **Check again**, body says to run the command under details (`$USER`) |
 | G5 | `NoGroup` (no `input` group on this system) | *No input group · Keyboard access isn't available* · Continue |
@@ -85,7 +85,7 @@ row above that found a binary:
 | U2 | `Missing`, no rule installed (module not loaded) | *Not set up · Allow the virtual keyboard* · **Allow virtual keyboard** |
 | U3 | `Missing`, rule installed | same as U2 |
 | U4 | `NotWritable`, no rule installed | *Not allowed yet · Allow the virtual keyboard* · **Allow virtual keyboard** |
-| U5 | `NotWritable`, rule installed, group `NeedsLogin` | *Takes effect at your next login* · Continue |
+| U5 | `NotWritable`, rule installed, group `NeedsLogin` | *Takes effect after a restart* · Continue |
 | U6 | `NotWritable`, rule installed, group `Effective` (the rule is not working) | *Not in effect · Allow the virtual keyboard* · **Set up again** |
 
 ## Step 4 · remapping service
@@ -96,7 +96,7 @@ can be written (`installable`: a binary and a config path).
 | ID | State | Shows |
 | --- | --- | --- |
 | S1 | Keyloom's unit, running and enabled | *Running · Remapping is on* · Continue |
-| S2 | Keyloom's unit, enabled, not running, no effective access, login pending | *set up, starts after login · Remapping is set up* · Continue |
+| S2 | Keyloom's unit, enabled, not running, no effective access, login pending | *Starts after a restart · Remapping is set up* · Continue |
 | S3 | Keyloom's unit, enabled, not running, no effective access, nothing pending | same title, status without the login · Continue |
 | S4 | Keyloom's unit, enabled, not running, access effective | *Not running · Turn remapping back on* · **Start remapping** |
 | S5 | Keyloom's unit, running, not enabled | *Doesn't start at login · Keep remapping on* · **Start at login** |

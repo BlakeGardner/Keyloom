@@ -1681,13 +1681,17 @@ fn matching_detail(facts: &Facts) -> Body {
     }
 }
 
-/// A step that only waits for the user to log out and back in.
+/// A step that only waits for a restart. Logging out is not always enough:
+/// the systemd user manager that runs xremap can outlive the session and
+/// keep the groups it started with.
 fn after_login(title: &str, about: String) -> StepView {
     StepView {
         color: color_attention(),
-        status: "Takes effect at your next login".to_owned(),
+        status: "Takes effect after a restart".to_owned(),
         title: title.to_owned(),
-        body: plain("It takes effect once you log out and back in, which you can do after setup."),
+        body: plain(
+            "It takes effect once you restart your computer, which you can do after setup.",
+        ),
         next: Next::Continue,
         keep: None,
         details: Details::about(plain(about)),
@@ -1740,7 +1744,7 @@ fn group_view(facts: &Facts) -> StepView {
                 details: Details::about(plain(format!(
                     "Keyloom adds you to the {INPUT_GROUP} group, which may read every keyboard \
                      and mouse. Any program you run gets the same access, which is worth \
-                     knowing on a shared computer. It takes effect the next time you log in. \
+                     knowing on a shared computer. It takes effect once you restart your computer. \
                      To do it yourself, run this in a terminal:"
                 )))
                 .commands(format!("sudo usermod -aG {INPUT_GROUP} {user}")),
@@ -1897,14 +1901,14 @@ fn service_view(facts: &Facts) -> StepView {
             StepView {
                 color: color_attention(),
                 status: if login {
-                    "Starts at your next login"
+                    "Starts after a restart"
                 } else {
                     "Waiting for keyboard access"
                 }
                 .to_owned(),
                 title: "Remapping is set up".to_owned(),
                 body: plain(if login {
-                    "It starts on its own once you log out and back in."
+                    "It starts on its own once you restart your computer."
                 } else {
                     "It starts on its own once Keyloom may read your keyboard and use the \
                      virtual keyboard."
@@ -2556,7 +2560,7 @@ fn finish_page(setup: &Setup, height: f32) -> Element<'_, Message> {
         ),
         Some(facts) if facts.is_configured() => (
             "Almost there",
-            "Log out and back in to finish. Remapping starts on its own after that, and \
+            "Restart your computer to finish. Remapping starts on its own after that, and \
              anything you set up now is kept.",
         ),
         Some(_) if resume.is_some() => (
