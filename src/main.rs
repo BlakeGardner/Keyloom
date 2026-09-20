@@ -4,6 +4,7 @@
 mod app;
 mod apps;
 mod config;
+mod icons;
 mod install;
 mod keyboard;
 mod monitor;
@@ -18,6 +19,16 @@ mod xremap;
 use cosmic::theme::ThemeType;
 
 fn main() -> cosmic::iced::Result {
+    // Before anything else: the icon lookup reads `XDG_DATA_DIRS` once,
+    // the first time libcosmic draws an icon.
+    if let Some(data_dirs) = icons::fallback_data_dirs() {
+        // SAFETY: changing the environment is unsound only while another
+        // thread may be reading it, and no thread has been started yet:
+        // this is the first thing `main` does, and the runtime that
+        // starts them is created by `cosmic::app::run` below.
+        unsafe { std::env::set_var("XDG_DATA_DIRS", data_dirs) };
+    }
+
     let settings = cosmic::app::Settings::default()
         // Follow the desktop's light/dark preference live; the design
         // tokens in `ui::theme` adapt to the mode.

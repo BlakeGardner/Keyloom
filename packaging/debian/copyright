@@ -7,6 +7,11 @@ Files: *
 Copyright: 2026 Blake Gardner
 License: GPL-3.0-only
 
+Files: data/icons/cosmic/*.svg
+Copyright: 2022 System76
+License: CC-BY-SA-4.0
+Comment: Unmodified from https://github.com/pop-os/cosmic-icons
+
 Files: vendor/*
 Copyright: The authors of the respective crates
 License: various
@@ -26,3 +31,8 @@ License: GPL-3.0-only
  .
  On Debian systems, the complete text of the GNU General Public License
  version 3 can be found in "/usr/share/common-licenses/GPL-3".
+
+License: CC-BY-SA-4.0
+ These files are licensed under the Creative Commons
+ Attribution-ShareAlike 4.0 International License. The complete text of
+ the license is at https://creativecommons.org/licenses/by-sa/4.0/legalcode
