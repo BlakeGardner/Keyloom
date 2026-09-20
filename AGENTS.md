@@ -35,11 +35,16 @@ materially changes a real user-facing capability, workflow, supported setup,
 data or persistence behavior, backend integration, important limitation, or
 roadmap commitment.
 
-- `docs/Functionality_TODO.md`: track substantive feature work, limitations,
-  and meaningful follow-up tasks. Do not add entries for routine polish.
 - `docs/Current_Features.md`: describe implemented capabilities and relevant
   limitations at the product level. Keep it accurate, but do not catalog every
   control behavior or presentation detail.
+- `docs/Upcoming_Features.md`: track capabilities a user would notice that are
+  planned but not built. Remove an entry when the capability ships and
+  `Current_Features.md` describes it. Do not add entries for routine polish.
+- `docs/Technical_Backlog.md`: track engineering work with no user-facing
+  feature of its own, such as test infrastructure, packaging, and
+  investigations. Keep user-visible limitations in `Current_Features.md` and
+  record only what an approach would have to solve.
 
 Documentation updates are generally unnecessary for animations, spacing,
 styling, copy edits, small usability refinements, internal refactors,

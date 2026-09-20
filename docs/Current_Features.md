@@ -1,9 +1,9 @@
 # Current Features
 
-What Keyloom does today. This is the counterpart to
-[Functionality_TODO.md](Functionality_TODO.md), which tracks what is still
-missing and defines the 0.1.0 release commitments.
-[Upcoming Features](Upcoming_Features.md) tracks plans beyond that release.
+What Keyloom does today, including the limitations users live with.
+[Upcoming Features](Upcoming_Features.md) tracks capabilities that are
+planned but not built, and [Technical Backlog](Technical_Backlog.md) tracks
+engineering work without a user-facing feature of its own.
 
 Profiles with their key mappings, layers, application scopes, and shortcut
 groups are persisted via cosmic-config and translated into an xremap
@@ -18,8 +18,9 @@ first-run setup installs that unit and walks through the input permissions
 
 - Native Rust + libcosmic application; runs on Wayland and X11.
 - Menu launcher and application icon assets live in `data/` and must be
-  installed alongside the binary for desktop integration. See the
-  [packaging notes](../data/README.md).
+  installed alongside the binary for desktop integration. How the packages
+  install them is described in
+  [packaging/README.md](../packaging/README.md).
 - Debian, Ubuntu, and Fedora packages are built on the Open Build Service
   from each GitHub release: Debian 13, testing, and unstable, Ubuntu
   24.04, 25.10, and 26.04, and Fedora 43, 44, and Rawhide, for x86_64 and
@@ -252,9 +253,9 @@ virtual keyboards or network input. See the
 [libei architecture](https://libinput.pages.freedesktop.org/libei/), and
 [xremap architecture](https://github.com/xremap/xremap#concept).
 
-Support is only a distant-future possibility, outside the initial and
-near-term release scope, with no target release or commitment. It is tracked
-in [Functionality_TODO.md §10](Functionality_TODO.md#10-distant-future-possibilities-unscheduled).
+Support is only a distant-future possibility, with no target release or
+commitment. What an approach would have to solve is noted in
+[Technical Backlog](Technical_Backlog.md#input-paths-beyond-evdev).
 
 ## Tester view
 
