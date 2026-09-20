@@ -30,6 +30,11 @@ use crate::xremap;
 /// The group Linux grants keyboard (`/dev/input`) access to.
 pub const INPUT_GROUP: &str = "input";
 
+/// Where distributions keep administration tools such as `usermod`: the
+/// directories `pkexec` puts on the `PATH` of what it runs. A user's own
+/// `PATH` need not have them; Debian's leaves out both `sbin` directories.
+const ADMIN_DIRS: &str = "/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// The udev rules file Keyloom installs, named like the one the xremap
 /// packages ship so the two never disagree.
 pub const RULES_FILE: &str = "00-xremap-input.rules";
@@ -662,6 +667,32 @@ async fn is_executable(path: &Path) -> bool {
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
+/// The program to hand `pkexec` for an administration tool. `pkexec`
+/// looks a bare name up on the caller's `PATH`, not the administrator's,
+/// so on Debian it cannot find `usermod`; an absolute path needs no
+/// lookup.
+async fn admin_tool(name: &str) -> PathBuf {
+    admin_tool_in(
+        name,
+        OsStr::new(ADMIN_DIRS),
+        std::env::var_os("PATH").as_deref(),
+    )
+    .await
+}
+
+/// [`admin_tool`] over explicit system directories and `PATH` value. The
+/// system's directories come first, since the tool runs as the
+/// administrator; `PATH` covers systems that keep it elsewhere. A tool
+/// found in neither goes to `pkexec` by name, to be reported in its words.
+async fn admin_tool_in(name: &str, system: &OsStr, path: Option<&OsStr>) -> PathBuf {
+    if let Some(found) = find_on_path(name, Some(system)).await {
+        return found;
+    }
+    find_on_path(name, path)
+        .await
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
 /// The version out of `xremap 0.15.12`.
 fn parse_version(output: &str) -> Option<String> {
     let version = output.trim().strip_prefix("xremap")?.trim();
@@ -944,7 +975,7 @@ impl From<install::Error> for ActionError {
 
 /// Run a program as the administrator through the desktop's polkit
 /// prompt.
-async fn privileged(program: &str, args: &[&str]) -> Result<(), ActionError> {
+async fn privileged(program: &Path, args: &[&str]) -> Result<(), ActionError> {
     let output = Command::new("pkexec")
         .arg(program)
         .args(args)
@@ -983,7 +1014,8 @@ fn classify_exit(code: Option<i32>, stderr: &str) -> Result<(), ActionError> {
 ///
 /// When authorization is cancelled or refused, or `usermod` fails.
 pub async fn add_to_input_group(user: &str) -> Result<(), ActionError> {
-    privileged("usermod", &["-aG", INPUT_GROUP, user]).await
+    let usermod = admin_tool("usermod").await;
+    privileged(&usermod, &["-aG", INPUT_GROUP, user]).await
 }
 
 /// Install the udev rule, load the `uinput` module, and apply the rule
@@ -993,7 +1025,7 @@ pub async fn add_to_input_group(user: &str) -> Result<(), ActionError> {
 ///
 /// When authorization is cancelled or refused, or a command fails.
 pub async fn prepare_uinput() -> Result<(), ActionError> {
-    privileged("/bin/sh", &["-c", UINPUT_SCRIPT]).await
+    privileged(Path::new("/bin/sh"), &["-c", UINPUT_SCRIPT]).await
 }
 
 /// Carry out the xremap step: download the release Keyloom ships into
@@ -1478,6 +1510,46 @@ mod tests {
             "a copy the user has on PATH comes first"
         );
         assert_eq!(locate_in(None, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn an_admin_tool_is_found_where_the_users_path_does_not_reach() {
+        let dir = TempDir::new("setup-admin-tool");
+        let sbin = dir.path().join("usr").join("sbin");
+        let bin = dir.path().join("usr").join("bin");
+        let elsewhere = dir.path().join("sw").join("bin");
+        for each in [&sbin, &bin, &elsewhere] {
+            fs::create_dir_all(each).unwrap();
+        }
+        let system = std::env::join_paths([&sbin, &bin]).unwrap();
+        // Debian's PATH for a regular user: no sbin directory in it.
+        let path = std::env::join_paths([&bin, &elsewhere]).unwrap();
+        let place = |tool: &Path| {
+            fs::write(tool, "#!/bin/sh\n").unwrap();
+            fs::set_permissions(tool, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+
+        assert_eq!(
+            admin_tool_in("usermod", &system, Some(&path)).await,
+            PathBuf::from("usermod"),
+            "a tool found nowhere is left for pkexec to report"
+        );
+        place(&elsewhere.join("usermod"));
+        assert_eq!(
+            admin_tool_in("usermod", &system, Some(&path)).await,
+            elsewhere.join("usermod"),
+            "PATH covers a system that keeps the tool elsewhere"
+        );
+        place(&sbin.join("usermod"));
+        assert_eq!(
+            admin_tool_in("usermod", &system, Some(&path)).await,
+            sbin.join("usermod"),
+            "the system's own directory comes first, on PATH or not"
+        );
+        assert_eq!(
+            admin_tool_in("usermod", &system, None).await,
+            sbin.join("usermod")
+        );
     }
 
     #[test]
