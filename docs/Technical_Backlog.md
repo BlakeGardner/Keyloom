@@ -37,3 +37,15 @@ Flatpak builds, RPMs for distributions beyond Fedora, and AppStream metadata
 so software centers describe Keyloom. The current source-based Debian and
 Fedora packaging is documented in
 [packaging/README.md](../packaging/README.md).
+
+For Arch Linux, `packaging/arch/PKGBUILD` builds releases from source; the
+two distribution channels beyond it are blocked or deferred. Publishing to
+the AUR waits for new-account registration to reopen (closed since the 2026
+malware wave; announcements land on aur-general and the Arch news feed),
+and needs an account, a one-time submission, and a version bump pushed
+after each release. Binary packages would mean an `Arch:Extra` repository
+on the Open Build Service: the PKGBUILD emitted into the source bundle
+next to the `.dsc` and `.spec`, `scripts/obs.py` taught to fetch and name
+`.pkg.tar.zst` files, x86_64 only (OBS offers no aarch64 Arch), and a
+scratch build first to check that OBS's rolling Arch base system is
+dependable enough to release from.

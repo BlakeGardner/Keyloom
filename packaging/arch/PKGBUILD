@@ -1,0 +1,60 @@
+# Maintainer: Blake Gardner <blakerg@gmail.com>
+# Arch recipe for the keyloom package: builds the latest release from its
+# GitHub tag, with every crate pinned by the tag's Cargo.lock (libcosmic
+# comes from its pinned git revision). This file lives in the repository
+# until AUR registration reopens; it is what would be published there.
+# After each release, update pkgver and sha256sums to the new tag. See
+# packaging/README.md.
+
+pkgname=keyloom
+pkgver=0.1.2
+pkgrel=1
+pkgdesc="Visual keyboard customization for Linux"
+arch=('x86_64' 'aarch64')
+url="https://github.com/BlakeGardner/Keyloom"
+license=('GPL-3.0-only')
+depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon' 'systemd')
+makedepends=('cargo')
+checkdepends=('desktop-file-utils')
+# Loaded at run time rather than linked: the Wayland client libraries and
+# the EGL and Vulkan loaders the renderer picks from, and pkexec for the
+# guided input-permission setup.
+optdepends=('polkit: let first-run setup ask for administrator access'
+            'wayland: run on Wayland sessions'
+            'libglvnd: render through EGL'
+            'vulkan-icd-loader: render through Vulkan, with a Vulkan driver')
+# makepkg's -flto=auto turns the C files ring compiles into GCC bitcode
+# objects, which the lld linker Rust uses cannot read (undefined
+# ring_core_* symbols); Cargo manages its own optimization either way.
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('86c86617d1fab7bc4d9c66d9cdd956d4be9d3465de211f8bd4e9d4001dd6dbd1')
+
+prepare() {
+    cd "Keyloom-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "Keyloom-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+# The project's CI runs the test suite on every commit before a release is
+# tagged; the package build compiles only what ships.
+check() {
+    cd "Keyloom-$pkgver"
+    desktop-file-validate data/io.github.blakegardner.Keyloom.desktop
+}
+
+package() {
+    cd "Keyloom-$pkgver"
+    install -Dm755 target/release/keyloom "$pkgdir/usr/bin/keyloom"
+    install -Dm644 data/io.github.blakegardner.Keyloom.desktop \
+        "$pkgdir/usr/share/applications/io.github.blakegardner.Keyloom.desktop"
+    install -Dm644 data/io.github.blakegardner.Keyloom.svg \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.blakegardner.Keyloom.svg"
+}

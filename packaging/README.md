@@ -147,10 +147,37 @@ dnf builddep keyloom.spec
 rpmbuild --define "_sourcedir $PWD" --define "_topdir $PWD/rpmbuild" -bb keyloom.spec
 ```
 
+## Arch Linux
+
+`packaging/arch/PKGBUILD` builds the latest *release* from source the way
+an AUR package would: it downloads the tag's tarball from GitHub and
+`cargo fetch --locked` resolves the crates its `Cargo.lock` pins,
+including libcosmic's git revision. Arch's own `rust` package is always
+current, so the keyloom-rust-toolchain package plays no part. The recipe
+is not wired into OBS or the release workflow; it is the file that will
+be published to the AUR once new-account registration reopens there (see
+[Technical_Backlog.md](../docs/Technical_Backlog.md)).
+
+After each release, update `pkgver`, reset `pkgrel` to 1, and refresh
+`sha256sums` with the new tag tarball's checksum, then rebuild once in a
+clean container the way a user would:
+
+```sh
+docker run --rm -v "$PWD/packaging/arch:/src:ro" archlinux:latest bash -euxc '
+    pacman -Syu --noconfirm --needed base-devel rust libxkbcommon desktop-file-utils
+    useradd -m builder
+    install -d -o builder /build
+    install -o builder -m644 /src/PKGBUILD /build/PKGBUILD
+    cd /build && sudo -u builder makepkg --noconfirm
+    pacman -U --noconfirm keyloom-*.pkg.tar.zst'
+```
+
 ## Not covered yet
 
 - RPM packages are built for Fedora only; openSUSE and other RPM
   distributions, Flatpak, and other formats are not set up.
+- Arch packages are source-only: the PKGBUILD is not on the AUR yet, and
+  no binary pacman repository is built or published.
 - Packages are unsigned beyond OBS's own repository signing.
 - Pre-releases get no OBS builds (see above).
 - No AppStream metadata is installed, so software centers show no

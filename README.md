@@ -150,6 +150,25 @@ sudo dnf install keyloom
 
 </details>
 
+### Arch Linux
+
+<details>
+<summary><b>Arch Linux and derivatives (Omarchy, EndeavourOS, …)</b></summary>
+
+Keyloom is not on the AUR yet (new accounts cannot register there at the
+time of writing), so the PKGBUILD lives in this repository. In an empty
+directory, with `base-devel` installed:
+
+```sh
+curl -O https://raw.githubusercontent.com/BlakeGardner/Keyloom/main/packaging/arch/PKGBUILD
+makepkg -si
+```
+
+This builds the latest release from source, which takes a few minutes;
+update by running it again when a new release is out.
+
+</details>
+
 Prefer a one-off download? Every
 [release](https://github.com/BlakeGardner/Keyloom/releases) has a `.deb`
 and an `.rpm` for 64-bit Intel/AMD and ARM.

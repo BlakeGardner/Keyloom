@@ -29,7 +29,10 @@ first-run setup installs that unit and walks through the input permissions
   from the apt or dnf repository the build service publishes, which also
   delivers updates, or as a one-off `.deb` or `.rpm` attached to the
   release; the [README](../README.md) gives the commands per
-  distribution. See
+  distribution. On Arch Linux and derivatives such as Omarchy, the
+  PKGBUILD in `packaging/arch/` builds the latest release from source
+  with `makepkg`; it is not on the AUR yet, and no binary pacman packages
+  are built. See
   [packaging/README.md](../packaging/README.md). Other package formats are
   not produced.
 - Follows the desktop's light/dark preference: directly on COSMIC, and
