@@ -179,12 +179,13 @@ user would:
 
 ```sh
 docker run --rm -v "$PWD/packaging/arch:/src:ro" archlinux:latest bash -euxc '
-    pacman -Syu --noconfirm --needed base-devel rust libxkbcommon desktop-file-utils
+    pacman -Syu --noconfirm --needed base-devel
     useradd -m builder
+    echo "builder ALL=(root) NOPASSWD: /usr/bin/pacman" > /etc/sudoers.d/builder
     install -d -o builder /build
     install -o builder -m644 /src/PKGBUILD /build/PKGBUILD
-    cd /build && sudo -u builder makepkg --noconfirm
-    pacman -U --noconfirm keyloom-*.pkg.tar.zst'
+    cd /build && sudo -u builder makepkg --syncdeps --noconfirm
+    pacman -U --noconfirm keyloom-[0-9]*.pkg.tar.zst'
 ```
 
 ## Not covered yet

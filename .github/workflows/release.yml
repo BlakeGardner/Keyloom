@@ -141,12 +141,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      # Before checkout, which needs git inside the container.
+      # Only what the job itself uses, before checkout, which needs git
+      # inside the container; makepkg --syncdeps installs what the
+      # PKGBUILD declares, so its dependencies are never repeated here.
       - name: Install the build environment
-        run: >
-          pacman -Syu --noconfirm --needed
-          base-devel rust libxkbcommon desktop-file-utils namcap
-          git github-cli
+        run: pacman -Syu --noconfirm --needed base-devel git github-cli namcap
       - uses: actions/checkout@v7
       - name: Check the release
         id: release
@@ -155,7 +154,8 @@ jobs:
             echo "::notice::$TAG is a pre-release; like the OBS packages, the Arch package is built only for full releases."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      # makepkg refuses to run as root, hence the builder user.
+      # makepkg refuses to run as root, hence the builder user, allowed
+      # sudo pacman so --syncdeps can install the PKGBUILD's dependencies.
       - name: Build the package
         if: steps.release.outputs.skip != 'true'
         run: |
@@ -164,12 +164,13 @@ jobs:
             "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$TAG.tar.gz"
           sha=$(sha256sum "keyloom-$version.tar.gz" | cut -d' ' -f1)
           useradd -m builder
+          echo 'builder ALL=(root) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/builder
           install -d -o builder /build
           install -o builder -m644 packaging/arch/PKGBUILD /build/PKGBUILD
           install -o builder -m644 "keyloom-$version.tar.gz" "/build/keyloom-$version.tar.gz"
           sed -i "s/^pkgver=.*/pkgver=$version/; s/^sha256sums=.*/sha256sums=('$sha')/" /build/PKGBUILD
           cd /build
-          sudo -u builder makepkg --noconfirm
+          sudo -u builder makepkg --syncdeps --noconfirm
           namcap keyloom-*.pkg.tar.zst || true
       # The glob starting with a digit passes over the -debug package some
       # makepkg configurations split off.
