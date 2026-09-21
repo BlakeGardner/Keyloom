@@ -140,6 +140,13 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+      # gh would otherwise ask git for the repository, and git does not
+      # trust the checkout's ownership inside the container.
+      GH_REPO: ${{ github.repository }}
+    defaults:
+      run:
+        # Container steps default to sh; the attach step uses bash arrays.
+        shell: bash
     steps:
       # Only what the job itself uses, before checkout, which needs git
       # inside the container; makepkg --syncdeps installs what the
