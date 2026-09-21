@@ -3,7 +3,8 @@
 Keyloom's Debian, Ubuntu, and Fedora packages are built on the
 [Open Build Service](https://build.opensuse.org/) (OBS). Publishing a GitHub
 release starts the pipeline; nothing is built on GitHub's runners except
-the source packages.
+the source packages and the Arch package, which the workflow builds
+itself with makepkg in an Arch container (see [Arch Linux](#arch-linux)).
 
 ```mermaid
 flowchart TB
@@ -14,15 +15,17 @@ flowchart TB
     service["OBS: run the package's _service<br>download the bundle from the latest release, extract it"]
     builds["OBS: build every repository and architecture<br>offline, with the keyloom-rust-toolchain package"]
     fetch["Actions: wait, then fetch the packages<br>scripts/obs.py wait-builds and fetch, public API only"]
-    packages[["Release: .deb and .rpm files<br>named after their distribution"]]
+    arch["Actions: build the Arch package<br>makepkg in an archlinux container"]
+    packages[["Release: .deb, .rpm, and Arch .pkg.tar.zst files<br>named after their distribution"]]
     published --> build --> bundle
     build --> trigger --> service
+    build --> arch --> packages
     bundle -.-> service
     service --> builds --> fetch --> packages
     classDef actions fill:#EEEDFE,stroke:#7F77DD,color:#26215C
     classDef release fill:#F1EFE8,stroke:#888780,color:#2C2C2A
     classDef obs fill:#E1F5EE,stroke:#1D9E75,color:#04342C
-    class build,trigger,fetch actions
+    class build,trigger,fetch,arch actions
     class published,bundle,packages release
     class service,builds obs
 ```
@@ -35,7 +38,7 @@ Users install from the OBS repository for their distribution (OBS publishes
 an apt repository for each Debian and Ubuntu release and a dnf repository
 for each Fedora release under
 `https://download.opensuse.org/repositories/<project>/`) or download a
-`.deb` or `.rpm` from the GitHub release.
+`.deb`, `.rpm`, or Arch `.pkg.tar.zst` from the GitHub release.
 
 ## One source tarball, two recipes, one Rust toolchain
 
@@ -149,18 +152,30 @@ rpmbuild --define "_sourcedir $PWD" --define "_topdir $PWD/rpmbuild" -bb keyloom
 
 ## Arch Linux
 
-`packaging/arch/PKGBUILD` builds the latest *release* from source the way
-an AUR package would: it downloads the tag's tarball from GitHub and
+`packaging/arch/PKGBUILD` builds a *release* from source the way an AUR
+package would: it downloads the tag's tarball from GitHub and
 `cargo fetch --locked` resolves the crates its `Cargo.lock` pins,
 including libcosmic's git revision. Arch's own `rust` package is always
-current, so the keyloom-rust-toolchain package plays no part. The recipe
-is not wired into OBS or the release workflow; it is the file that will
-be published to the AUR once new-account registration reopens there (see
-[Technical_Backlog.md](../docs/Technical_Backlog.md)).
+current, so the keyloom-rust-toolchain package plays no part. The AUR is
+where the recipe should end up once new-account registration reopens
+there (see [Technical_Backlog.md](../docs/Technical_Backlog.md)); until
+then the release workflow stands in for it.
 
-After each release, update `pkgver`, reset `pkgrel` to 1, and refresh
-`sha256sums` with the new tag tarball's checksum, then rebuild once in a
-clean container the way a user would:
+The workflow's `arch` job builds the package on the GitHub runner, in an
+`archlinux:latest` container, and attaches it to the release as
+`keyloom-<version>-<rel>-x86_64_arch.pkg.tar.zst` for a one-off
+`pacman -U` install. It uses the PKGBUILD from the commit it runs on
+with `pkgver` and `sha256sums` rewritten for the tag being released, so
+a release never waits for the committed file to be bumped, and a re-run
+picks up recipe fixes. Like the OBS builds, pre-releases are skipped.
+The package is x86_64 only (the runner's architecture; Arch Linux itself
+supports no other) and unsigned, like the other files on the release.
+
+The committed `pkgver` and `sha256sums` still serve everyone who builds
+by hand from the README's instructions. After each release, update
+`pkgver`, reset `pkgrel` to 1, and refresh `sha256sums` with the new tag
+tarball's checksum, then rebuild once in a clean container the way a
+user would:
 
 ```sh
 docker run --rm -v "$PWD/packaging/arch:/src:ro" archlinux:latest bash -euxc '
@@ -176,8 +191,9 @@ docker run --rm -v "$PWD/packaging/arch:/src:ro" archlinux:latest bash -euxc '
 
 - RPM packages are built for Fedora only; openSUSE and other RPM
   distributions, Flatpak, and other formats are not set up.
-- Arch packages are source-only: the PKGBUILD is not on the AUR yet, and
-  no binary pacman repository is built or published.
+- The Arch package is a one-off download: no pacman repository delivers
+  updates, the PKGBUILD is not on the AUR yet, and aarch64 users build
+  from source.
 - Packages are unsigned beyond OBS's own repository signing.
 - Pre-releases get no OBS builds (see above).
 - No AppStream metadata is installed, so software centers show no

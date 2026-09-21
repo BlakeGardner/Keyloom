@@ -36,6 +36,14 @@ without a user-facing feature of its own.
   translations will be planned separately.
 - **A log viewer.** Provide an in-app viewer for remapping service logs so
   users can investigate failures without opening a terminal.
+- **An update check.** Notice when a newer Keyloom release exists and say
+  so in the app. The apt and dnf repositories deliver updates with the
+  system, but a one-off download — the Arch package, or a `.deb` or
+  `.rpm` taken straight from a release — never hears about new versions.
+  The check has to stay modest: ask the release feed rarely, stay silent
+  when offline, point at the release rather than download anything, know
+  how this install updates (a repository updates itself and needs no
+  nudge), and be something the user can turn off.
 
 ## Setup and the remapping service
 

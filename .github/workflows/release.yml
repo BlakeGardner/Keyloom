@@ -6,11 +6,13 @@ name: Release packages
 # to fetch them from there. OBS builds the .deb packages for every
 # configured Debian and Ubuntu release and the .rpm packages for every
 # configured Fedora release, and the workflow then attaches those to the
-# GitHub release as well. OBS fetches GitHub's latest release, so
-# pre-releases are packaged only on GitHub. The sources come from the
-# release's tag; the packaging recipes and scripts come from the commit
-# this workflow runs on, so an older release can be re-run with current
-# packaging. See packaging/README.md for the one-time setup.
+# GitHub release as well. The Arch package is different: it is built right
+# here, with makepkg in an Arch container, and attached alongside them.
+# OBS fetches GitHub's latest release, so pre-releases are packaged only
+# on GitHub. The sources come from the release's tag; the packaging
+# recipes and scripts come from the commit this workflow runs on, so an
+# older release can be re-run with current packaging. See
+# packaging/README.md for the one-time setup.
 
 on:
   release:
@@ -120,3 +122,72 @@ jobs:
       - name: Fail if any build did not succeed
         if: steps.release.outputs.skip != 'true'
         run: ./scripts/obs.py check "$OBS_PROJECT" keyloom
+
+  arch:
+    name: Arch package
+    # Built here rather than on OBS: the AUR is the intended channel once
+    # its registration reopens, and until then the release carries a
+    # one-off binary, the way it carries one-off .deb and .rpm files.
+    # makepkg runs in an Arch container with the recipe from this commit,
+    # its pkgver and checksum pointed at the release's tag, so the
+    # committed PKGBUILD never needs to be bumped before a release. Needs
+    # the source job only for its tag checks; no artifact of it is used.
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container: archlinux:latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Before checkout, which needs git inside the container.
+      - name: Install the build environment
+        run: >
+          pacman -Syu --noconfirm --needed
+          base-devel rust libxkbcommon desktop-file-utils namcap
+          git github-cli
+      - uses: actions/checkout@v7
+      - name: Check the release
+        id: release
+        run: |
+          if [ "$(gh release view "$TAG" --json isPrerelease --jq .isPrerelease)" = true ]; then
+            echo "::notice::$TAG is a pre-release; like the OBS packages, the Arch package is built only for full releases."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      # makepkg refuses to run as root, hence the builder user.
+      - name: Build the package
+        if: steps.release.outputs.skip != 'true'
+        run: |
+          version=${TAG#v}
+          curl -fL -o "keyloom-$version.tar.gz" \
+            "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$TAG.tar.gz"
+          sha=$(sha256sum "keyloom-$version.tar.gz" | cut -d' ' -f1)
+          useradd -m builder
+          install -d -o builder /build
+          install -o builder -m644 packaging/arch/PKGBUILD /build/PKGBUILD
+          install -o builder -m644 "keyloom-$version.tar.gz" "/build/keyloom-$version.tar.gz"
+          sed -i "s/^pkgver=.*/pkgver=$version/; s/^sha256sums=.*/sha256sums=('$sha')/" /build/PKGBUILD
+          cd /build
+          sudo -u builder makepkg --noconfirm
+          namcap keyloom-*.pkg.tar.zst || true
+      # The glob starting with a digit passes over the -debug package some
+      # makepkg configurations split off.
+      - name: Install it, as a smoke test
+        if: steps.release.outputs.skip != 'true'
+        run: |
+          pacman -U --noconfirm /build/keyloom-[0-9]*-x86_64.pkg.tar.zst
+          ldd /usr/bin/keyloom
+      - name: Attach it to the release
+        if: steps.release.outputs.skip != 'true'
+        run: |
+          pkg=(/build/keyloom-[0-9]*-x86_64.pkg.tar.zst)
+          name=$(basename "${pkg[0]}" .pkg.tar.zst)_arch.pkg.tar.zst
+          cp "${pkg[0]}" "$name"
+          gh release upload "$TAG" "$name" --clobber
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arch-package
+          path: /build/keyloom-[0-9]*-x86_64.pkg.tar.zst
+          if-no-files-found: ignore
