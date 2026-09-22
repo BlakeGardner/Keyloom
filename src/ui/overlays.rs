@@ -1254,13 +1254,25 @@ pub fn about_dialog() -> Element<'static, Message> {
                 .width(Length::Fill),
             )
             .push(
-                txt("Built with Rust and libcosmic. Powered by xremap.", 12.0, muted())
-                .align_x(Alignment::Center)
-                .width(Length::Fill),
-            )
-            .push(
                 // Centered through the container, not the text: rich text
                 // places its link spans as if it were left-aligned.
+                container(
+                    rich_text([
+                        span("Built with Rust and libcosmic. Powered by "),
+                        span("xremap")
+                            .link("https://github.com/xremap/xremap")
+                            .color(accent())
+                            .underline(true),
+                        span("."),
+                    ])
+                    .on_link_click(Message::OpenUrl)
+                    .size(12)
+                    .class(ctheme::Text::Color(muted())),
+                )
+                .width(Length::Fill)
+                .align_x(Alignment::Center),
+            )
+            .push(
                 container(
                     rich_text([
                         span("Downloads, source, and issue reports live on the "),
