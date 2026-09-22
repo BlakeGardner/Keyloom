@@ -30,24 +30,3 @@ described for users in
 it would need a different input path or a backend integration; no approach
 has been investigated or selected, and a focused-window tester mode would
 only display received keys rather than enable remapping.
-
-## Packaging beyond the current formats
-
-Flatpak builds, RPMs for distributions beyond Fedora, and AppStream metadata
-so software centers describe Keyloom. The current source-based Debian and
-Fedora packaging is documented in
-[packaging/README.md](../packaging/README.md).
-
-For Arch Linux, the release workflow builds and attaches a one-off x86_64
-package from `packaging/arch/PKGBUILD`; what remains is delivering
-updates. Publishing to the AUR — the intended channel — waits for
-new-account registration to reopen (closed since the 2026 malware wave;
-announcements land on aur-general and the Arch news feed), and needs an
-account, a one-time submission, and a version bump pushed after each
-release. A pacman repository that updates through `pacman -Syu` would
-mean an `Arch:Extra` repository on the Open Build Service: the PKGBUILD
-emitted into the source bundle next to the `.dsc` and `.spec`,
-`scripts/obs.py` taught to fetch and name `.pkg.tar.zst` files, x86_64
-only (OBS offers no aarch64 Arch), and a scratch build first to check
-that OBS's rolling Arch base system is dependable enough to release
-from.
