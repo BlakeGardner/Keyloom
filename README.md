@@ -11,7 +11,7 @@
   choose what it should do, and it takes effect right away.
 </p>
 
-<p align="center"><a href="https://keyloom.net"><strong>keyloom.net</strong></a> · <a href="#install-keyloom"><strong>Install Keyloom →</strong></a></p>
+<p align="center"><a href="#install-keyloom"><strong>Install Keyloom →</strong></a></p>
 
 <p align="center">
   <img src="docs/media/basic-remaps.gif" alt="Choosing Play/Pause for F8 in the key editor, and the key taking on its new job right away">
