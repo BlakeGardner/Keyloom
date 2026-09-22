@@ -148,8 +148,9 @@
 
 <li class="card">
 <figure aria-hidden="true">
-<span class="chip"><span class="dot"></span>Laptop<span class="caret">▾</span></span>
-<span class="chip"><span class="dot dot--holding"></span>Remapping Paused</span>
+<span class="chip"><span class="dot"></span>Laptop</span>
+<span class="chip chip--quiet">Gaming</span>
+<span class="chip chip--quiet">Mac-style</span>
 </figure>
 <h3>Profiles</h3>
 <p>Separate setups for work, gaming, or Mac-style controls. One click pauses remapping when you want your original keys back.</p>
@@ -185,32 +186,6 @@
 <div class="installer" data-installer>
 <div class="tabs" role="group" aria-label="Distribution" data-distro-tabs></div>
 <div class="tabs" role="group" aria-label="Version" data-version-tabs></div>
-
-<section class="distro" data-distro="debian" data-name="Debian">
-<h3 class="distro-title">Debian</h3>
-<section class="version" data-version="debian-13" data-name="Debian 13">
-<h4 class="version-title">Debian 13</h4>
-<div class="terminal">
-<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
-<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
-<span class="line">sudo apt update</span>
-<span class="line">sudo apt install keyloom</span></code></pre>
-</div>
-<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
-</section>
-<section class="version" data-version="debian-testing" data-name="Debian testing">
-<h4 class="version-title">Debian testing</h4>
-<div class="terminal">
-<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
-<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
-<span class="line">sudo apt update</span>
-<span class="line">sudo apt install keyloom</span></code></pre>
-</div>
-<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
-</section>
-</section>
 
 <section class="distro is-active" data-distro="ubuntu" data-name="Ubuntu / Pop!_OS">
 <h3 class="distro-title">Ubuntu / Pop!_OS</h3>
@@ -249,22 +224,48 @@
 </section>
 </section>
 
-<section class="distro" data-distro="fedora" data-name="Fedora">
-<h3 class="distro-title">Fedora</h3>
-<section class="version" data-version="fedora-43" data-name="Fedora 43">
-<h4 class="version-title">Fedora 43</h4>
+<section class="distro" data-distro="debian" data-name="Debian">
+<h3 class="distro-title">Debian</h3>
+<section class="version" data-version="debian-13" data-name="Debian 13">
+<h4 class="version-title">Debian 13</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_43/home:BlakeGardner:Keyloom.repo</span>
-<span class="line">sudo dnf install keyloom</span></code></pre>
+<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
 </div>
 <p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
 </section>
+<section class="version" data-version="debian-testing" data-name="Debian testing">
+<h4 class="version-title">Debian testing</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+</section>
+
+<section class="distro" data-distro="fedora" data-name="Fedora">
+<h3 class="distro-title">Fedora</h3>
 <section class="version" data-version="fedora-44" data-name="Fedora 44">
 <h4 class="version-title">Fedora 44</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
 <pre><code><span class="line">sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_44/home:BlakeGardner:Keyloom.repo</span>
+<span class="line">sudo dnf install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+<section class="version" data-version="fedora-43" data-name="Fedora 43">
+<h4 class="version-title">Fedora 43</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_43/home:BlakeGardner:Keyloom.repo</span>
 <span class="line">sudo dnf install keyloom</span></code></pre>
 </div>
 <p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
@@ -280,8 +281,8 @@
 </section>
 </section>
 
-<section class="distro" data-distro="arch" data-name="Arch">
-<h3 class="distro-title">Arch Linux and derivatives</h3>
+<section class="distro" data-distro="arch" data-name="Arch / Omarchy / CachyOS / Manjaro">
+<h3 class="distro-title">Arch / Omarchy / CachyOS / Manjaro</h3>
 <section class="version" data-version="arch-package" data-name="Package from a release">
 <h4 class="version-title">Package from a release</h4>
 <div class="terminal">

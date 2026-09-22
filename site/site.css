@@ -38,7 +38,6 @@
   --pill-app-bg: oklch(0.3 0.05 196);
   --pill-app-border: oklch(0.44 0.07 196);
   --pill-app-fg: oklch(0.92 0.03 196);
-  --holding: oklch(0.78 0.13 85);
   --hero-glow: oklch(0.27 0.05 152 / 0.45);
   --lit-ring: oklch(0.78 0.14 152 / 0.25);
 
@@ -96,7 +95,6 @@
   --pill-app-bg: #023536;
   --pill-app-border: #105e5f;
   --pill-app-fg: #cfebeb;
-  --holding: #ddb049;
   --hero-glow: rgba(17, 45, 26, 0.45);
   --lit-ring: rgba(106, 209, 138, 0.25);
   }
@@ -646,20 +644,15 @@ a:hover {
   white-space: nowrap;
 }
 
+.chip--quiet {
+  color: var(--muted);
+}
+
 .dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
-}
-
-.dot--holding {
-  background: var(--holding);
-}
-
-.caret {
-  font-size: 9px;
-  color: var(--dim);
 }
 
 .readout {
