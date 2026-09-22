@@ -8,6 +8,9 @@ without a user-facing feature of its own.
 
 ## Remapping
 
+- **Import an existing xremap configuration.** Bring an existing xremap
+  config file into Keyloom so users can manage their remaps in the app
+  without recreating them manually.
 - **Richer layer jobs.** Tap/hold and modifier-chord outputs inside a layer,
   and a way to hold a layer with a modifier key without losing the modifier
   (today a modifier used as a layer key stops acting as one).
