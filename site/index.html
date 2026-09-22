@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyloom · Your keyboard, the way you want it</title>
+<meta name="description" content="Keyloom is a visual keyboard customization app for Linux. Click a key, choose what it should do, and it takes effect right away.">
+<link rel="canonical" href="https://keyloom.net/">
+<meta name="theme-color" content="#080b09">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Keyloom">
+<meta property="og:title" content="Keyloom · Your keyboard, the way you want it">
+<meta property="og:description" content="A visual keyboard customization app for Linux. Click a key, choose what it should do, and it takes effect right away.">
+<meta property="og:url" content="https://keyloom.net/">
+<meta property="og:image" content="https://keyloom.net/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Keyloom's main window showing a tenkeyless keyboard with a few remapped keys.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="keyloom-mark.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Noto+Sans+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="site.css">
+<script>document.documentElement.classList.replace('no-js', 'js');</script>
+<script src="site.js" defer></script>
+</head>
+<body>
+
+<header class="site-header">
+<nav class="wrap nav" aria-label="Main">
+<a class="brand" href="#top">
+<img src="keyloom-mark.svg" alt="" width="30" height="30">
+<span>Keyloom</span>
+</a>
+<ul class="nav-links">
+<li><a href="#features">Features</a></li>
+<li><a href="#install">Install</a></li>
+<li><a href="https://github.com/BlakeGardner/Keyloom">GitHub</a></li>
+</ul>
+</nav>
+</header>
+
+<main id="top">
+
+<section class="hero" aria-labelledby="hero-title">
+<div class="wrap">
+<p class="eyebrow">Keyboard customization for Linux</p>
+<h1 id="hero-title">Your keyboard, the way you want it.</h1>
+<p class="lead">Keyloom is a visual keyboard customization app for Linux. Click a key, choose what it should do, and it takes effect right away.</p>
+<div class="actions">
+<a class="button button-primary" href="#install">Install Keyloom</a>
+</div>
+<figure class="shot">
+<img src="keyloom-main-window.png" width="2420" height="1240" alt="Keyloom's main window showing a tenkeyless keyboard. Caps Lock is remapped to Escape and holds Control, the Menu key is Super, and F12 is Play/Pause." fetchpriority="high">
+</figure>
+</div>
+</section>
+
+<section class="steps" aria-labelledby="steps-title">
+<div class="wrap">
+<h2 id="steps-title" class="visually-hidden">How it works</h2>
+<ol class="steps-list">
+<li class="step">
+<span class="step-number" aria-hidden="true">1</span>
+<h3>Click a key</h3>
+<p>Keyloom shows your keyboard as it really is. It works out the size and layout for you.</p>
+</li>
+<li class="step">
+<span class="step-number" aria-hidden="true">2</span>
+<h3>Choose what it should do</h3>
+<p>Pick from a searchable list: any key, media and brightness controls, or a second job for when the key is held.</p>
+</li>
+<li class="step">
+<span class="step-number" aria-hidden="true">3</span>
+<h3>That's it</h3>
+<p>Your changes save and apply on their own. There is no Apply button.</p>
+</li>
+</ol>
+</div>
+</section>
+
+<section id="features" class="section" aria-labelledby="features-title">
+<div class="wrap">
+<div class="section-header">
+<p class="eyebrow">What it does</p>
+<h2 id="features-title">Simple things first. Power when you want it.</h2>
+<p>Remap a key in two clicks. When you need more, the same keyboard handles layers, per-application keys, and shortcuts.</p>
+</div>
+<ul class="cards">
+
+<li class="card">
+<figure aria-hidden="true">
+<div class="stack">
+<div class="cap cap--mapped"><small>Caps</small><strong>Esc</strong></div>
+<span class="pill-app">Visual Studio Code</span>
+</div>
+<div class="stack">
+<div class="cap">Caps</div>
+<span class="label">Everywhere else</span>
+</div>
+</figure>
+<h3>Different keys in different apps</h3>
+<p>A key can do one thing in one application and stay normal everywhere else. Caps Lock becomes Escape in your editor, and nothing else changes.</p>
+</li>
+
+<li class="card">
+<figure aria-hidden="true">
+<div class="cap cap--mapped cap--wide"><small>Caps</small><strong>Esc</strong><span class="hint">hold Ctrl</span></div>
+<div class="legend">
+<div><span>Tap</span><span class="pill-key">Esc</span></div>
+<div><span>Hold</span><span class="pill-key">Ctrl</span></div>
+</div>
+</figure>
+<h3>Tap and hold</h3>
+<p>Escape when tapped, Control when held. One key, two jobs, and no chording gymnastics.</p>
+</li>
+
+<li class="card">
+<figure aria-hidden="true">
+<div class="cap cap--held cap--sm">Caps<small>held</small></div>
+<div class="row">
+<div class="cap cap--mapped cap--sm"><small>H</small><strong>←</strong></div>
+<div class="cap cap--mapped cap--sm"><small>J</small><strong>↓</strong></div>
+<div class="cap cap--mapped cap--sm"><small>K</small><strong>↑</strong></div>
+<div class="cap cap--mapped cap--sm"><small>L</small><strong>→</strong></div>
+</div>
+</figure>
+<h3>Layers</h3>
+<p>Hold Caps Lock and H, J, K, L become arrow keys, while every other key keeps working normally.</p>
+</li>
+
+<li class="card">
+<figure aria-hidden="true">
+<div class="chord">
+<span class="pill-key">Super</span><span class="op">+</span><span class="pill-key">C</span>
+<span class="arrow">→</span>
+<span class="pill-key">Ctrl</span><span class="op">+</span><span class="pill-key">Shift</span><span class="op">+</span><span class="pill-key">C</span>
+</div>
+</figure>
+<h3>Shortcuts</h3>
+<p>Turn one chord into another, so Super+C sends the terminal's Ctrl+Shift+C and Ctrl+C keeps interrupting.</p>
+</li>
+
+<li class="card">
+<figure aria-hidden="true">
+<span class="chip"><span class="dot"></span>Laptop<span class="caret">▾</span></span>
+<span class="chip"><span class="dot dot--holding"></span>Remapping Paused</span>
+</figure>
+<h3>Profiles</h3>
+<p>Separate setups for work, gaming, or Mac-style controls. One click pauses remapping when you want your original keys back.</p>
+</li>
+
+<li class="card">
+<figure aria-hidden="true">
+<div class="stack">
+<div class="row">
+<div class="cap cap--fkey">F7</div>
+<div class="cap cap--held cap--fkey cap--lit">F8</div>
+<div class="cap cap--fkey">F9</div>
+</div>
+<span class="readout">F8 · KEY_F8 · sends Play/Pause</span>
+</div>
+</figure>
+<h3>Test your keyboard</h3>
+<p>Keys light up as you press them, and you see what each one sends. Handy for checking a remap, or a keyboard that acts up.</p>
+</li>
+
+</ul>
+</div>
+</section>
+
+<section id="install" class="section" aria-labelledby="install-title">
+<div class="wrap">
+<div class="section-header">
+<p class="eyebrow">Install</p>
+<h2 id="install-title">Get Keyloom</h2>
+<p>Add the repository for your distribution once, and Keyloom updates with the rest of your system. Pick your distribution to see the commands.</p>
+</div>
+
+<div class="installer" data-installer>
+<div class="tabs" role="group" aria-label="Distribution" data-distro-tabs></div>
+<div class="tabs" role="group" aria-label="Version" data-version-tabs></div>
+
+<section class="distro" data-distro="debian" data-name="Debian">
+<h3 class="distro-title">Debian</h3>
+<section class="version" data-version="debian-13" data-name="Debian 13">
+<h4 class="version-title">Debian 13</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+<section class="version" data-version="debian-testing" data-name="Debian testing">
+<h4 class="version-title">Debian testing</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+</section>
+
+<section class="distro is-active" data-distro="ubuntu" data-name="Ubuntu / Pop!_OS">
+<h3 class="distro-title">Ubuntu / Pop!_OS</h3>
+<section class="version is-active" data-version="ubuntu-24-04" data-name="24.04 · Pop!_OS 24.04">
+<h4 class="version-title">Ubuntu 24.04 or Pop!_OS 24.04</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+<section class="version" data-version="ubuntu-25-10" data-name="25.10">
+<h4 class="version-title">Ubuntu 25.10</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_25.10/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_25.10/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+<section class="version" data-version="ubuntu-26-04" data-name="26.04">
+<h4 class="version-title">Ubuntu 26.04</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_26.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_26.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+</section>
+
+<section class="distro" data-distro="fedora" data-name="Fedora">
+<h3 class="distro-title">Fedora</h3>
+<section class="version" data-version="fedora-43" data-name="Fedora 43">
+<h4 class="version-title">Fedora 43</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_43/home:BlakeGardner:Keyloom.repo</span>
+<span class="line">sudo dnf install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+<section class="version" data-version="fedora-44" data-name="Fedora 44">
+<h4 class="version-title">Fedora 44</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_44/home:BlakeGardner:Keyloom.repo</span>
+<span class="line">sudo dnf install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+<section class="version" data-version="fedora-rawhide" data-name="Rawhide">
+<h4 class="version-title">Fedora Rawhide</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Fedora_Rawhide/home:BlakeGardner:Keyloom.repo</span>
+<span class="line">sudo dnf install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+</section>
+
+<section class="distro" data-distro="arch" data-name="Arch">
+<h3 class="distro-title">Arch Linux and derivatives</h3>
+<section class="version" data-version="arch-package" data-name="Package from a release">
+<h4 class="version-title">Package from a release</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">sudo pacman -U ~/Downloads/keyloom-*-x86_64_arch.pkg.tar.zst</span></code></pre>
+</div>
+<p class="note">Download the <code>.pkg.tar.zst</code> from the <a href="https://github.com/BlakeGardner/Keyloom/releases">latest release</a> first. Updates are not automatic: fetch the new package when a release comes out. Keyloom is not on the AUR yet.</p>
+</section>
+<section class="version" data-version="arch-source" data-name="Build with the PKGBUILD">
+<h4 class="version-title">Build with the PKGBUILD</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">curl -O https://raw.githubusercontent.com/BlakeGardner/Keyloom/main/packaging/arch/PKGBUILD</span>
+<span class="line">makepkg -si</span></code></pre>
+</div>
+<p class="note">Run this in an empty directory with <code>base-devel</code> installed. It builds the latest release from source, which takes a few minutes, and it is the way to go on ARM.</p>
+</section>
+</section>
+</div>
+
+<p class="download">Prefer a one-off download? Every <a href="https://github.com/BlakeGardner/Keyloom/releases">release</a> has a .deb and an .rpm for 64-bit Intel/AMD and ARM, and an Arch package for 64-bit Intel/AMD.</p>
+</div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+<div class="wrap">
+<div class="footer-brand">
+<img src="keyloom-mark.svg" alt="" width="24" height="24">
+<strong>Keyloom</strong>
+<span>Free and open source under GPL-3.0. Built on xremap.</span>
+</div>
+<ul class="footer-links">
+<li><a href="https://github.com/BlakeGardner/Keyloom">GitHub</a></li>
+<li><a href="https://github.com/BlakeGardner/Keyloom/releases">Releases</a></li>
+<li><a href="https://github.com/BlakeGardner/Keyloom/blob/main/docs/Upcoming_Features.md">Roadmap</a></li>
+<li><a href="https://github.com/xremap/xremap">xremap</a></li>
+</ul>
+</div>
+</footer>
+
+</body>
+</html>

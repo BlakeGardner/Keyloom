@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1600" width="1600" height="1600" role="img" aria-label="Off-white keycap with a printed black letter K">
+  <defs>
+    <clipPath id="body">
+      <path d="M540 276 H1060 C1100 277 1132 292 1156 320 L1284 520 C1298 545 1306 565 1310 595 L1351 1200 L1351 1285 C1349 1320 1335 1345 1305 1357 C1285 1365 1262 1370 1235 1371 H370 C340 1370 315 1364 297 1356 C268 1343 251 1320 249 1285 L250 1200 L284 595 C288 565 296 545 310 520 L443 320 C468 292 500 277 540 276 Z"/>
+    </clipPath>
+    <linearGradient id="front" x1="0" y1="930" x2="0" y2="1371" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#BFB4A6"/>
+      <stop offset="0.85" stop-color="#BEB4A7"/>
+      <stop offset="1" stop-color="#B9AEA0"/>
+    </linearGradient>
+    <linearGradient id="face" x1="440" y1="0" x2="1166" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E5DBCD"/>
+      <stop offset="0.45" stop-color="#ECE5DB"/>
+      <stop offset="1" stop-color="#F5EFE8"/>
+    </linearGradient>
+    <linearGradient id="faceTop" x1="0" y1="276" x2="0" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="seamWide" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="22"/></filter>
+    <filter id="lip" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="2.5"/></filter>
+    <path id="face-shape" d="M545 279 H1055 C1095 281 1125 295 1140 325 C1150 345 1155 380 1156 400 L1166 800 C1167 860 1160 895 1110 928 C1040 950 900 956 800 955 C700 954 600 945 520 938 C465 925 438 880 440 800 L451 400 C452 380 455 350 462 330 C475 298 505 281 545 279 Z"/>
+  </defs>
+
+  <g clip-path="url(#body)">
+    <!-- front and right side (shaded) -->
+    <rect x="230" y="260" width="1140" height="1130" fill="url(#front)"/>
+    <!-- left side (lit), with a soft seam into the front -->
+    <polygon points="150,150 700,150 700,700 470,930 249,1400 150,1500" fill="#F6F2EA" filter="url(#seamWide)"/>
+    <!-- slightly darker seam at the right front corner -->
+    <path d="M1160 930 L1166 980 L1207 1050 L1246 1150 L1288 1250 L1325 1345" fill="none" stroke="#A3988A" stroke-opacity="0.4" stroke-width="34" filter="url(#lip)"/>
+    <!-- rounded lip where the top face rolls into the front -->
+    <path d="M500 930 C570 950 690 961 800 962 C930 962 1045 948 1118 922" fill="none" stroke="#D9CEC0" stroke-width="34" stroke-linecap="round" filter="url(#lip)"/>
+    <!-- top face -->
+    <use href="#face-shape" fill="url(#face)" filter="url(#soft)"/>
+    <use href="#face-shape" fill="url(#faceTop)"/>
+  </g>
+
+  <!-- printed letter K -->
+  <path d="M681.5 476 H728 V612 L865 476 H908 Q918 477 913 485 L792.7 604.2 L929 752 Q934 761 924 761 H874 L763 633.5 L728 658 V761 H678.5 Z" fill="#1C1C1A"/>
+</svg>

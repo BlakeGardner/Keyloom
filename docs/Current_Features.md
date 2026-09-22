@@ -37,6 +37,9 @@ first-run setup installs that unit and walks through the input permissions
   source with `makepkg` (the path for aarch64). See
   [packaging/README.md](../packaging/README.md). Other package formats are
   not produced.
+- The project website, <https://keyloom.net>, is the static page under
+  `site/`, published by GitHub Pages from the `Website` workflow on every
+  push to `main` that touches it. It has no build step.
 - Follows the desktop's light/dark preference: directly on COSMIC, and
   through the XDG settings portal on other desktops (GNOME, KDE, and any
   compositor with a portal backend), updating live when it changes.
