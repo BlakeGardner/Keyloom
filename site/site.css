@@ -300,6 +300,7 @@ a:hover {
 }
 
 .shot {
+  position: relative;
   width: 100%;
   margin: clamp(40px, 4.4vw, 64px) 0 0;
   border: 1px solid var(--wash-12);
@@ -309,9 +310,35 @@ a:hover {
   box-shadow: var(--shadow-popover);
 }
 
-.shot img {
+.shot img,
+.shot video {
   display: block;
   width: 100%;
+  height: auto;
+}
+
+/* The recording loops on its own; this pauses it (and starts it again for
+   anyone whose system asks for reduced motion, where it starts paused). */
+
+.shot-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--wash-12);
+  border-radius: var(--r-control);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.shot-toggle:hover {
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--fg-bright);
 }
 
 /* ---- Steps ----------------------------------------------------------- */

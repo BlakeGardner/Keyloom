@@ -1,7 +1,34 @@
-// Keyloom website: the install section's distribution and version tabs,
-// and the copy buttons. Without scripting, every block shows in order.
+// Keyloom website: the hero recording's pause button, and the install
+// section's distribution and version tabs with their copy buttons. Without
+// scripting, the recording still loops and every install block shows in
+// order.
 (function () {
   "use strict";
+
+  var video = document.querySelector(".shot video");
+  if (video) {
+    var toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "shot-toggle";
+    var label = function () {
+      toggle.textContent = video.paused ? "Play" : "Pause";
+    };
+    toggle.addEventListener("click", function () {
+      if (video.paused) {
+        video.play();
+      } else {
+        video.pause();
+      }
+    });
+    video.addEventListener("play", label);
+    video.addEventListener("pause", label);
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      video.removeAttribute("autoplay");
+      video.pause();
+    }
+    label();
+    video.parentNode.appendChild(toggle);
+  }
 
   var installer = document.querySelector("[data-installer]");
   if (!installer) {
