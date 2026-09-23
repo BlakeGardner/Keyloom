@@ -85,7 +85,7 @@ jobs:
       # The xremap source checkout lives in the runner's temp directory,
       # outside Keyloom's target/, which rust-cache caches on its own.
       - name: Cache the pinned xremap source build for the layer harness
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/xremap-harness
           key: xremap-harness-${{ runner.os }}-${{ env.XREMAP_VERSION }}-${{ steps.toolchain.outputs.cachekey }}
@@ -95,7 +95,7 @@ jobs:
         # A failing interface test pictures the window as it was under
         # target/setup-shots/failures (src/app/e2e.rs).
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: failed-interface-tests
           path: target/setup-shots/failures
@@ -139,7 +139,7 @@ jobs:
         # Also after a failure, for what did render and the picture a
         # failed storyboard leaves under failures/.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: setup-screenshots
           path: target/setup-shots
