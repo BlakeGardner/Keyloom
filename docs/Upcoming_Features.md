@@ -11,6 +11,14 @@ without a user-facing feature of its own.
 - **Import an existing xremap configuration.** Bring an existing xremap
   config file into Keyloom so users can manage their remaps in the app
   without recreating them manually.
+- **Noticing edits to the config file.** Keyloom rewrites
+  `~/.config/xremap/keyloom.yml` from its own rule model, so anything edited
+  into that file by hand disappears the next time a mapping changes. Keyloom
+  could compare the document it would write against the one on disk and say
+  when they have diverged, warning before a change overwrites the edits and
+  offering to keep a copy. Once importing an existing configuration lands,
+  the warning could offer to bring those edits back into the app so they are
+  represented in the interface rather than only preserved.
 - **Richer layer jobs.** Tap/hold and modifier-chord outputs inside a layer,
   and a way to hold a layer with a modifier key without losing the modifier
   (today a modifier used as a layer key stops acting as one).
