@@ -68,7 +68,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+        # Open Sans is the interface font, so a failed interface test's
+        # picture of the window is rendered with it.
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev fonts-open-sans
       - name: Install pinned xremap for config validation
         run: |
           curl -sSL -o /tmp/xremap.zip "https://github.com/xremap/xremap/releases/download/v${XREMAP_VERSION}/xremap-linux-x86_64-full.zip"
@@ -89,6 +91,15 @@ jobs:
           key: xremap-harness-${{ runner.os }}-${{ env.XREMAP_VERSION }}-${{ steps.toolchain.outputs.cachekey }}
       - name: Run tests
         run: cargo test --verbose --locked
+      - name: Upload pictures of the windows failed interface tests left
+        # A failing interface test pictures the window as it was under
+        # target/setup-shots/failures (src/app/e2e.rs).
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-interface-tests
+          path: target/setup-shots/failures
+          if-no-files-found: ignore
       - name: Validate generated configs with pinned xremap
         run: cargo test --verbose --locked xremap::tests::generated_documents_parse_with_real_xremap -- --ignored --exact
       - name: Check that the release setup downloads is what GitHub serves
@@ -125,6 +136,9 @@ jobs:
         # no display or GPU (src/app/screenshots.rs).
         run: cargo test --locked screenshots -- --ignored
       - name: Upload the screenshots
+        # Also after a failure, for what did render and the picture a
+        # failed storyboard leaves under failures/.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: setup-screenshots

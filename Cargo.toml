@@ -30,4 +30,8 @@ features = [
 ]
 
 [dev-dependencies]
+# iced's headless test harness, from the iced bundled with libcosmic so
+# the two agree on every widget type; the lockfile keeps both at one
+# commit (src/app/e2e.rs).
+iced_test = { git = "https://github.com/pop-os/libcosmic.git" }
 png = "0.18"

@@ -3627,7 +3627,11 @@ fn opens_setup_on_launch(state: SetupState) -> bool {
 }
 
 #[cfg(test)]
+mod e2e;
+#[cfg(test)]
 mod screenshots;
+#[cfg(test)]
+mod staging;
 
 #[cfg(test)]
 mod tests {

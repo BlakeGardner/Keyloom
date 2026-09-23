@@ -1,0 +1,6 @@
+# The interface tests (src/app/e2e.rs) render with iced's software
+# backend, so they run the same on a workstation with a GPU and on a
+# CI runner without one. iced_test reads the variable when it creates
+# a renderer.
+[env]
+ICED_TEST_BACKEND = "tiny-skia"

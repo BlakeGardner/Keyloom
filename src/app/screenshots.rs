@@ -8,11 +8,15 @@
 //! `cargo test --locked screenshots -- --ignored`
 //! (or one section, e.g. `screenshots::service`).
 //!
-//! A state is staged from a [`setup::Facts`] literal and the wizard's
-//! own fields, never from the machine the tests run on, so every test
-//! starts clean and nothing on the system is read or changed. The
-//! renderer is the software one (tiny-skia), so the same state gives
-//! the same image on a workstation with a GPU and on a CI runner.
+//! The states pictured are the rows the interface tests assert on
+//! (`e2e`), and the storyboards are those tests' flows with a frame
+//! captured at each point they name: an image shows what a test has
+//! already checked, for the eye to judge what an assertion cannot,
+//! such as wrapping, contrast, and the look of a page. A state is staged
+//! from a [`setup::Facts`] literal (`staging`), never from the machine
+//! the tests run on, and the renderer is the software one (tiny-skia),
+//! so the same state gives the same image on a workstation with a GPU
+//! and on a CI runner.
 //!
 //! The states, and the identifiers the files are named after, are
 //! listed in `docs/Setup_Test_Matrix.md`.
@@ -21,19 +25,16 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cosmic::Application;
 use cosmic::iced::core::renderer::{Headless, Style};
 use cosmic::iced::core::theme::Base;
 use cosmic::iced::core::{Event, Pixels, Size, clipboard, mouse, time::Instant, window};
 use cosmic::iced::runtime::UserInterface;
 use cosmic::iced::runtime::user_interface::Cache;
-use cosmic::widget;
 
+use super::e2e::{self, Recorder, Row};
+use super::staging::{self, app_on, app_on_step, facts, ready, systems, window};
 use super::*;
-use crate::install;
-use crate::service;
-use crate::session::{Desktop, Session};
-use crate::setup::{ActionError, Facts, GroupCheck, Step, UinputCheck, UnitCheck, XremapCheck};
+use crate::setup::{ActionError, GroupCheck, Step, UnitCheck};
 
 /// A window size to render at: in logical pixels, and in the pixels of
 /// the image, which is twice the logical size (like a HiDPI display)
@@ -45,42 +46,18 @@ struct Viewport {
 
 const SCALE: f32 = 2.0;
 
-/// The window's default size (`src/main.rs`), so pages are captured
-/// with exactly the room they get, clipping included.
+/// The window's default size, so pages are captured with exactly the
+/// room they get, clipping included.
 const WINDOW: Viewport = Viewport {
-    logical: Size::new(1210.0, 620.0),
+    logical: staging::WINDOW,
     pixels: Size::new(2420, 1240),
 };
 
-/// The smallest the window can be made (`src/main.rs`).
+/// The smallest the window can be made.
 const MIN_WINDOW: Viewport = Viewport {
-    logical: Size::new(760.0, 480.0),
+    logical: staging::MIN_WINDOW,
     pixels: Size::new(1520, 960),
 };
-
-/// The window as the runtime composes it: the header bar with the
-/// application's own header widgets, the content beneath, and any
-/// dialog centered over both (`libcosmic/src/app/mod.rs`).
-fn window(app: &App) -> Element<'_, Message> {
-    let mut header = widget::header_bar();
-    for element in app.header_start() {
-        header = header.start(element);
-    }
-    for element in app.header_center() {
-        header = header.center(element);
-    }
-    for element in app.header_end() {
-        header = header.end(element);
-    }
-    let column = widget::column::with_capacity(2)
-        .push(header)
-        .push(app.view());
-    let mut popover = widget::popover(column).modal(true);
-    if let Some(dialog) = app.dialog() {
-        popover = popover.popup(dialog);
-    }
-    popover.into()
-}
 
 /// Where a named screenshot goes: `target/setup-shots/<name>.png`.
 fn shot(name: &str) -> PathBuf {
@@ -92,13 +69,13 @@ fn shot(name: &str) -> PathBuf {
 
 /// A renderer kept for the captures of one test: creating one loads
 /// the system's fonts, which is the slow part.
-struct Shots {
+pub(super) struct Shots {
     renderer: cosmic::Renderer,
 }
 
 impl Shots {
     /// The software renderer, with the running application's font.
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("a runtime to create the renderer on");
@@ -116,6 +93,18 @@ impl Shots {
     /// write it out.
     fn capture(&mut self, app: &App, name: &str) {
         self.capture_as(app, name, &cosmic::Theme::dark(), &WINDOW);
+    }
+
+    /// Render the window in the dark theme at any logical size, as the
+    /// interface tests picture a failure at the size they were driving.
+    pub(super) fn capture_at(&mut self, app: &App, name: &str, logical: Size) {
+        // Twice a window's whole pixels is well within `u32`.
+        let pixels = |length: f32| (length * SCALE).round() as u32;
+        let viewport = Viewport {
+            logical,
+            pixels: Size::new(pixels(logical.width), pixels(logical.height)),
+        };
+        self.capture_as(app, name, &cosmic::Theme::dark(), &viewport);
     }
 
     /// Lay the window out, draw it once, and write the pixels as a PNG.
@@ -174,160 +163,15 @@ impl Shots {
     }
 }
 
-// ---- Staging -----------------------------------------------------------
-
-const CONFIG: &str = "/home/blake/.config/xremap/keyloom.yml";
-const UNIT_PATH: &str = "/home/blake/.config/systemd/user/xremap.service";
-
-/// A system where everything is in order: the user's own xremap on a
-/// COSMIC Wayland session, access granted, Keyloom's unit running.
-fn ready() -> Facts {
-    Facts {
-        user: Some("blake".to_owned()),
-        xremap: found(false, Some(install::RELEASE), Some(vec![Desktop::Cosmic])),
-        group: GroupCheck::Effective,
-        uinput: UinputCheck::Writable,
-        unit: UnitCheck::Keyloom {
-            active: true,
-            enabled: true,
-        },
-        config: Some(PathBuf::from(CONFIG)),
-        session: Session {
-            desktop: Some(Desktop::Cosmic),
-            x11: false,
-        },
-    }
-}
-
-/// [`ready`] with some facts changed.
-fn facts(edit: impl FnOnce(&mut Facts)) -> Facts {
-    let mut facts = ready();
-    edit(&mut facts);
-    facts
-}
-
-fn found(managed: bool, version: Option<&str>, desktops: Option<Vec<Desktop>>) -> XremapCheck {
-    XremapCheck::Found {
-        path: PathBuf::from(if managed {
-            "/home/blake/.local/bin/xremap"
-        } else {
-            "/usr/bin/xremap"
-        }),
-        version: version.map(str::to_owned),
-        desktops,
-        managed,
-    }
-}
-
-/// A unit somebody else wrote, running or not, loading Keyloom's
-/// config or their own.
-fn foreign(reads_config: bool, active: bool) -> UnitCheck {
-    let config = if reads_config {
-        CONFIG
-    } else {
-        "/home/blake/.config/xremap/config.yml"
-    };
-    UnitCheck::Foreign {
-        exec_start: format!("/usr/bin/xremap --watch {config}"),
-        reads_config,
-        active,
-        path: Some(PathBuf::from(UNIT_PATH)),
-    }
-}
-
-/// The wizard open on a page with the checks done (or, without facts,
-/// still running).
-fn app_on(page: SetupPage, facts: Option<Facts>) -> App {
-    let mut app = App::init(Core::default(), ()).0;
-    app.setup = Some(Setup {
-        page,
-        probing: facts.is_none(),
-        facts,
-        ..Setup::new()
-    });
-    app
-}
-
-/// The wizard open on a step, with the open wizard's fields adjusted.
-fn app_on_step(step: Step, facts: Facts, edit: impl FnOnce(&mut Setup)) -> App {
-    let mut app = app_on(SetupPage::Step(step), Some(facts));
-    edit(setup_of(&mut app));
-    app
-}
-
-fn setup_of(app: &mut App) -> &mut Setup {
-    app.setup.as_mut().expect("setup is open")
-}
-
-/// Feed the wizard a message, as the runtime would.
-fn act(app: &mut App, message: Message) {
-    let _ = app.update(message);
-}
-
-/// Render every row of a step's table.
-fn capture_rows(shots: &mut Shots, dir: &str, step: Step, rows: Vec<(&str, Facts)>) {
-    for (id, facts) in rows {
-        let app = app_on(SetupPage::Step(step), Some(facts));
-        shots.capture(&app, &format!("{dir}/{id}"));
+/// Render every row of a step's table, as the interface tests stage it.
+fn capture_rows(shots: &mut Shots, dir: &str, step: Step, rows: Vec<Row>) {
+    for row in rows {
+        let app = app_on(SetupPage::Step(step), Some(row.facts));
+        shots.capture(&app, &format!("{dir}/{}", row.id));
     }
 }
 
 // ---- Rows of the matrix ------------------------------------------------
-
-/// A state per row, for the steps whose rows other sections reuse.
-mod rows {
-    use super::*;
-
-    pub fn xremap_missing() -> Facts {
-        facts(|f| f.xremap = XremapCheck::Missing)
-    }
-
-    pub fn xremap_outdated() -> Facts {
-        facts(|f| f.xremap = found(true, Some("0.15.10"), Some(vec![Desktop::Cosmic])))
-    }
-
-    pub fn not_member() -> Facts {
-        facts(|f| f.group = GroupCheck::NotMember)
-    }
-
-    pub fn uinput_missing() -> Facts {
-        facts(|f| {
-            f.uinput = UinputCheck::Missing {
-                rule_installed: false,
-            }
-        })
-    }
-
-    pub fn service_missing() -> Facts {
-        facts(|f| f.unit = UnitCheck::Missing)
-    }
-
-    pub fn service_stale() -> Facts {
-        facts(|f| f.unit = UnitCheck::Stale { active: true })
-    }
-
-    pub fn service_foreign_kept() -> Facts {
-        facts(|f| f.unit = foreign(false, true))
-    }
-
-    pub fn service_foreign_stopped() -> Facts {
-        facts(|f| f.unit = foreign(true, false))
-    }
-
-    /// Everything done except the login that makes access effective.
-    pub fn waiting_for_login() -> Facts {
-        facts(|f| {
-            f.group = GroupCheck::NeedsLogin;
-            f.uinput = UinputCheck::NotWritable {
-                rule_installed: true,
-            };
-            f.unit = UnitCheck::Keyloom {
-                active: false,
-                enabled: true,
-            };
-        })
-    }
-}
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
@@ -339,10 +183,10 @@ fn pages_around_the_steps() {
 
     let finish = [
         ("F1-all-set", Some(ready())),
-        ("F2-almost-there", Some(rows::waiting_for_login())),
+        ("F2-almost-there", Some(systems::waiting_for_login())),
         (
             "F3-not-finished-resumable",
-            Some(rows::service_foreign_kept()),
+            Some(systems::service_foreign_kept()),
         ),
         (
             "F4-not-finished-nothing-to-do",
@@ -361,54 +205,11 @@ fn pages_around_the_steps() {
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn xremap() {
-    let gnome = |f: &mut Facts| {
-        f.xremap = found(false, Some(install::RELEASE), Some(vec![Desktop::Gnome]));
-        f.session.desktop = Some(Desktop::Gnome);
-    };
     capture_rows(
         &mut Shots::new(),
         "xremap",
         Step::Xremap,
-        vec![
-            ("X1-installed", ready()),
-            (
-                "X2-installed-keyloom-download",
-                facts(|f| {
-                    f.xremap = found(true, Some(install::RELEASE), Some(vec![Desktop::Cosmic]))
-                }),
-            ),
-            ("X3-update-available", rows::xremap_outdated()),
-            (
-                "X4-version-unknown",
-                facts(|f| f.xremap = found(false, None, Some(vec![Desktop::Cosmic]))),
-            ),
-            ("X5-not-installed", rows::xremap_missing()),
-            // X6 (no release for this processor) depends on the build's
-            // architecture, not on the facts, so it cannot be staged here.
-            ("XA2-gnome-wayland", facts(gnome)),
-            (
-                "XA3-gnome-x11",
-                facts(|f| {
-                    gnome(f);
-                    f.session.x11 = true;
-                }),
-            ),
-            (
-                "XA4-unsupported-desktop",
-                facts(|f| {
-                    f.xremap = found(
-                        false,
-                        Some(install::RELEASE),
-                        Some(vec![Desktop::Gnome, Desktop::Kde]),
-                    );
-                }),
-            ),
-            (
-                "XA5-unreported",
-                facts(|f| f.xremap = found(false, Some("0.10.0"), None)),
-            ),
-            ("XA6-unknown-desktop", facts(|f| f.session.desktop = None)),
-        ],
+        e2e::xremap_rows(),
     );
 }
 
@@ -419,125 +220,29 @@ fn keyboard_access() {
         &mut Shots::new(),
         "group",
         Step::InputGroup,
-        vec![
-            ("G1-allowed", ready()),
-            ("G2-next-login", facts(|f| f.group = GroupCheck::NeedsLogin)),
-            ("G3-not-allowed", rows::not_member()),
-            (
-                "G4-not-allowed-user-unknown",
-                facts(|f| {
-                    f.group = GroupCheck::NotMember;
-                    f.user = None;
-                }),
-            ),
-            ("G5-no-group", facts(|f| f.group = GroupCheck::NoGroup)),
-        ],
+        e2e::keyboard_access_rows(),
     );
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn virtual_keyboard() {
-    let not_writable = |rule_installed: bool| UinputCheck::NotWritable { rule_installed };
     capture_rows(
         &mut Shots::new(),
         "uinput",
         Step::Uinput,
-        vec![
-            ("U1-allowed", ready()),
-            ("U2-missing", rows::uinput_missing()),
-            (
-                "U3-missing-rule-installed",
-                facts(|f| {
-                    f.uinput = UinputCheck::Missing {
-                        rule_installed: true,
-                    }
-                }),
-            ),
-            ("U4-not-allowed", facts(|f| f.uinput = not_writable(false))),
-            (
-                "U5-next-login",
-                facts(|f| {
-                    f.uinput = not_writable(true);
-                    f.group = GroupCheck::NeedsLogin;
-                }),
-            ),
-            ("U6-not-in-effect", facts(|f| f.uinput = not_writable(true))),
-        ],
+        e2e::virtual_keyboard_rows(),
     );
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn service() {
-    let keyloom = |active: bool, enabled: bool| UnitCheck::Keyloom { active, enabled };
     capture_rows(
         &mut Shots::new(),
         "service",
         Step::Service,
-        vec![
-            ("S1-running", ready()),
-            ("S2-set-up-starts-at-login", rows::waiting_for_login()),
-            (
-                "S3-set-up-waiting-for-access",
-                facts(|f| {
-                    f.uinput = UinputCheck::NotWritable {
-                        rule_installed: false,
-                    };
-                    f.unit = keyloom(false, true);
-                }),
-            ),
-            ("S4-not-running", facts(|f| f.unit = keyloom(false, true))),
-            ("S5-not-at-login", facts(|f| f.unit = keyloom(true, false))),
-            ("S6-turned-off", facts(|f| f.unit = keyloom(false, false))),
-            ("S7-stale-running", rows::service_stale()),
-            (
-                "S8-stale-stopped",
-                facts(|f| f.unit = UnitCheck::Stale { active: false }),
-            ),
-            ("S9-foreign-works", facts(|f| f.unit = foreign(true, true))),
-            ("S10-foreign-stopped", rows::service_foreign_stopped()),
-            ("S11-foreign-replace", rows::service_foreign_kept()),
-            (
-                "S12-foreign-replace-stopped",
-                facts(|f| f.unit = foreign(false, false)),
-            ),
-            (
-                "S13-foreign-unreadable",
-                facts(|f| {
-                    f.unit = UnitCheck::Foreign {
-                        exec_start: String::new(),
-                        reads_config: false,
-                        active: true,
-                        path: Some(PathBuf::from(UNIT_PATH)),
-                    }
-                }),
-            ),
-            ("S14-not-set-up", rows::service_missing()),
-            (
-                "S15-needs-xremap",
-                facts(|f| {
-                    f.xremap = XremapCheck::Missing;
-                    f.unit = UnitCheck::Missing;
-                }),
-            ),
-            (
-                "S16-no-home",
-                facts(|f| {
-                    f.config = None;
-                    f.unit = UnitCheck::Missing;
-                }),
-            ),
-            ("S17-no-systemd", facts(|f| f.unit = UnitCheck::Unavailable)),
-            (
-                "S18-no-systemd-nothing-known",
-                facts(|f| {
-                    f.xremap = XremapCheck::Missing;
-                    f.config = None;
-                    f.unit = UnitCheck::Unavailable;
-                }),
-            ),
-        ],
+        e2e::service_rows(),
     );
 }
 
@@ -551,25 +256,25 @@ fn transient_states() {
     let details = |s: &mut Setup| s.details = true;
 
     let states: Vec<(&str, App)> = vec![
-        ("T1a-installing", app_on_step(Step::Xremap, rows::xremap_missing(), busy(Step::Xremap))),
-        ("T1b-updating", app_on_step(Step::Xremap, rows::xremap_outdated(), busy(Step::Xremap))),
-        ("T1c-group-approval", app_on_step(Step::InputGroup, rows::not_member(), busy(Step::InputGroup))),
-        ("T1d-uinput-approval", app_on_step(Step::Uinput, rows::uinput_missing(), busy(Step::Uinput))),
-        ("T1e-turning-on", app_on_step(Step::Service, rows::service_missing(), busy(Step::Service))),
-        ("T1f-replacing", app_on_step(Step::Service, rows::service_foreign_kept(), busy(Step::Service))),
-        ("T1g-updating-service", app_on_step(Step::Service, rows::service_stale(), busy(Step::Service))),
-        ("T1h-starting", app_on_step(Step::Service, rows::service_foreign_stopped(), busy(Step::Service))),
+        ("T1a-installing", app_on_step(Step::Xremap, systems::xremap_missing(), busy(Step::Xremap))),
+        ("T1b-updating", app_on_step(Step::Xremap, systems::xremap_outdated(), busy(Step::Xremap))),
+        ("T1c-group-approval", app_on_step(Step::InputGroup, systems::not_member(), busy(Step::InputGroup))),
+        ("T1d-uinput-approval", app_on_step(Step::Uinput, systems::uinput_missing(), busy(Step::Uinput))),
+        ("T1e-turning-on", app_on_step(Step::Service, systems::service_missing(), busy(Step::Service))),
+        ("T1f-replacing", app_on_step(Step::Service, systems::service_foreign_kept(), busy(Step::Service))),
+        ("T1g-updating-service", app_on_step(Step::Service, systems::service_stale(), busy(Step::Service))),
+        ("T1h-starting", app_on_step(Step::Service, systems::service_foreign_stopped(), busy(Step::Service))),
         (
             "T2-cancelled",
-            app_on_step(Step::InputGroup, rows::not_member(), failed(Step::InputGroup, ActionError::Cancelled)),
+            app_on_step(Step::InputGroup, systems::not_member(), failed(Step::InputGroup, ActionError::Cancelled)),
         ),
         (
             "T3-not-authorized",
-            app_on_step(Step::Uinput, rows::uinput_missing(), failed(Step::Uinput, ActionError::NotAuthorized)),
+            app_on_step(Step::Uinput, systems::uinput_missing(), failed(Step::Uinput, ActionError::NotAuthorized)),
         ),
         (
             "T4-no-polkit",
-            app_on_step(Step::InputGroup, rows::not_member(), |s| {
+            app_on_step(Step::InputGroup, systems::not_member(), |s| {
                 s.error = Some((Step::InputGroup, ActionError::NoPolkit));
                 s.details = true;
                 s.details_for_failure = true;
@@ -579,7 +284,7 @@ fn transient_states() {
             "T5a-download-failed",
             app_on_step(
                 Step::Xremap,
-                rows::xremap_missing(),
+                systems::xremap_missing(),
                 failed(
                     Step::Xremap,
                     ActionError::Failed("could not download xremap: connection timed out".to_owned()),
@@ -590,7 +295,7 @@ fn transient_states() {
             "T5b-systemctl-failed",
             app_on_step(
                 Step::Service,
-                rows::service_missing(),
+                systems::service_missing(),
                 failed(
                     Step::Service,
                     ActionError::Failed(
@@ -600,19 +305,19 @@ fn transient_states() {
                 ),
             ),
         ),
-        ("T6a-details-save-file", app_on_step(Step::Service, rows::service_missing(), details)),
-        ("T6b-details-commands", app_on_step(Step::InputGroup, rows::not_member(), details)),
+        ("T6a-details-save-file", app_on_step(Step::Service, systems::service_missing(), details)),
+        ("T6b-details-commands", app_on_step(Step::InputGroup, systems::not_member(), details)),
         ("T6c-details-installed", app_on_step(Step::Xremap, ready(), details)),
         (
             "T8-copied",
-            app_on_step(Step::InputGroup, rows::not_member(), |s| {
+            app_on_step(Step::InputGroup, systems::not_member(), |s| {
                 s.details = true;
                 s.copied = true;
             }),
         ),
         (
             "T9-saving",
-            app_on_step(Step::Service, rows::service_missing(), |s| {
+            app_on_step(Step::Service, systems::service_missing(), |s| {
                 s.details = true;
                 s.saving = true;
             }),
@@ -633,11 +338,11 @@ fn cross_cutting_variations() {
     shots.capture_as(&welcome, "variations/C2a-light-welcome", &light, &WINDOW);
     let replace = app_on(
         SetupPage::Step(Step::Service),
-        Some(rows::service_foreign_kept()),
+        Some(systems::service_foreign_kept()),
     );
     shots.capture_as(&replace, "variations/C2b-light-replace", &light, &WINDOW);
 
-    let replace_details = app_on_step(Step::Service, rows::service_foreign_kept(), |s| {
+    let replace_details = app_on_step(Step::Service, systems::service_foreign_kept(), |s| {
         s.details = true
     });
     shots.capture_as(
@@ -646,7 +351,7 @@ fn cross_cutting_variations() {
         &cosmic::Theme::dark(),
         &MIN_WINDOW,
     );
-    let finish = app_on(SetupPage::Finish, Some(rows::service_foreign_kept()));
+    let finish = app_on(SetupPage::Finish, Some(systems::service_foreign_kept()));
     shots.capture_as(
         &finish,
         "variations/C3b-min-window-finish",
@@ -654,25 +359,7 @@ fn cross_cutting_variations() {
         &MIN_WINDOW,
     );
 
-    let long_paths = app_on_step(
-        Step::Service,
-        facts(|f| {
-            f.config = Some(PathBuf::from("/home/Jo Doe/.config/xremap/keyloom.yml"));
-            f.unit = UnitCheck::Foreign {
-                exec_start: "/opt/xremap/bin/xremap --watch=config --device 'Keychron K2' \
-                             --device 'ZSA Moonlander Mark I' --mouse \
-                             /home/Jo Doe/.config/xremap/base.yml \
-                             /home/Jo Doe/.config/xremap/work.yml"
-                    .to_owned(),
-                reads_config: false,
-                active: true,
-                path: Some(PathBuf::from(
-                    "/home/Jo Doe/.config/systemd/user/xremap.service",
-                )),
-            };
-        }),
-        |s| s.details = true,
-    );
+    let long_paths = app_on_step(Step::Service, systems::long_paths(), |s| s.details = true);
     shots.capture(&long_paths, "variations/C4-long-paths");
 }
 
@@ -701,199 +388,47 @@ impl Storyboard {
     }
 }
 
-/// Everything setup has to do on a system with nothing: xremap missing,
-/// no access, no service.
-fn fresh_system() -> Facts {
-    facts(|f| {
-        f.xremap = XremapCheck::Missing;
-        f.group = GroupCheck::NotMember;
-        f.uinput = UinputCheck::Missing {
-            rule_installed: false,
-        };
-        f.unit = UnitCheck::Missing;
-    })
-}
-
-/// A fix that worked, then the checks agreeing: the page moves on.
-fn fixed(app: &mut App, step: Step, after: Facts) {
-    act(
-        app,
-        Message::SetupActed {
-            step,
-            result: Ok(()),
-        },
-    );
-    act(app, Message::SetupProbed(after));
+/// A recorder for a flow's driver: each frame the flow names becomes
+/// the next image of the storyboard.
+fn record(id: &'static str) -> Recorder {
+    let mut board = Storyboard::new(id);
+    Some(Box::new(move |app: &App, label: &str| {
+        board.frame(app, label);
+    }))
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn storyboard_sb1_fresh_system() {
-    let mut board = Storyboard::new("SB1-fresh-system");
-    let mut app = App::init(Core::default(), ()).0;
-    app.setup = Some(Setup::new());
-    board.frame(&app, "welcome-checking");
-
-    act(&mut app, Message::SetupProbed(fresh_system()));
-    board.frame(&app, "welcome");
-    act(&mut app, Message::SetupContinue);
-    board.frame(&app, "xremap-not-installed");
-    act(&mut app, Message::SetupAct(Step::Xremap));
-    board.frame(&app, "xremap-installing");
-    let mut system = fresh_system();
-    system.xremap = found(true, Some(install::RELEASE), Some(vec![Desktop::Cosmic]));
-    fixed(&mut app, Step::Xremap, system.clone());
-    board.frame(&app, "group-not-allowed");
-
-    act(&mut app, Message::SetupAct(Step::InputGroup));
-    board.frame(&app, "group-approval");
-    system.group = GroupCheck::NeedsLogin;
-    fixed(&mut app, Step::InputGroup, system.clone());
-    board.frame(&app, "uinput-not-set-up");
-
-    act(&mut app, Message::SetupAct(Step::Uinput));
-    board.frame(&app, "uinput-approval");
-    system.uinput = UinputCheck::NotWritable {
-        rule_installed: true,
-    };
-    fixed(&mut app, Step::Uinput, system.clone());
-    board.frame(&app, "service-not-set-up");
-
-    act(&mut app, Message::SetupAct(Step::Service));
-    board.frame(&app, "service-turning-on");
-    system.unit = UnitCheck::Keyloom {
-        active: false,
-        enabled: true,
-    };
-    fixed(&mut app, Step::Service, system);
-    board.frame(&app, "finish-almost-there");
-    assert_eq!(setup_of(&mut app).page, SetupPage::Finish);
-
-    act(&mut app, Message::SetupFinish);
-    app.service = Some(service::Status::Inactive);
-    board.frame(&app, "main-window");
-    assert_eq!(app.setup_state, SetupState::Complete);
+    e2e::storyboards::fresh_system(record("SB1-fresh-system"));
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn storyboard_sb2_foreign_unit_kept() {
-    let mut board = Storyboard::new("SB2-foreign-unit-kept");
-    let mut app = app_on(SetupPage::Welcome, Some(rows::service_foreign_kept()));
-    board.frame(&app, "welcome");
-
-    // The earlier steps are in order, so setup goes straight to the service.
-    act(&mut app, Message::SetupContinue);
-    assert_eq!(setup_of(&mut app).page, SetupPage::Step(Step::Service));
-    board.frame(&app, "service-replace");
-
-    // "Keep mine" only continues.
-    act(&mut app, Message::SetupContinue);
-    board.frame(&app, "finish-not-finished");
-
-    act(&mut app, Message::SetupLater);
-    assert_eq!(app.setup_state, SetupState::Deferred);
-    // Their unit is running, which is all the header's chip knows.
-    app.service = Some(service::Status::Active);
-    board.frame(&app, "main-window-chip");
+    e2e::storyboards::foreign_unit_kept(record("SB2-foreign-unit-kept"));
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn storyboard_sb3_authorization_refused_then_granted() {
-    let mut board = Storyboard::new("SB3-authorization-refused");
-    let mut app = app_on(SetupPage::Step(Step::InputGroup), Some(rows::not_member()));
-    board.frame(&app, "group-not-allowed");
-
-    act(&mut app, Message::SetupAct(Step::InputGroup));
-    board.frame(&app, "approval");
-    act(
-        &mut app,
-        Message::SetupActed {
-            step: Step::InputGroup,
-            result: Err(ActionError::Cancelled),
-        },
-    );
-    act(&mut app, Message::SetupProbed(rows::not_member()));
-    board.frame(&app, "cancelled");
-
-    act(&mut app, Message::SetupAct(Step::InputGroup));
-    board.frame(&app, "approval-again");
-    fixed(
-        &mut app,
-        Step::InputGroup,
-        facts(|f| f.group = GroupCheck::NeedsLogin),
-    );
-    board.frame(&app, "finish-almost-there");
-    act(
-        &mut app,
-        Message::SetupPage(SetupPage::Step(Step::InputGroup)),
-    );
-    board.frame(&app, "group-next-login");
+    e2e::storyboards::authorization_refused_then_granted(record("SB3-authorization-refused"));
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn storyboard_sb4_no_polkit() {
-    let mut board = Storyboard::new("SB4-no-polkit");
-    let mut app = app_on(SetupPage::Step(Step::InputGroup), Some(rows::not_member()));
-    board.frame(&app, "group-not-allowed");
-
-    act(&mut app, Message::SetupAct(Step::InputGroup));
-    act(
-        &mut app,
-        Message::SetupActed {
-            step: Step::InputGroup,
-            result: Err(ActionError::NoPolkit),
-        },
-    );
-    act(&mut app, Message::SetupProbed(rows::not_member()));
-    board.frame(&app, "no-polkit-details");
-
-    // The user ran the command by hand and checks again.
-    act(&mut app, Message::SetupRecheck);
-    board.frame(&app, "checking");
-    act(
-        &mut app,
-        Message::SetupProbed(facts(|f| f.group = GroupCheck::NeedsLogin)),
-    );
-    board.frame(&app, "group-next-login");
+    e2e::storyboards::no_polkit(record("SB4-no-polkit"));
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn storyboard_sb5_reopened_after_completion() {
-    let mut board = Storyboard::new("SB5-reopened");
-    let mut app = app_on(SetupPage::Welcome, Some(ready()));
-    app.setup_state = SetupState::Complete;
-    board.frame(&app, "welcome");
-    for step in Step::ALL {
-        act(&mut app, Message::SetupPage(SetupPage::Step(step)));
-        board.frame(&app, &format!("{step:?}").to_lowercase());
-    }
-    act(&mut app, Message::SetupPage(SetupPage::Finish));
-    board.frame(&app, "finish-all-set");
-    act(&mut app, Message::SetupFinish);
-    app.service = Some(service::Status::Active);
-    board.frame(&app, "main-window");
-    assert_eq!(app.setup_state, SetupState::Complete);
+    e2e::storyboards::reopened_after_completion(record("SB5-reopened"));
 }
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn storyboard_sb6_download_out_of_date() {
-    let mut board = Storyboard::new("SB6-download-out-of-date");
-    let mut app = app_on(SetupPage::Welcome, Some(rows::xremap_outdated()));
-    board.frame(&app, "welcome");
-    act(&mut app, Message::SetupContinue);
-    board.frame(&app, "update-available");
-    act(&mut app, Message::SetupAct(Step::Xremap));
-    board.frame(&app, "updating");
-    fixed(
-        &mut app,
-        Step::Xremap,
-        facts(|f| f.xremap = found(true, Some(install::RELEASE), Some(vec![Desktop::Cosmic]))),
-    );
-    board.frame(&app, "finish-all-set");
-    assert_eq!(setup_of(&mut app).page, SetupPage::Finish);
+    e2e::storyboards::download_out_of_date(record("SB6-download-out-of-date"));
 }

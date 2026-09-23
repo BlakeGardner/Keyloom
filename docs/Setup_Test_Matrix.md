@@ -8,16 +8,31 @@ directly. Nothing is read from or written to the machine the tests
 run on: no group is joined, no file lands in `/etc`, no `systemctl`
 runs, and CI needs nothing beyond the Rust toolchain.
 
-Two kinds of test use this list:
+Three kinds of test use this list:
 
-- **Screenshots** (`src/app/screenshots.rs`): stage a state, render the
-  window with the software renderer, write a PNG to
+- **Interface tests** (`src/app/e2e.rs`): stage a state, build the
+  window the way the runtime composes it, and drive it with `iced_test`:
+  widgets are found by the text they show and clicked, and the messages
+  they emit go through `update` as at runtime. Every row of a step's
+  table is checked for its status, title, and main button, for what its
+  details say, and for what pressing the button does; the storyboards
+  are driven by clicks with an assertion at every frame. These run in
+  the ordinary `cargo test`, so a regression fails the build. They
+  render with iced's software backend, chosen by `ICED_TEST_BACKEND` in
+  `.cargo/config.toml`. A failure's message lists every text on the
+  window; the failing test also leaves a picture of the window as it
+  was under `target/setup-shots/failures/`, which CI uploads with the
+  failed run. Prose with a link in it is rich text, which cannot be
+  found by its content, so a note that carries a link is only pictured.
+- **Screenshots** (`src/app/screenshots.rs`): the same rows and flows,
+  rendered with the software renderer and written as PNGs to
   `target/setup-shots/<section>/<ID>-<slug>.png` for review (storyboards
   under `storyboard/<ID>/<frame>-<slug>.png`). Never a pixel assertion;
-  a person, or CI's artifact upload, looks at them. Ignored by default:
-  `cargo test --locked screenshots -- --ignored`, or one section such as
-  `screenshots::service`. Each section keeps one renderer for its
-  captures, which take a few seconds each.
+  a person, or CI's artifact upload, looks at them for what an assertion
+  cannot judge: wrapping, contrast, the look of a page. Ignored by
+  default: `cargo test --locked screenshots -- --ignored`, or one
+  section such as `screenshots::service`. Each section keeps one
+  renderer for its captures, which take a few seconds each.
 - **Behavior** (`src/setup.rs`, `src/app.rs` tests): what a fix does to
   files and the service, against a temporary directory and a recorded
   stand-in for `systemctl`, and what the wizard records when it closes.
@@ -49,7 +64,7 @@ is its main button. "Continue" means the page has nothing to fix.
 | X3 | Found, Keyloom's download, older release | *Update available · Update xremap* · **Update xremap** |
 | X4 | Found, `--version` unreadable (`version: None`) | *Installed*, version not shown |
 | X5 | Missing, a release for this processor and a home to put it in | *Not installed · Install xremap* · **Install xremap** |
-| X6 | Missing, no release for this processor or no home (`xremap_action: None`) | *Not installed · Install xremap* · **Check again**, link to xremap's installation guide. Not stageable from `Facts`: whether a release exists is decided by the build's architecture (`install::asset`), so this needs the environment seam or a build for another processor |
+| X6 | Missing, no release for this processor or no home (`xremap_action: None`) | *Not installed · Install xremap* · **Check again**, link to xremap's installation guide. Decided by the build's architecture (`install::asset`), not by `Facts`: on a build without a download, the tables stage X6 in place of X5, and X3 shows X1's page, so a build for another processor covers it |
 
 Application-matching note on the page (`app_matching`), on top of any
 row above that found a binary:
@@ -116,7 +131,9 @@ can be written (`installable`: a binary and a config path).
 
 ## Transient states, on any step
 
-Fields of `app::Setup`; each combines with the rows above.
+Fields of `app::Setup`; each combines with the rows above. All are
+asserted on: T1 and T6 on every row with a fix or details, the others
+in tests or storyboards of their own.
 
 | ID | State | Shows |
 | --- | --- | --- |
@@ -135,10 +152,10 @@ Fields of `app::Setup`; each combines with the rows above.
 | ID | Variation | Why it matters |
 | --- | --- | --- |
 | C1 | X11 session (`session.x11`) | the unit skips waiting for a Wayland socket; captured as XA3 |
-| C2 | Light theme | contrast of status colors and the modal backdrop |
-| C3 | Window at its minimum size | pages taller than the window scroll; footer buttons must stay reachable |
-| C4 | Long paths and names (`/home/Jo Doe/…`, a long `ExecStart`) | wrapping and quoting in details |
-| C5 | Details panel with and without commands | Copy only where there is something to copy; captured as T6a–T6c |
+| C2 | Light theme | contrast of status colors and the modal backdrop; screenshots only |
+| C3 | Window at its minimum size | pages taller than the window scroll; footer buttons must stay reachable, which the interface tests press at this size |
+| C4 | Long paths and names (`/home/Jo Doe/…`, a long `ExecStart`) | wrapping and quoting in details; the whole command must be shown |
+| C5 | Details panel with and without commands | Copy only where there is something to copy; checked on every row, captured as T6a–T6c |
 
 ## Behavior tests (no screenshots)
 
@@ -156,23 +173,24 @@ What a fix does, against a temporary directory and a recorded `systemctl`.
 
 ## Storyboards
 
-Sequences of screenshots driven through the wizard's own messages
-(`SetupContinue`, `SetupAct`, `SetupActed`, `SetupProbed`, …), so the
-order of pages is the real state machine's, with one image per state
-for review as a strip or a short video. A fix's outcome and the checks
-that follow it are supplied (`SetupActed` with `Ok` or an error, then
-`SetupProbed` with the facts afterwards); the fix itself does not run.
+Flows driven by clicks (`storyboards` in `src/app/e2e.rs`), with an
+assertion at every frame, so the order of pages is the real state
+machine's; the screenshot tests record the same flows, one image per
+frame, for review as a strip or a short video. A fix's outcome and the
+checks that follow it are supplied (`SetupActed` with `Ok` or an
+error, then `SetupProbed` with the facts afterwards); the fix itself
+does not run.
 
 | ID | Flow |
 | --- | --- |
-| SB1 | Fresh system: W2 → X5 → T1 → X2 → G3 → T1 → G2 → U2 → T1 → U5 → S2 → F2 |
+| SB1 | Fresh system, opened from the ⋯ menu: W1 → W2 → X5 → T1 → X2 → G3 → T1 → G2 → U2 → T1 → U5 → S2 → F2 → closed → the main window's status chip |
 | SB2 | Foreign unit kept: W2 → (X1, G1, U1 passed over) → S11 → "Keep mine" → F3 → closed → the main window's status chip |
-| SB3 | Authentication refused then granted: G3 → T2 → G3 → T1 → G2 |
-| SB4 | No polkit: G3 → T4 → (details) → "Check again" |
-| SB5 | Reopened after completion: F5 |
-| SB6 | Keyloom's download out of date: X3 → T1 → X2 |
+| SB3 | Authentication refused then granted: G3 → T2 → G3 → T1 → F2 → G2 from the summary |
+| SB4 | No polkit: G3 → T4 → (details) → "Check again" → G2 |
+| SB5 | Reopened after completion: W2 → F1 → each step from the summary, Continue → F1 → closed (F5) |
+| SB6 | Keyloom's download out of date: W2 → X3 → T1 → F1 |
 
-## Not covered by either kind
+## Not covered by any kind
 
 The checks themselves (`setup::probe`) read `/proc`, `/etc/group`,
 udev's rules directories, `/dev/uinput`, and ask `systemctl` and the

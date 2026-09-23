@@ -10,16 +10,6 @@ limitations users live with, are described in
 Nothing here is scheduled, and an investigation listed below may conclude
 that the work is not worth doing.
 
-## End-to-end tests for the interface
-
-The setup wizard's states are rendered to PNGs for a person or CI to look at
-(`src/app/screenshots.rs`, catalogued in
-[Setup_Test_Matrix.md](Setup_Test_Matrix.md)), and never asserted on. Those
-storyboards could become real end-to-end tests with `iced_test`, driving the
-interface and asserting on what it shows, so a regression fails the build
-instead of waiting to be noticed in an image. The state matrix is worth
-keeping either way, since it is the list of what needs covering.
-
 ## Input paths beyond evdev
 
 Remote input that bypasses evdev, such as Deskflow's Wayland/libei input on
