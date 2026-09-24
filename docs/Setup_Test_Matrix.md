@@ -5,8 +5,8 @@ after. The wizard (`src/ui/overlays.rs`, `src/setup.rs`) renders each
 page from one value, `setup::Facts`, plus a few fields of the open
 wizard (`app::Setup`), so a test stages a state by building those
 directly. Nothing is read from or written to the machine the tests
-run on: no group is joined, no file lands in `/etc`, no `systemctl`
-runs, and CI needs nothing beyond the Rust toolchain.
+run on: no group is joined, no file lands in `/etc`, nothing is asked
+of systemd, and CI needs nothing beyond the Rust toolchain.
 
 Three kinds of test use this list:
 
@@ -35,7 +35,7 @@ Three kinds of test use this list:
   renderer for its captures, which take a few seconds each.
 - **Behavior** (`src/setup.rs`, `src/app.rs` tests): what a fix does to
   files and the service, against a temporary directory and a recorded
-  stand-in for `systemctl`, and what the wizard records when it closes.
+  stand-in for systemd, and what the wizard records when it closes.
 
 Names in *italics* are the status and title the page shows; **bold**
 is its main button. "Continue" means the page has nothing to fix.
@@ -141,7 +141,7 @@ in tests or storyboards of their own.
 | T2 | `error: Cancelled` — the authentication prompt was dismissed | "Couldn't finish this step: authorization was cancelled…" above the button, fix still offered |
 | T3 | `error: NotAuthorized` | "…authorization was refused…", fix still offered |
 | T4 | `error: NoPolkit` — no `pkexec` | the fix becomes **Check again**; details open on their own with the commands to run |
-| T5 | `error: Failed(text)` — the fix ran and failed (download, `systemctl`, `usermod`) | the tool's own message, fix still offered |
+| T5 | `error: Failed(text)` — the fix ran and failed (download, systemd, `usermod`) | the tool's own message, fix still offered |
 | T6 | `details: true` | "Hide details" and the panel: what changes, how to do it by hand, a Copy button where there are commands |
 | T7 | `details` opened by a failure (`details_for_failure`) | as T6; closes again once the step moves on (captured as T4) |
 | T8 | `copied: true` | the Copy button acknowledging |
@@ -159,7 +159,7 @@ in tests or storyboards of their own.
 
 ## Behavior tests (no screenshots)
 
-What a fix does, against a temporary directory and a recorded `systemctl`.
+What a fix does, against a temporary directory and a recorded systemd.
 
 | ID | Scenario | Expected |
 | --- | --- | --- |
@@ -193,7 +193,7 @@ does not run.
 ## Not covered by any kind
 
 The checks themselves (`setup::probe`) read `/proc`, `/etc/group`,
-udev's rules directories, `/dev/uinput`, and ask `systemctl` and the
+udev's rules directories, `/dev/uinput`, and ask systemd and the
 xremap binary; they are covered by unit tests over captured text
 (`group_check`, `classify_unit`, `unit_check`, `rules_installed`), not
 by staging a machine. Running a real `pkexec`, `usermod`, udev, or

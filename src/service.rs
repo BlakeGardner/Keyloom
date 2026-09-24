@@ -1,23 +1,35 @@
 //! Management of the xremap systemd *user* service.
 //!
-//! Status comes from `systemctl --user show` and applying a
-//! configuration means restarting the unit so xremap re-reads the
-//! generated file. The header's status chip stops and starts the unit,
-//! which is how a keyboard the remapper holds exclusively is released.
-//! First-run setup ([`crate::setup`]) installs the unit itself: a file
-//! in the user's systemd configuration that runs the installed xremap
-//! with Keyloom's generated configuration, told which desktop to ask
-//! for application-specific rules when the binary understands that.
+//! Keyloom asks systemd's user manager about the unit, and tells it
+//! what to do, over D-Bus ([`crate::systemd`]). The header follows the
+//! unit live ([`watch`]): its state when Keyloom opens, then every
+//! change systemd announces, so a crash, or a stop made outside
+//! Keyloom, shows up as it happens. Applying a configuration means
+//! restarting the unit so xremap re-reads the generated file. The
+//! header's status chip stops and starts the unit, which is how a
+//! keyboard the remapper holds exclusively is released. First-run
+//! setup ([`crate::setup`]) installs the unit itself: a file in the
+//! user's systemd configuration that runs the installed xremap with
+//! Keyloom's generated configuration, told which desktop to ask for
+//! application-specific rules when the binary understands that.
+//! systemd has no request that saves a unit from its text, so writing
+//! that file, and backing up one the user wrote, is file work here.
 
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::process::Command;
+use std::sync::{Mutex, PoisonError};
+
+use cosmic::iced::futures::channel::mpsc;
+use cosmic::iced::futures::{FutureExt, SinkExt, Stream, StreamExt};
+use tokio::sync::OnceCell;
+use zbus::message::Sequence;
 
 use crate::session::Desktop;
+use crate::systemd::{self, Change, Manager};
 use crate::xremap;
+
+pub use crate::systemd::Error;
 
 /// The systemd user unit Keyloom manages.
 pub const UNIT: &str = "xremap.service";
@@ -36,57 +48,66 @@ pub enum Remapping {
     Off,
 }
 
-/// Why a `systemctl` command did not do what Keyloom asked.
-///
-/// Held in a [`crate::app::Message`], which must be `Clone`, so the
-/// underlying [`io::Error`] is shared rather than copied.
-#[derive(Clone, Debug)]
-pub enum Error {
-    /// `systemctl` could not be run at all.
-    Unavailable(Arc<io::Error>),
-    /// It ran and refused; the text is systemd's own explanation.
-    Refused(String),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unavailable(err) => write!(f, "could not run systemctl: {err}"),
-            Self::Refused(message) => f.write_str(message),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Unavailable(err) => Some(&**err),
-            Self::Refused(_) => None,
-        }
-    }
-}
-
 /// State of the xremap user service, as far as systemd knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// The unit is loaded and running.
+    /// The unit is running.
     Active,
+    /// The unit is on its way up, and xremap has not been started yet:
+    /// on Wayland, the unit waits for the compositor first.
+    Starting,
+    /// The unit is on its way down.
+    Stopping,
+    /// xremap exited without being asked to, and systemd is about to
+    /// start it again.
+    Restarting,
     /// The unit exists but is not running.
     Inactive,
     /// The unit exists and its last run failed.
     Failed,
     /// No `xremap.service` user unit is registered.
     NotFound,
-    /// `systemctl` is unavailable (not a systemd session).
+    /// systemd's user manager cannot be reached (not a systemd session).
     Unavailable,
 }
 
 impl Status {
+    /// The state a unit's `LoadState`, `ActiveState`, and `SubState`
+    /// describe. A state newer than the ones known here reads as
+    /// stopped, the way `systemctl is-active` counts anything but
+    /// `active` as not running.
+    pub fn of(load_state: &str, active_state: &str, sub_state: &str) -> Self {
+        if load_state == "not-found" {
+            return Self::NotFound;
+        }
+        match (active_state, sub_state) {
+            // On its way to an automatic restart, a service passes
+            // through a stopped or failed state that does not last.
+            (
+                _,
+                "auto-restart"
+                | "auto-restart-queued"
+                | "dead-before-auto-restart"
+                | "failed-before-auto-restart",
+            ) => Self::Restarting,
+            // xremap has no reload of its own; a running unit busy with
+            // one still runs.
+            ("active" | "reloading" | "refreshing", _) => Self::Active,
+            ("activating", _) => Self::Starting,
+            ("deactivating", _) => Self::Stopping,
+            ("failed", _) => Self::Failed,
+            _ => Self::Inactive,
+        }
+    }
+
     /// User-facing state label. xremap and systemd are implementation
     /// details, so the wording stays generic.
     pub fn label(self) -> &'static str {
         match self {
             Self::Active => "Remapping Enabled",
+            Self::Starting => "Starting Remapping",
+            Self::Stopping => "Stopping Remapping",
+            Self::Restarting => "Restarting Remapping",
             // A stopped unit is a paused one, however it came to be
             // stopped: the distinction is Keyloom's, not the user's.
             Self::Inactive => "Remapping Paused",
@@ -97,7 +118,7 @@ impl Status {
     }
 }
 
-/// What `systemctl --user show` reports about the unit.
+/// What systemd reports about the unit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unit {
     /// Whether it runs, or exists at all.
@@ -114,61 +135,204 @@ impl Unit {
         enabled: false,
         fragment_path: None,
     };
-}
 
-/// Query the unit. `show` succeeds even for missing units, reporting
-/// `LoadState=not-found`, which keeps the cases apart.
-pub async fn inspect() -> Unit {
-    let output = Command::new("systemctl")
-        .args([
-            "--user",
-            "show",
-            UNIT,
-            "--property=LoadState,ActiveState,UnitFileState,FragmentPath",
-        ])
-        .output()
-        .await;
-    match output {
-        Ok(output) if output.status.success() => {
-            parse_show(&String::from_utf8_lossy(&output.stdout))
+    /// Read systemd's report on the unit.
+    fn from_state(state: &systemd::UnitState) -> Self {
+        let status = Status::of(&state.load_state, &state.active_state, &state.sub_state);
+        if status == Status::NotFound {
+            return Self {
+                status,
+                enabled: false,
+                fragment_path: None,
+            };
         }
-        _ => Unit::UNAVAILABLE,
+        Self {
+            status,
+            enabled: matches!(
+                state.unit_file_state.as_str(),
+                "enabled" | "enabled-runtime"
+            ),
+            fragment_path: Some(state.fragment_path.as_str())
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
+        }
     }
 }
 
-/// Query the unit's state alone.
-pub async fn status() -> Status {
-    inspect().await.status
+/// The unit's state at one moment, numbered so that reports can be put
+/// in order: whichever way two reports travel, the higher revision
+/// describes the later moment. The revision only moves on when the
+/// state changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub status: Status,
+    pub revision: u64,
 }
 
-/// Read the `key=value` lines `systemctl show` prints.
-fn parse_show(stdout: &str) -> Unit {
-    let property = |name: &str| {
-        stdout
-            .lines()
-            .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
-    };
-    if property("LoadState") == Some("not-found") {
-        return Unit {
-            status: Status::NotFound,
-            enabled: false,
-            fragment_path: None,
+#[cfg(test)]
+impl Snapshot {
+    /// A report of `status` newer than every one made before it, as the
+    /// running service would deliver it; for staging states in tests.
+    pub fn latest(status: Status) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static REVISION: AtomicU64 = AtomicU64::new(0);
+        Self {
+            status,
+            revision: REVISION.fetch_add(1, Ordering::Relaxed) + 1,
+        }
+    }
+}
+
+/// The newest state any request brought back, and where on the shared
+/// connection its reply was received (`P`, a receive position). Replies
+/// are received in the order systemd sent them, so a reply received
+/// earlier describes an earlier moment, even when it is handled later.
+struct Latest<P> {
+    position: Option<P>,
+    snapshot: Option<Snapshot>,
+}
+
+impl<P: Ord> Latest<P> {
+    const fn new() -> Self {
+        Self {
+            position: None,
+            snapshot: None,
+        }
+    }
+
+    /// Take in `status` from a reply received at `position` (`None`
+    /// for a request that never reached systemd, which is news whenever
+    /// it comes), unless a reply received after it is in already.
+    /// Returns the newest snapshot either way.
+    fn record(&mut self, position: Option<P>, status: Status) -> Snapshot {
+        if let (Some(position), Some(latest), Some(snapshot)) =
+            (&position, &self.position, self.snapshot)
+            && position <= latest
+        {
+            return snapshot;
+        }
+        if position.is_some() {
+            self.position = position;
+        }
+        let snapshot = match self.snapshot {
+            Some(snapshot) if snapshot.status == status => snapshot,
+            previous => Snapshot {
+                status,
+                revision: previous.map_or(1, |previous| previous.revision + 1),
+            },
         };
+        self.snapshot = Some(snapshot);
+        snapshot
     }
-    let status = match property("ActiveState") {
-        Some("active" | "activating" | "reloading") => Status::Active,
-        Some("failed") => Status::Failed,
-        _ => Status::Inactive,
+}
+
+/// Every report on the unit's state goes through here.
+static LATEST: Mutex<Latest<Sequence>> = Mutex::new(Latest::new());
+
+fn record(position: Option<Sequence>, status: Status) -> Snapshot {
+    LATEST
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .record(position, status)
+}
+
+/// The connection to systemd every request shares, made on first use.
+/// Sharing it is what puts the replies to different requests in one
+/// order ([`Latest`]).
+async fn manager() -> Result<&'static Manager, Error> {
+    static MANAGER: OnceCell<Manager> = OnceCell::const_new();
+    MANAGER.get_or_try_init(Manager::session).await
+}
+
+/// Ask for the unit's state, and report it or whatever newer state
+/// another request has brought back meanwhile.
+async fn observe(manager: &Manager) -> Snapshot {
+    match manager.unit(UNIT).await {
+        Ok((state, position)) => record(Some(position), Unit::from_state(&state).status),
+        Err(_) => record(None, Status::Unavailable),
+    }
+}
+
+/// What systemd reports about the unit now, for setup's checks.
+pub async fn inspect() -> Unit {
+    let Ok(manager) = manager().await else {
+        return Unit::UNAVAILABLE;
     };
-    Unit {
-        status,
-        enabled: matches!(
-            property("UnitFileState"),
-            Some("enabled" | "enabled-runtime")
-        ),
-        fragment_path: property("FragmentPath")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from),
+    match manager.unit(UNIT).await {
+        Ok((state, _)) => Unit::from_state(&state),
+        Err(_) => Unit::UNAVAILABLE,
+    }
+}
+
+/// Follow the unit: its state now, then its state after every change
+/// systemd announces, whoever made it, for as long as the session bus
+/// is there. States are only reported once each.
+pub fn watch() -> impl Stream<Item = Snapshot> + Send {
+    cosmic::iced::stream::channel(1, follow)
+}
+
+async fn follow(mut output: mpsc::Sender<Snapshot>) {
+    let manager = match manager().await {
+        Ok(manager) => manager,
+        Err(err) => {
+            eprintln!("keyloom: cannot follow the remapping service: {err}");
+            let _ = output.send(record(None, Status::Unavailable)).await;
+            return;
+        }
+    };
+    // Listen before the first look, so a change between the two is
+    // not missed.
+    let mut changes = match manager.changes(UNIT).await {
+        Ok(changes) => changes,
+        Err(err) => {
+            // Keyloom's own switches and applies still report what they
+            // leave the unit in.
+            eprintln!("keyloom: remapping changes made elsewhere will not show: {err}");
+            let _ = output.send(observe(manager).await).await;
+            return;
+        }
+    };
+    subscribe(manager).await;
+    let mut reported = 0;
+    loop {
+        let snapshot = observe(manager).await;
+        if snapshot.revision > reported {
+            reported = snapshot.revision;
+            if output.send(snapshot).await.is_err() {
+                return;
+            }
+        }
+        // One look covers every change already announced, so a burst
+        // of them costs one.
+        let mut next = changes.next().await;
+        loop {
+            match next {
+                // A manager that left cannot be subscribed to; the one
+                // that takes its place announces itself the same way.
+                Some(Change::Manager) => {
+                    let _ = manager.subscribe().await;
+                }
+                Some(Change::Unit) => {}
+                // The connection closed: systemd can no longer be asked.
+                None => {
+                    let _ = output.send(record(None, Status::Unavailable)).await;
+                    return;
+                }
+            }
+            match changes.next().now_or_never() {
+                Some(change) => next = change,
+                None => break,
+            }
+        }
+    }
+}
+
+/// Have systemd announce the unit's changes, which it does only for
+/// subscribers. Without it, the header still learns what Keyloom's own
+/// requests leave the unit in.
+async fn subscribe(manager: &Manager) {
+    if let Err(err) = manager.subscribe().await {
+        eprintln!("keyloom: remapping changes made elsewhere will not show: {err}");
     }
 }
 
@@ -333,67 +497,50 @@ pub fn install_to(path: &Path, text: &str) -> io::Result<InstallOutcome> {
 ///
 /// # Errors
 ///
-/// As [`restart`].
+/// When systemd cannot be reached, or refuses.
 pub async fn daemon_reload() -> Result<(), Error> {
-    run(&["daemon-reload"]).await
+    manager().await?.reload().await
 }
 
 /// Start the unit with every graphical session from now on.
 ///
 /// # Errors
 ///
-/// As [`restart`].
+/// When systemd cannot be reached, or refuses (no unit file to enable).
 pub async fn enable() -> Result<(), Error> {
-    run(&["enable", UNIT]).await
+    manager().await?.enable(UNIT).await
 }
 
 /// Restart the unit so xremap picks up the generated configuration.
+/// Reports the state the restart left the unit in.
 ///
 /// # Errors
 ///
-/// Fails when `systemctl` cannot be run, or when systemd refuses the
-/// restart (a missing unit, a start rate limit, a failing `ExecStart`).
-pub async fn restart() -> Result<(), Error> {
-    run(&["restart", UNIT]).await
+/// Fails when systemd cannot be reached, or refuses the restart (a
+/// missing unit, a start rate limit, a failing `ExecStartPre`).
+pub async fn restart() -> Result<Snapshot, Error> {
+    let manager = manager().await?;
+    manager.restart(UNIT).await?;
+    Ok(observe(manager).await)
 }
 
 /// Put remapping in the requested state: stopping the unit releases the
 /// keyboards xremap grabbed, so they can be observed directly. Only the
-/// status chip asks for this.
+/// status chip asks for this. Reports the state the switch left the
+/// unit in, which is not always the one asked for: xremap can fail
+/// right after starting, and a stop can end in failure.
 ///
 /// # Errors
 ///
 /// As [`restart`]. Starting an already-running unit, or stopping an
 /// already-stopped one, succeeds without doing anything.
-pub async fn set(remapping: Remapping) -> Result<(), Error> {
-    run(&[
-        match remapping {
-            Remapping::On => "start",
-            Remapping::Off => "stop",
-        },
-        UNIT,
-    ])
-    .await
-}
-
-/// Run one `systemctl --user` command.
-async fn run(args: &[&str]) -> Result<(), Error> {
-    let output = Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .output()
-        .await
-        .map_err(|err| Error::Unavailable(Arc::new(err)))?;
-    if output.status.success() {
-        return Ok(());
+pub async fn set(remapping: Remapping) -> Result<Snapshot, Error> {
+    let manager = manager().await?;
+    match remapping {
+        Remapping::On => manager.start(UNIT).await?,
+        Remapping::Off => manager.stop(UNIT).await?,
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr = stderr.trim();
-    Err(Error::Refused(if stderr.is_empty() {
-        format!("systemctl exited with {}", output.status)
-    } else {
-        stderr.to_owned()
-    }))
+    Ok(observe(manager).await)
 }
 
 #[cfg(test)]
@@ -402,11 +549,62 @@ mod tests {
     use crate::testing::TempDir;
 
     #[test]
-    fn show_output_is_parsed_into_a_unit() {
-        assert_eq!(
-            parse_show(
-                "LoadState=not-found\nActiveState=inactive\nUnitFileState=\nFragmentPath=\n"
+    fn systemds_states_read_as_the_status_the_header_shows() {
+        for (load, active, sub, expected) in [
+            ("not-found", "inactive", "dead", Status::NotFound),
+            ("loaded", "active", "running", Status::Active),
+            ("loaded", "reloading", "reload", Status::Active),
+            ("loaded", "refreshing", "running", Status::Active),
+            ("loaded", "activating", "start-pre", Status::Starting),
+            ("loaded", "activating", "start", Status::Starting),
+            ("loaded", "deactivating", "stop-sigterm", Status::Stopping),
+            ("loaded", "activating", "auto-restart", Status::Restarting),
+            (
+                "loaded",
+                "activating",
+                "auto-restart-queued",
+                Status::Restarting,
             ),
+            (
+                "loaded",
+                "failed",
+                "failed-before-auto-restart",
+                Status::Restarting,
+            ),
+            (
+                "loaded",
+                "inactive",
+                "dead-before-auto-restart",
+                Status::Restarting,
+            ),
+            ("loaded", "inactive", "dead", Status::Inactive),
+            ("loaded", "failed", "failed", Status::Failed),
+            ("masked", "inactive", "dead", Status::Inactive),
+            ("loaded", "maintenance", "cleaning", Status::Inactive),
+            ("", "", "", Status::Inactive),
+        ] {
+            assert_eq!(
+                Status::of(load, active, sub),
+                expected,
+                "{load} {active} ({sub})"
+            );
+        }
+    }
+
+    fn state(load: &str, active: &str, unit_file: &str, fragment: &str) -> systemd::UnitState {
+        systemd::UnitState {
+            load_state: load.to_owned(),
+            active_state: active.to_owned(),
+            sub_state: String::new(),
+            unit_file_state: unit_file.to_owned(),
+            fragment_path: fragment.to_owned(),
+        }
+    }
+
+    #[test]
+    fn systemds_report_is_read_into_a_unit() {
+        assert_eq!(
+            Unit::from_state(&state("not-found", "inactive", "", "")),
             Unit {
                 status: Status::NotFound,
                 enabled: false,
@@ -414,9 +612,12 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_show(
-                "LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nFragmentPath=/home/me/.config/systemd/user/xremap.service\n"
-            ),
+            Unit::from_state(&state(
+                "loaded",
+                "active",
+                "enabled",
+                "/home/me/.config/systemd/user/xremap.service"
+            )),
             Unit {
                 status: Status::Active,
                 enabled: true,
@@ -425,15 +626,62 @@ mod tests {
                 )),
             }
         );
-        let failed = parse_show("LoadState=loaded\nActiveState=failed\nUnitFileState=disabled\n");
+        let failed = Unit::from_state(&state("loaded", "failed", "disabled", ""));
         assert_eq!(failed.status, Status::Failed);
         assert!(!failed.enabled);
         assert_eq!(failed.fragment_path, None);
+        assert!(Unit::from_state(&state("loaded", "inactive", "enabled-runtime", "")).enabled);
+        assert!(!Unit::from_state(&state("loaded", "inactive", "linked", "")).enabled);
+    }
+
+    #[test]
+    fn a_report_received_earlier_never_replaces_a_later_one() {
+        let mut latest = Latest::<u32>::new();
+        let running = latest.record(Some(10), Status::Active);
         assert_eq!(
-            parse_show("LoadState=loaded\nActiveState=activating\n").status,
-            Status::Active
+            running,
+            Snapshot {
+                status: Status::Active,
+                revision: 1,
+            }
         );
-        assert_eq!(parse_show("").status, Status::Inactive);
+        assert_eq!(
+            latest.record(Some(11), Status::Active),
+            running,
+            "the same state again is nothing new"
+        );
+
+        let paused = latest.record(Some(20), Status::Inactive);
+        assert_eq!(
+            paused,
+            Snapshot {
+                status: Status::Inactive,
+                revision: 2,
+            }
+        );
+        // A reply received before that one but handled after it
+        // describes an earlier moment.
+        assert_eq!(latest.record(Some(15), Status::Stopping), paused);
+        assert_eq!(latest.record(Some(20), Status::Active), paused);
+
+        // A request that never reached systemd is news whenever it
+        // comes, and replies are still ordered after it.
+        let gone = latest.record(None, Status::Unavailable);
+        assert_eq!(
+            gone,
+            Snapshot {
+                status: Status::Unavailable,
+                revision: 3,
+            }
+        );
+        assert_eq!(latest.record(Some(18), Status::Active), gone);
+        assert_eq!(
+            latest.record(Some(30), Status::Active),
+            Snapshot {
+                status: Status::Active,
+                revision: 4,
+            }
+        );
     }
 
     #[test]

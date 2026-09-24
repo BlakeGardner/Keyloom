@@ -136,8 +136,8 @@ pub fn center(app: &App) -> Vec<Element<'_, Message>> {
     vec![nav.into()]
 }
 
-/// Amber: remapping is not carrying keys right now — paused, being
-/// paused or resumed, or waiting on a change heading for the service.
+/// Amber: remapping is not carrying keys right now — paused, on its way
+/// up or down, or waiting on a change heading for the service.
 const HOLDING: (f32, f32, f32) = (0.78, 0.13, 85.0);
 
 /// The remap status chip and `⋯` overflow menu. Changes apply on
@@ -164,8 +164,14 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
                     // Traffic-light green, never the accent: the dot's
                     // colors carry meaning.
                     service::Status::Active => success(),
-                    service::Status::Inactive => oklch(HOLDING.0, HOLDING.1, HOLDING.2),
-                    service::Status::Failed => oklch(0.62, 0.19, 25.0),
+                    service::Status::Starting
+                    | service::Status::Stopping
+                    | service::Status::Inactive => oklch(HOLDING.0, HOLDING.1, HOLDING.2),
+                    // xremap exiting on its own is a failure, however
+                    // soon systemd starts it again.
+                    service::Status::Restarting | service::Status::Failed => {
+                        oklch(0.62, 0.19, 25.0)
+                    }
                     // Nothing to act on: no unit, or no systemd to ask.
                     service::Status::NotFound | service::Status::Unavailable => muted(),
                 },
@@ -194,8 +200,8 @@ pub fn end(app: &App) -> Vec<Element<'_, Message>> {
     };
 
     // Pressing the chip stops or starts remapping; with nothing set up
-    // it opens setup instead, and it stays passive while a restart is
-    // already running or there is no systemd to ask.
+    // it opens setup instead, and it stays passive while a restart or a
+    // stop is already running or there is no systemd to ask.
     let chip = |message: Message, hint_text: &str| {
         hint(
             widget::button::custom(status_row())

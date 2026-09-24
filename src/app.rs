@@ -430,15 +430,19 @@ pub enum Message {
     /// supersede it. Applying restarts the xremap service so it
     /// re-reads the written config.
     Apply(u64),
-    /// Result of the restart an apply performed.
-    Applied(Result<(), service::Error>),
-    ServiceStatus(service::Status),
+    /// Result of the restart an apply performed: the state it left the
+    /// service in.
+    Applied(Result<service::Snapshot, service::Error>),
+    /// The state the xremap service is in, as systemd reported it:
+    /// once at launch, then after every change, whoever made it.
+    ServiceStatus(service::Snapshot),
     /// Put remapping in this state, from the status chip.
     SetRemapping(service::Remapping),
-    /// Result of the switch behind [`Message::SetRemapping`].
+    /// Result of the switch behind [`Message::SetRemapping`]: the state
+    /// it left the service in.
     RemappingSwitched {
         target: service::Remapping,
-        result: Result<(), service::Error>,
+        result: Result<service::Snapshot, service::Error>,
     },
     /// Redraw tick while the bottom sheet opens or closes.
     SheetAnimate,
@@ -574,6 +578,10 @@ pub struct App {
     pub last: Option<LastKey>,
     /// Last known state of the xremap service (None until queried).
     pub service: Option<service::Status>,
+    /// Revision of the report [`Self::service`] comes from. Reports
+    /// travel different ways (the watcher, a switch, an apply) and can
+    /// arrive out of order; one older than this is ignored.
+    service_revision: u64,
     /// Input nodes the remapper holds exclusively (see
     /// [`monitor::Event::Grabbed`]). Those keyboards report nothing
     /// here until it lets them go.
@@ -888,16 +896,32 @@ impl App {
 
     /// The state pressing the status chip would leave remapping in.
     /// `None` leaves the chip passive — there is no unit to control, or
-    /// a switch or restart is already on its way and would fight the
-    /// request.
+    /// a switch, restart, or stop is already on its way and would fight
+    /// the request.
     pub fn remapping_toggle(&self) -> Option<service::Remapping> {
         if self.switching.is_some() || self.applying.is_some() {
             return None;
         }
         match self.service? {
-            service::Status::Active => Some(service::Remapping::Off),
+            // Pausing also calls off a start still on its way, and the
+            // restarts systemd would keep making of an xremap that
+            // keeps exiting.
+            service::Status::Active | service::Status::Starting | service::Status::Restarting => {
+                Some(service::Remapping::Off)
+            }
             service::Status::Inactive | service::Status::Failed => Some(service::Remapping::On),
-            service::Status::NotFound | service::Status::Unavailable => None,
+            service::Status::Stopping
+            | service::Status::NotFound
+            | service::Status::Unavailable => None,
+        }
+    }
+
+    /// Take in a report of the service's state, unless a newer one is
+    /// in already.
+    fn observe_service(&mut self, snapshot: service::Snapshot) {
+        if snapshot.revision > self.service_revision {
+            self.service_revision = snapshot.revision;
+            self.service = Some(snapshot.status);
         }
     }
 
@@ -2536,6 +2560,7 @@ impl cosmic::Application for App {
             pressed: HashSet::new(),
             last: None,
             service: None,
+            service_revision: 0,
             grabbed: HashSet::new(),
             switching: None,
             apply_seq: 0,
@@ -2559,12 +2584,14 @@ impl cosmic::Application for App {
         app.apply_outstanding = false;
 
         // The first launch walks through system setup; afterwards it
-        // waits in the menu. Tests never open it on their own.
-        let mut tasks = vec![service_status_task()];
-        if app.settings.is_some() && opens_setup_on_launch(app.setup_state) {
-            tasks.push(app.open_setup());
-        }
-        (app, Task::batch(tasks))
+        // waits in the menu. Tests never open it on their own. The
+        // service's state comes from its watcher ([`Self::subscription`]).
+        let task = if app.settings.is_some() && opens_setup_on_launch(app.setup_state) {
+            app.open_setup()
+        } else {
+            Task::none()
+        };
+        (app, task)
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
@@ -3234,29 +3261,27 @@ impl cosmic::Application for App {
                 if self.applying.take() == Some(self.apply_seq) {
                     self.apply_outstanding = false;
                 }
-                // Success is silent — the change's own toast already
-                // confirmed it. Either way, reflect the service state.
-                if let Err(err) = result {
-                    self.flash("Could not apply remaps", err.to_string());
+                match result {
+                    // Success is silent — the change's own toast
+                    // already confirmed it.
+                    Ok(snapshot) => self.observe_service(snapshot),
+                    // The watcher reports where the service stands.
+                    Err(err) => {
+                        self.flash("Could not apply remaps", err.to_string());
+                    }
                 }
-                return service_status_task();
             }
-            Message::ServiceStatus(status) => self.service = Some(status),
+            Message::ServiceStatus(snapshot) => self.observe_service(snapshot),
             Message::SetRemapping(target) => return self.set_remapping(target),
             Message::RemappingSwitched { target, result } => {
                 self.switching = None;
                 match result {
-                    // systemctl only reports success once the unit is
-                    // in the requested state, so the chip can settle on
-                    // it instead of flickering until the query lands.
-                    Ok(()) => {
-                        self.service = Some(match target {
-                            service::Remapping::On => service::Status::Active,
-                            service::Remapping::Off => service::Status::Inactive,
-                        });
-                    }
-                    // It did not follow; the status query that comes
-                    // next describes where it actually stands.
+                    // The switch comes back with the state it left the
+                    // service in, so the chip settles on it at once
+                    // rather than on the one it had before the switch.
+                    Ok(snapshot) => self.observe_service(snapshot),
+                    // It did not follow; the watcher reports where it
+                    // actually stands.
                     Err(err) => {
                         self.flash(
                             match target {
@@ -3267,7 +3292,6 @@ impl cosmic::Application for App {
                         );
                     }
                 }
-                return service_status_task();
             }
             // The redraw itself re-reads the animation clock. Once a close
             // reaches zero, the retained editor state can be discarded.
@@ -3309,7 +3333,7 @@ impl cosmic::Application for App {
                     && !setup.probing
                 {
                     setup.probing = true;
-                    return Task::batch([setup_probe_task(), service_status_task()]);
+                    return setup_probe_task();
                 }
             }
             Message::SetupToggleDetails => {
@@ -3335,12 +3359,12 @@ impl cosmic::Application for App {
                 // assumed: a saved file turns the page into the one
                 // that shows how to turn it on.
                 let Some(setup) = &mut self.setup else {
-                    return service_status_task();
+                    return Task::none();
                 };
                 setup.saving = false;
                 setup.error = result.err().map(|err| (setup::Step::Service, err));
                 setup.probing = true;
-                return Task::batch([setup_probe_task(), service_status_task()]);
+                return setup_probe_task();
             }
             Message::SetupCopy(text) => {
                 if let Some(setup) = &mut self.setup {
@@ -3383,10 +3407,10 @@ impl cosmic::Application for App {
             }
             Message::SetupAct(step) => return self.setup_act(step),
             Message::SetupActed { step, result } => {
-                // The header chip follows the service either way, even
+                // The header chip follows the service on its own, even
                 // when setup was closed while the fix ran.
                 let Some(setup) = &mut self.setup else {
-                    return service_status_task();
+                    return Task::none();
                 };
                 setup.busy = None;
                 match result {
@@ -3405,7 +3429,7 @@ impl cosmic::Application for App {
                     }
                 }
                 setup.probing = true;
-                return Task::batch([setup_probe_task(), service_status_task()]);
+                return setup_probe_task();
             }
             Message::SetupLater | Message::SetupFinish => self.leave_setup(),
             Message::MenuReset => {
@@ -3509,7 +3533,10 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subscriptions = vec![Subscription::run(monitor_stream)];
+        let mut subscriptions = vec![
+            Subscription::run(monitor_stream),
+            Subscription::run(service_stream),
+        ];
         // Drive redraws only while the sheet is actively moving.
         let sheet_progress = self.sheet_progress();
         if self.sheet_visible() && (!self.sheet_open() || sheet_progress < 1.0) {
@@ -3610,9 +3637,9 @@ fn monitor_stream() -> impl Stream<Item = Message> + Send {
     monitor::watch().map(Message::Monitor)
 }
 
-/// One-off query of the xremap service state.
-fn service_status_task() -> Task<Message> {
-    cosmic::task::future(async { Message::ServiceStatus(service::status().await) })
+/// Adapts the xremap service watcher into this app's message stream.
+fn service_stream() -> impl Stream<Item = Message> + Send {
+    service::watch().map(Message::ServiceStatus)
 }
 
 /// One pass of the first-run setup checks.
@@ -3919,7 +3946,9 @@ mod tests {
 
         // Success is silent: the mapping's own toast stays put.
         let before = app.toast.as_ref().map(|toast| toast.text.clone());
-        let _ = app.update(Message::Applied(Ok(())));
+        let _ = app.update(Message::Applied(Ok(service::Snapshot::latest(
+            service::Status::Active,
+        ))));
         assert!(app.applying.is_none());
         assert_eq!(app.toast.as_ref().map(|toast| toast.text.clone()), before);
     }
@@ -3939,7 +3968,9 @@ mod tests {
         let _ = app.update(Message::Apply(app.apply_seq));
         assert!(app.apply_in_progress(), "so does the restart in flight");
 
-        let _ = app.update(Message::Applied(Ok(())));
+        let _ = app.update(Message::Applied(Ok(service::Snapshot::latest(
+            service::Status::Active,
+        ))));
         assert!(!app.apply_in_progress(), "settled once the restart returns");
     }
 
@@ -3954,7 +3985,9 @@ mod tests {
         let _ = app.update(Message::SelectKey("KeyA"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
 
-        let _ = app.update(Message::Applied(Ok(())));
+        let _ = app.update(Message::Applied(Ok(service::Snapshot::latest(
+            service::Status::Active,
+        ))));
         assert!(
             app.apply_in_progress(),
             "the newer change's apply is still on the way"
@@ -3964,7 +3997,9 @@ mod tests {
         // applying state settles with it.
         app.last_apply = None;
         let _ = app.update(Message::Apply(app.apply_seq));
-        let _ = app.update(Message::Applied(Ok(())));
+        let _ = app.update(Message::Applied(Ok(service::Snapshot::latest(
+            service::Status::Active,
+        ))));
         assert!(!app.apply_in_progress());
     }
 
@@ -4017,7 +4052,7 @@ mod tests {
         let mut app = app();
         assert_eq!(app.service, None, "state is unknown until queried");
 
-        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(staging::service_is(service::Status::Active));
         assert_eq!(app.service, Some(service::Status::Active));
     }
 
@@ -5729,16 +5764,21 @@ mod tests {
         );
         for (status, expected) in [
             (service::Status::Active, Some(service::Remapping::Off)),
+            // Pausing calls off a start on its way, and the retries of
+            // an xremap that keeps exiting.
+            (service::Status::Starting, Some(service::Remapping::Off)),
+            (service::Status::Restarting, Some(service::Remapping::Off)),
+            (service::Status::Stopping, None),
             (service::Status::Inactive, Some(service::Remapping::On)),
             (service::Status::Failed, Some(service::Remapping::On)),
             (service::Status::NotFound, None),
             (service::Status::Unavailable, None),
         ] {
-            let _ = app.update(Message::ServiceStatus(status));
+            let _ = app.update(staging::service_is(status));
             assert_eq!(app.remapping_toggle(), expected, "{status:?}");
         }
 
-        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(staging::service_is(service::Status::Active));
         let _ = app.update(Message::SetRemapping(service::Remapping::Off));
         assert_eq!(
             app.remapping_toggle(),
@@ -5747,7 +5787,7 @@ mod tests {
         );
         let _ = app.update(Message::RemappingSwitched {
             target: service::Remapping::Off,
-            result: Ok(()),
+            result: Ok(service::Snapshot::latest(service::Status::Inactive)),
         });
         assert_eq!(
             app.remapping_toggle(),
@@ -5761,12 +5801,44 @@ mod tests {
     }
 
     #[test]
+    fn reports_that_arrive_late_never_undo_newer_ones() {
+        let report = |status, revision| service::Snapshot { status, revision };
+        let mut app = app();
+        let _ = app.update(Message::ServiceStatus(report(service::Status::Inactive, 4)));
+
+        // Resuming: xremap starts and exits at once, and the watcher
+        // says so before the switch's own report arrives.
+        let _ = app.update(Message::SetRemapping(service::Remapping::On));
+        let _ = app.update(Message::ServiceStatus(report(
+            service::Status::Restarting,
+            6,
+        )));
+        let _ = app.update(Message::RemappingSwitched {
+            target: service::Remapping::On,
+            result: Ok(report(service::Status::Active, 5)),
+        });
+        assert_eq!(app.switching, None);
+        assert_eq!(
+            app.service,
+            Some(service::Status::Restarting),
+            "the later state stands"
+        );
+
+        // So does a report of an earlier moment that the watcher sends late.
+        let _ = app.update(Message::ServiceStatus(report(service::Status::Starting, 3)));
+        assert_eq!(app.service, Some(service::Status::Restarting));
+
+        let _ = app.update(Message::ServiceStatus(report(service::Status::Active, 7)));
+        assert_eq!(app.service, Some(service::Status::Active));
+    }
+
+    #[test]
     fn the_chip_starts_a_service_keyloom_did_not_stop_itself() {
         // Reopening after a pause finds the unit stopped, with nothing
         // in this session's state saying Keyloom is what stopped it.
         for status in [service::Status::Inactive, service::Status::Failed] {
             let mut app = app();
-            let _ = app.update(Message::ServiceStatus(status));
+            let _ = app.update(staging::service_is(status));
             assert_eq!(
                 app.remapping_toggle(),
                 Some(service::Remapping::On),
@@ -5784,9 +5856,17 @@ mod tests {
 
     #[test]
     fn a_mapping_change_never_starts_a_service_that_is_not_running() {
-        for status in [service::Status::Inactive, service::Status::Failed] {
+        // xremap reads the file whenever it does start, including when
+        // it is on its way up or about to be restarted.
+        for status in [
+            service::Status::Inactive,
+            service::Status::Failed,
+            service::Status::Starting,
+            service::Status::Stopping,
+            service::Status::Restarting,
+        ] {
             let mut app = app();
-            let _ = app.update(Message::ServiceStatus(status));
+            let _ = app.update(staging::service_is(status));
             let _ = app.update(Message::SelectProfile("mac".to_owned()));
             assert_eq!(
                 app.apply_step(app.apply_seq),
@@ -5799,7 +5879,7 @@ mod tests {
     #[test]
     fn only_the_chip_puts_remapping_back() {
         let mut app = app();
-        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(staging::service_is(service::Status::Active));
         let _ = app.update(Message::SetView(View::Tester));
 
         let _ = app.update(Message::SetRemapping(service::Remapping::Off));
@@ -5810,7 +5890,7 @@ mod tests {
         );
         let _ = app.update(Message::RemappingSwitched {
             target: service::Remapping::Off,
-            result: Ok(()),
+            result: Ok(service::Snapshot::latest(service::Status::Inactive)),
         });
         assert_eq!(app.service, Some(service::Status::Inactive));
         assert_eq!(app.switching, None);
@@ -5834,7 +5914,7 @@ mod tests {
         assert_eq!(app.switching, Some(service::Remapping::On));
         let _ = app.update(Message::RemappingSwitched {
             target: service::Remapping::On,
-            result: Ok(()),
+            result: Ok(service::Snapshot::latest(service::Status::Active)),
         });
         assert_eq!(app.service, Some(service::Status::Active));
         assert!(app.toast.is_none(), "a clean stop and start says nothing");
@@ -5843,7 +5923,7 @@ mod tests {
     #[test]
     fn a_refused_switch_reports_the_state_the_service_is_left_in() {
         let mut app = app();
-        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(staging::service_is(service::Status::Active));
         let _ = app.update(Message::SetView(View::Tester));
 
         let _ = app.update(Message::SetRemapping(service::Remapping::Off));
@@ -5870,7 +5950,7 @@ mod tests {
         let _ = app.update(Message::SetRemapping(service::Remapping::Off));
         let _ = app.update(Message::RemappingSwitched {
             target: service::Remapping::Off,
-            result: Ok(()),
+            result: Ok(service::Snapshot::latest(service::Status::Inactive)),
         });
         let _ = app.update(Message::SetRemapping(service::Remapping::On));
         let _ = app.update(Message::RemappingSwitched {
@@ -5891,11 +5971,11 @@ mod tests {
     #[test]
     fn changes_made_while_remapping_is_off_never_restart_it() {
         let mut app = app();
-        let _ = app.update(Message::ServiceStatus(service::Status::Active));
+        let _ = app.update(staging::service_is(service::Status::Active));
         let _ = app.update(Message::SetRemapping(service::Remapping::Off));
         let _ = app.update(Message::RemappingSwitched {
             target: service::Remapping::Off,
-            result: Ok(()),
+            result: Ok(service::Snapshot::latest(service::Status::Inactive)),
         });
 
         // A profile switch still rewrites the config, but restarting
@@ -5912,7 +5992,7 @@ mod tests {
         let _ = app.update(Message::SetRemapping(service::Remapping::On));
         let _ = app.update(Message::RemappingSwitched {
             target: service::Remapping::On,
-            result: Ok(()),
+            result: Ok(service::Snapshot::latest(service::Status::Active)),
         });
         let _ = app.update(Message::SelectProfile("laptop".to_owned()));
         assert_eq!(app.apply_step(app.apply_seq), ApplyStep::Restart);

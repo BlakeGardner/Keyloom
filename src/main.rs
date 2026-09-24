@@ -11,6 +11,7 @@ mod monitor;
 mod service;
 mod session;
 mod setup;
+mod systemd;
 #[cfg(test)]
 mod testing;
 mod ui;
