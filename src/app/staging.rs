@@ -3,8 +3,8 @@
 //!
 //! A setup page is rendered from one value, [`Facts`], plus a few fields
 //! of the open wizard ([`Setup`]), so a state is staged by building
-//! those directly: nothing is read from `/etc`, `/dev`, or `systemctl`,
-//! and nothing is written. The interface tests (`e2e`) and the
+//! those directly: nothing is read from `/etc`, `/dev`, or systemd, and
+//! nothing is written. The interface tests (`e2e`) and the
 //! screenshots (`screenshots`) share these builders, so what is
 //! asserted on and what is pictured is one and the same state.
 
@@ -48,6 +48,12 @@ pub fn window(app: &App) -> Element<'_, Message> {
         popover = popover.popup(dialog);
     }
     popover.into()
+}
+
+/// What the service's watcher delivers when the unit is in `status`:
+/// a report newer than any before it.
+pub fn service_is(status: service::Status) -> Message {
+    Message::ServiceStatus(service::Snapshot::latest(status))
 }
 
 // ---- Systems -----------------------------------------------------------

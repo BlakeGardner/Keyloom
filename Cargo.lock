@@ -2922,6 +2922,7 @@ dependencies = [
  "sha2 0.11.0",
  "tokio",
  "ureq",
+ "zbus",
  "zip",
 ]
 

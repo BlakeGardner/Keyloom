@@ -834,8 +834,13 @@ async fn unit_check(
     let active = match unit.status {
         service::Status::Unavailable => return UnitCheck::Unavailable,
         service::Status::NotFound => return UnitCheck::Missing,
-        service::Status::Active => true,
-        service::Status::Inactive | service::Status::Failed => false,
+        // A unit on its way up is running as far as setup goes; one
+        // that keeps exiting is not, however soon systemd retries it.
+        service::Status::Active | service::Status::Starting => true,
+        service::Status::Inactive
+        | service::Status::Failed
+        | service::Status::Stopping
+        | service::Status::Restarting => false,
     };
     let text = match unit.fragment_path.as_deref() {
         Some(path) => tokio::fs::read_to_string(path).await.ok(),
@@ -1036,7 +1041,7 @@ pub async fn prepare_uinput() -> Result<(), ActionError> {
 /// # Errors
 ///
 /// When the download, its verification, or the install fails, or when
-/// `systemctl` refuses the restart.
+/// systemd refuses the restart.
 pub async fn install_xremap(facts: &Facts) -> Result<(), ActionError> {
     install::download_and_install().await?;
     if matches!(
@@ -1052,11 +1057,12 @@ pub async fn install_xremap(facts: &Facts) -> Result<(), ActionError> {
 ///
 /// # Errors
 ///
-/// When the unit file cannot be written or `systemctl` refuses.
+/// When the unit file cannot be written or systemd refuses.
 pub async fn run_service_action(action: ServiceAction, facts: &Facts) -> Result<(), ActionError> {
     if action == ServiceAction::Start && matches!(facts.unit, UnitCheck::Foreign { .. }) {
         // Their unit, their file: only start it.
-        return Ok(service::restart().await?);
+        service::restart().await?;
+        return Ok(());
     }
     save_service(facts).await?;
     service::enable().await?;
@@ -1076,7 +1082,7 @@ pub async fn run_service_action(action: ServiceAction, facts: &Facts) -> Result<
 /// # Errors
 ///
 /// When there is nothing to point the service at, the file cannot be
-/// written, or `systemctl` refuses the reload.
+/// written, or systemd refuses the reload.
 pub async fn save_service(facts: &Facts) -> Result<(), ActionError> {
     let (Some(binary), Some(config)) = (facts.xremap_path(), facts.config.as_deref()) else {
         return Err(ActionError::Failed(
@@ -1700,10 +1706,22 @@ mod tests {
             unit_check(unit(service::Status::NotFound), None, None).await,
             UnitCheck::Missing
         );
-        assert!(matches!(
-            unit_check(unit(service::Status::Failed), None, None).await,
-            UnitCheck::Foreign { active: false, .. }
-        ));
+        for (status, active) in [
+            (service::Status::Active, true),
+            (service::Status::Starting, true),
+            (service::Status::Stopping, false),
+            (service::Status::Restarting, false),
+            (service::Status::Inactive, false),
+            (service::Status::Failed, false),
+        ] {
+            assert!(
+                matches!(
+                    unit_check(unit(status), None, None).await,
+                    UnitCheck::Foreign { active: found, .. } if found == active
+                ),
+                "{status:?}"
+            );
+        }
     }
 
     #[test]

@@ -37,7 +37,7 @@ use iced_test::selector::{Candidate, Target};
 use super::screenshots::Shots;
 use super::staging::{
     MIN_WINDOW, WINDOW, app, app_on, app_on_step, facts, foreign, found, fresh_system, ready,
-    systems, window,
+    service_is, systems, window,
 };
 use super::*;
 use crate::install;
@@ -1233,10 +1233,59 @@ fn setup_opens_from_the_menu_and_from_the_status_chip() {
 
     // With nothing set up, the header's status chip leads to setup too.
     let mut driver = Driver::new(app()).named("chip");
-    driver.deliver(Message::ServiceStatus(service::Status::NotFound));
+    driver.deliver(service_is(service::Status::NotFound));
     driver.expect_shown(&["Remapping not set up"]);
     driver.click("Remapping not set up");
     assert_eq!(driver.page(), SetupPage::Welcome);
+}
+
+#[test]
+fn the_status_chip_follows_the_service_and_offers_what_fits() {
+    // The service changes on its own too — a start at login, a crash, a
+    // stop from a terminal — and the chip shows each state as it comes.
+    let mut driver = Driver::new(app()).named("chip");
+    driver.expect_shown(&["Checking remapping…"]);
+    for (status, label, pressed) in [
+        (
+            service::Status::Active,
+            "Remapping Enabled",
+            Some(service::Remapping::Off),
+        ),
+        (
+            service::Status::Starting,
+            "Starting Remapping",
+            Some(service::Remapping::Off),
+        ),
+        (
+            service::Status::Restarting,
+            "Restarting Remapping",
+            Some(service::Remapping::Off),
+        ),
+        (service::Status::Stopping, "Stopping Remapping", None),
+        (
+            service::Status::Inactive,
+            "Remapping Paused",
+            Some(service::Remapping::On),
+        ),
+        (
+            service::Status::Failed,
+            "Remapping Failed",
+            Some(service::Remapping::On),
+        ),
+        (service::Status::Unavailable, "Remapping Unavailable", None),
+    ] {
+        driver.deliver(service_is(status));
+        driver.expect_shown(&[label]);
+        let emitted = driver.click(label);
+        assert_eq!(driver.app.switching, pressed, "{status:?}");
+        assert_eq!(
+            emitted,
+            usize::from(pressed.is_some()),
+            "{status:?}: a passive chip emits nothing"
+        );
+        // The switch itself never runs here.
+        driver.app.switching = None;
+    }
 }
 
 // ---- Storyboards -------------------------------------------------------
@@ -1305,7 +1354,7 @@ pub mod storyboards {
         driver.click("Finish");
         assert!(driver.app.setup.is_none());
         assert_eq!(driver.app.setup_state, SetupState::Complete);
-        driver.deliver(Message::ServiceStatus(service::Status::Inactive));
+        driver.deliver(service_is(service::Status::Inactive));
         driver.expect_shown(&["Remapping Paused"]);
         driver.frame("main-window");
     }
@@ -1338,7 +1387,7 @@ pub mod storyboards {
         assert!(driver.app.setup.is_none());
         assert_eq!(driver.app.setup_state, SetupState::Deferred);
         // Their unit is running, which is all the header's chip knows.
-        driver.deliver(Message::ServiceStatus(service::Status::Active));
+        driver.deliver(service_is(service::Status::Active));
         driver.expect_shown(&["Remapping Enabled"]);
         driver.frame("main-window-chip");
     }
@@ -1449,7 +1498,7 @@ pub mod storyboards {
         driver.click("Finish");
         assert!(driver.app.setup.is_none());
         assert_eq!(driver.app.setup_state, SetupState::Complete);
-        driver.deliver(Message::ServiceStatus(service::Status::Active));
+        driver.deliver(service_is(service::Status::Active));
         driver.frame("main-window");
     }
 

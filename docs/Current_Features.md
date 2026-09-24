@@ -443,23 +443,34 @@ to end.
 
 ## Applying (xremap service)
 
+Keyloom manages the `xremap.service` systemd user unit by talking to
+systemd's user manager over D-Bus, making the requests `systemctl --user`
+would, so no `systemctl` binary is involved. Like `systemctl`, a start, stop,
+or restart counts as done only once systemd reports its job finished; a job
+that fails is reported with systemd's reason and the commands that show the
+unit's logs.
+
 - Changes apply themselves — there is no Apply button. Every change that
-  actually rewrites the generated config schedules a restart of the
-  `xremap.service` systemd user unit (`systemctl --user restart`) after a
-  short debounce, so xremap re-reads the file; restarts are paced to avoid
-  systemd's start rate limit, and failures are reported in the application.
-- The unit's state is queried at startup (`systemctl --user show`) and shown
-  in the header, including active, inactive, failed, missing, unavailable, and
+  actually rewrites the generated config schedules a restart of the unit
+  after a short debounce, so xremap re-reads the file; restarts are paced to
+  avoid systemd's start rate limit, and failures are reported in the
+  application.
+- The header follows the unit live: its state when Keyloom opens, then every
+  change systemd announces, whoever made it — a crash, a stop or start from a
+  terminal, the start at login. It shows running, starting, stopping,
+  restarting (xremap exited on its own and systemd starts it again; red, since
+  keys are not remapped meanwhile), paused, failed, missing, unavailable, and
   applying states. An absent or broken service never blocks editing, and
   auto-apply restarts only a unit that is actually running.
 - The header's status chip is also the pause control: pressing it stops a
-  running unit (`systemctl --user stop`) and starts a stopped or failed one,
-  whether or not this session is what stopped it. Remapping is either running
-  or paused — a unit Keyloom stopped reads exactly like one that was already
-  stopped ("Remapping Paused", amber) — and amber also covers the moments
-  between: being paused or resumed, or a change on its way to the service.
-  The chip stays passive only while a restart is in flight, or when there is
-  no systemd to ask; with no unit at all it opens first-run setup instead.
+  running unit (or one starting, or restarting after a crash) and starts a
+  stopped or failed one, whether or not this session is what stopped it.
+  Remapping is either running or paused — a unit Keyloom stopped reads
+  exactly like one that was already stopped ("Remapping Paused", amber) — and
+  amber also covers the moments between: being paused, resumed, started, or
+  stopped, or a change on its way to the service. The chip stays passive only
+  while a restart or a stop is in flight, or when there is no systemd to ask;
+  with no unit at all it opens first-run setup instead.
 - The chip has the final say: remapping stopped from it stays stopped —
   switching views, closing Keyloom, and quitting it all leave it alone. Only
   the chip starts it again (or the unit's own start on the next login).
