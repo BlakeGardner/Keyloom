@@ -70,9 +70,12 @@ echo "Vendoring crates for x86_64 and aarch64 Linux"
     cargo vendor-filterer --platform=x86_64-unknown-linux-gnu \
         --platform=aarch64-unknown-linux-gnu --keep-dep-kinds=no-dev \
         vendor > "$work/cargo-config.toml"
-    mkdir .cargo
+    # The repository's own .cargo/config.toml (the interface tests'
+    # renderer) stays; the vendored sources are appended to it.
+    mkdir -p .cargo
+    if [ -s .cargo/config.toml ]; then echo >> .cargo/config.toml; fi
     sed 's|^directory = .*|directory = "vendor"|' "$work/cargo-config.toml" \
-        > .cargo/config.toml
+        >> .cargo/config.toml
 )
 
 echo "Creating the orig tarball"
