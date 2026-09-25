@@ -20,9 +20,10 @@ use crate::setup::{
     XremapAction, XremapCheck, uinput_commands,
 };
 use crate::ui::theme::{
-    accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, quiet, scrim, tint,
-    white,
+    ButtonStyle, accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, quiet,
+    scrim, tint, white,
 };
+use crate::ui::zoom;
 use crate::ui::{eyebrow, mono, popover_panel, txt, txt_semibold};
 
 /// A row inside a popover: name, optional subtitle, active check mark.
@@ -253,20 +254,108 @@ pub fn size_popup(app: &App) -> Element<'_, Message> {
     popover_panel(column).width(Length::Fixed(290.0)).into()
 }
 
-/// The `⋯` overflow menu popover.
+/// The `⋯` overflow menu popover: how large the deck is drawn, then
+/// the actions.
 pub fn menu_popup(app: &App) -> Element<'_, Message> {
+    let mut column = widget::column::with_capacity(5).spacing(2);
+    // The shortcuts page has no deck to zoom.
+    if app.view != View::Shortcuts {
+        let fit = app.fit_percent();
+        column = column.push(stepper_row(
+            "Keyboard zoom",
+            "Ctrl+scroll on the keys, or Ctrl and + − 0",
+            app.zoom.label(),
+            [zoom::Step::Out, zoom::Step::Reset, zoom::Step::In]
+                .map(|step| app.zoom.can_step(step, fit).then_some(Message::Zoom(step))),
+        ));
+        column =
+            column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
+    }
+
     let mut items: Vec<(&str, Message)> = Vec::with_capacity(3);
     items.push(("Set up remapping", Message::MenuShowSetup));
     if app.view != View::Tester {
         items.push(("Reset all mappings", Message::MenuReset));
     }
     items.push(("About Keyloom", Message::MenuAbout));
-
-    let mut column = widget::column::with_capacity(items.len()).spacing(2);
     for (name, message) in items {
         column = column.push(popup_row(name.to_owned(), None, false, message));
     }
-    popover_panel(column).width(Length::Fixed(220.0)).into()
+    popover_panel(column).width(Length::Fixed(272.0)).into()
+}
+
+/// A menu row for a level to step through: its name, then `−`, the
+/// level itself (pressing it goes back to the default), and `+`, with
+/// a hint on its own line beneath. A step with nothing to do, at
+/// either end, is offered greyed.
+fn stepper_row<'a>(
+    name: &str,
+    hint: &str,
+    level: String,
+    [out, reset, further]: [Option<Message>; 3],
+) -> Element<'a, Message> {
+    let step = |label: &str, message: Option<Message>| {
+        let mut button = widget::button::custom(
+            txt_semibold(label.to_owned(), 13.0, oklch(0.9, 0.01, 152.0))
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .class(ghost_button())
+        .padding(0)
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(28.0));
+        if let Some(message) = message {
+            button = button.on_press(message);
+        }
+        button
+    };
+    let mut current = widget::button::custom(
+        txt_semibold(level, 11.5, oklch(0.92, 0.01, 152.0))
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .class(
+        ButtonStyle {
+            hover_bg: Some(white(0.08).into()),
+            text: oklch(0.92, 0.01, 152.0),
+            radius: 6.0,
+            ..ButtonStyle::default()
+        }
+        .class(),
+    )
+    .padding(0)
+    .width(Length::Fixed(48.0))
+    .height(Length::Fixed(28.0));
+    if let Some(message) = reset {
+        current = current.on_press(message);
+    }
+
+    container(
+        widget::column::with_capacity(2)
+            .spacing(4)
+            .push(
+                widget::row::with_capacity(5)
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(txt_semibold(
+                        name.to_owned(),
+                        12.5,
+                        oklch(0.88, 0.01, 152.0),
+                    ))
+                    .push(crate::ui::hspace())
+                    .push(step("−", out))
+                    .push(current)
+                    .push(step("+", further)),
+            )
+            .push(txt(hint.to_owned(), 10.5, muted())),
+    )
+    .padding([6, 10])
+    .width(Length::Fill)
+    .into()
 }
 
 /// The confirmation toast at the bottom of the shell.

@@ -13,13 +13,13 @@ use std::time::{Duration, Instant};
 
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{self, ConfigSet, CosmicConfigEntry};
-use cosmic::iced::Subscription;
 use cosmic::iced::futures::{Stream, StreamExt};
+use cosmic::iced::{Event, Size, Subscription, event, keyboard as iced_keyboard, window};
 use cosmic::prelude::*;
 
 use crate::apps;
 use crate::config::{
-    self, KeyboardLayouts, KeyloomConfig, LayoutOverride, ProfileState, SetupState,
+    self, DeckZoom, KeyboardLayouts, KeyloomConfig, LayoutOverride, ProfileState, SetupState,
 };
 use crate::keyboard;
 use crate::known;
@@ -31,7 +31,15 @@ use crate::ui::model::{
     self, AppRef, AppScope, Chord, Group, Layer, LayerKey, Mapping, Maps, ModifierSide, Profile,
     Rule, key_by_evdev, key_name,
 };
+use crate::ui::zoom;
 use crate::xremap;
+
+/// The window's size at launch, in logical pixels: room for the 100%
+/// deck at its natural size, like a purpose-built tool.
+pub const WINDOW_SIZE: Size = Size::new(1210.0, 620.0);
+
+/// The smallest the window can be made.
+pub const MIN_WINDOW_SIZE: Size = Size::new(760.0, 480.0);
 
 /// How long the bottom sheet takes to open or close (the design's `kbRise`).
 const SHEET_ANIMATION: Duration = Duration::from_millis(220);
@@ -492,6 +500,15 @@ pub enum Message {
     ResetMappingsCancel,
     MenuAbout,
     CloseAbout,
+    /// Draw the deck one level larger or smaller, or fitted to the
+    /// window again: from the menu, Ctrl+scroll over the deck, or Ctrl
+    /// with +, −, or 0.
+    Zoom(zoom::Step),
+    /// A window's new size, in logical pixels.
+    WindowResized(window::Id, Size),
+    /// A press inside a popup that no control took; nothing to do, but
+    /// taking it keeps the popup open (`ui::popover_panel`).
+    PopupPressed,
     Monitor(monitor::Event),
 }
 
@@ -610,6 +627,11 @@ pub struct App {
     last_apply: Option<Instant>,
     /// Persistent settings store (None when unavailable or in tests).
     settings: Option<cosmic_config::Config>,
+    /// How large the deck is drawn.
+    pub zoom: DeckZoom,
+    /// The window's size in logical pixels, for what fitting the deck
+    /// amounts to.
+    window: Size,
 }
 
 impl App {
@@ -1190,6 +1212,42 @@ impl App {
         }
     }
 
+    /// What fitting the deck to the window currently amounts to, as a
+    /// percentage of the deck's natural size: where a step from the
+    /// fitted deck starts, and what the menu's `−` and `+` offer.
+    pub fn fit_percent(&self) -> f32 {
+        let (natural_width, _) = model::deck_size(&self.deck);
+        // libcosmic pads the content on both sides of the window (its
+        // own default when the app sets none).
+        let window = &self.core.window;
+        let border = if window.content_container {
+            f32::from(
+                window
+                    .border_padding
+                    .unwrap_or(if window.is_maximized { 8 } else { 7 }),
+            )
+        } else {
+            0.0
+        };
+        let room = ui::keyboard_view::deck_room(self.window.width - 2.0 * border);
+        zoom::fit_factor(natural_width, room) * 100.0
+    }
+
+    /// Draw the deck at `zoom` from now on, and remember it. A display
+    /// choice: no remap is rewritten and xremap is not restarted.
+    fn set_zoom(&mut self, zoom: DeckZoom) {
+        if zoom == self.zoom {
+            return;
+        }
+        self.zoom = zoom;
+        if let Some(settings) = &self.settings
+            && let Err(err) = settings.set("deck_zoom", zoom)
+        {
+            eprintln!("keyloom: failed to save the keyboard zoom: {err}");
+            self.flash("Could not save the keyboard zoom", err.to_string());
+        }
+    }
+
     /// Held modifiers as `[Ctrl, Shift, Alt, Super]`.
     pub fn held_mods(&self) -> [bool; 4] {
         use evdev::KeyCode as K;
@@ -1305,6 +1363,7 @@ impl App {
                 &self.profile_state(),
                 &self.keyboard_layouts,
                 self.setup_state,
+                self.zoom,
             );
             if let Err(err) = snapshot.write_entry(settings) {
                 eprintln!("keyloom: failed to save settings: {err}");
@@ -2544,6 +2603,9 @@ impl cosmic::Application for App {
         let setup_state = stored
             .as_ref()
             .map_or(SetupState::NotStarted, |stored| stored.setup);
+        let zoom = stored
+            .as_ref()
+            .map_or(DeckZoom::Fit, |stored| stored.deck_zoom.clamped());
         let stored = stored.filter(|stored| !stored.profiles.is_empty());
 
         let state = match stored {
@@ -2652,6 +2714,8 @@ impl cosmic::Application for App {
             applying: None,
             last_apply: None,
             settings,
+            zoom,
+            window: WINDOW_SIZE,
         };
 
         app.refresh_layout();
@@ -3544,6 +3608,19 @@ impl cosmic::Application for App {
                 self.about_open = true;
             }
             Message::CloseAbout => self.about_open = false,
+            Message::Zoom(step) => {
+                // The shortcuts page has no deck; the menu stays open so
+                // a level can be reached in a few presses.
+                if self.view != View::Shortcuts {
+                    self.set_zoom(self.zoom.stepped(step, self.fit_percent()));
+                }
+            }
+            Message::WindowResized(id, size) => {
+                if self.core.main_window_id().is_none_or(|main| main == id) {
+                    self.window = size;
+                }
+            }
+            Message::PopupPressed => {}
             Message::Monitor(event) => match event {
                 monitor::Event::Started(devices) => {
                     self.devices = devices;
@@ -3619,6 +3696,7 @@ impl cosmic::Application for App {
         let mut subscriptions = vec![
             Subscription::run(monitor_stream),
             Subscription::run(service_stream),
+            event::listen_with(runtime_events),
         ];
         // Drive redraws only while the sheet is actively moving.
         let sheet_progress = self.sheet_progress();
@@ -3723,6 +3801,27 @@ fn monitor_stream() -> impl Stream<Item = Message> + Send {
 /// Adapts the xremap service watcher into this app's message stream.
 fn service_stream() -> impl Stream<Item = Message> + Send {
     service::watch().map(Message::ServiceStatus)
+}
+
+/// The runtime events the app follows on its own: a window's size,
+/// for what fitting the deck amounts to, and the zoom shortcuts, which
+/// apply only where no widget took the key press, so a focused text
+/// input keeps its keys.
+fn runtime_events(event: Event, status: event::Status, id: window::Id) -> Option<Message> {
+    match event {
+        Event::Window(window::Event::Resized(size) | window::Event::Opened { size, .. }) => {
+            Some(Message::WindowResized(id, size))
+        }
+        Event::Keyboard(iced_keyboard::Event::KeyPressed {
+            key,
+            modified_key,
+            modifiers,
+            ..
+        }) if status == event::Status::Ignored && modifiers.control() => {
+            zoom::shortcut(&key, &modified_key).map(Message::Zoom)
+        }
+        _ => None,
+    }
 }
 
 /// One pass of the first-run setup checks.
@@ -4906,6 +5005,7 @@ mod tests {
             &original.profile_state(),
             &original.keyboard_layouts,
             original.setup_state,
+            original.zoom,
         );
         snapshot.write_entry(&handle).unwrap();
         original.settings = Some(handle);
@@ -4914,11 +5014,15 @@ mod tests {
         let _ = original.update(Message::SelectDevice("/dev/input/event0".to_owned()));
         let _ = original.update(Message::SetForm(keyboard::FORM_SIXTY_FIVE));
         let _ = original.update(Message::SetVariant(true));
+        // The zoom is a display choice saved the same way, the moment
+        // it changes.
+        let _ = original.update(Message::Zoom(zoom::Step::In));
         assert_eq!(original.apply_seq, 0);
 
         let stored = KeyloomConfig::load(original.settings.as_ref().unwrap());
         assert_eq!(stored.profiles, snapshot.profiles);
         assert_eq!(stored.active_profile, snapshot.active_profile);
+        assert_eq!(stored.deck_zoom, DeckZoom::Percent(110));
         let mut restored = app();
         restored.keyboard_layouts = stored.keyboard_layouts;
         let _ = restored.update(Message::Monitor(monitor::Event::Started(vec![
@@ -7219,5 +7323,118 @@ mod tests {
             "Copy",
             "the name is saved with the profile"
         );
+    }
+
+    /// The deck zooms through its levels from what fitting it amounts
+    /// to, and fits the window again on request.
+    #[test]
+    fn the_deck_zooms_from_the_fitted_size_through_the_levels() {
+        let mut app = app();
+        assert_eq!(app.zoom, DeckZoom::Fit);
+        // The default window fits the 100% deck whole.
+        assert!((app.fit_percent() - 100.0).abs() < f32::EPSILON);
+        let _ = app.update(Message::Zoom(zoom::Step::In));
+        assert_eq!(app.zoom, DeckZoom::Percent(110));
+        let _ = app.update(Message::Zoom(zoom::Step::Out));
+        let _ = app.update(Message::Zoom(zoom::Step::Out));
+        assert_eq!(app.zoom, DeckZoom::Percent(90));
+        let _ = app.update(Message::Zoom(zoom::Step::Reset));
+        assert_eq!(app.zoom, DeckZoom::Fit);
+
+        // In the smallest window the deck shrinks to fit; a step starts
+        // from there.
+        let _ = app.update(Message::WindowResized(
+            window::Id::unique(),
+            MIN_WINDOW_SIZE,
+        ));
+        let fit = app.fit_percent();
+        assert!(
+            (55.0..70.0).contains(&fit),
+            "fit at the smallest window: {fit}"
+        );
+        let _ = app.update(Message::Zoom(zoom::Step::In));
+        assert_eq!(app.zoom, DeckZoom::Percent(70));
+        let _ = app.update(Message::Zoom(zoom::Step::Reset));
+        let _ = app.update(Message::Zoom(zoom::Step::Out));
+        assert_eq!(app.zoom, DeckZoom::Percent(60));
+    }
+
+    /// Zooming is a display choice: it changes no remap and restarts
+    /// nothing, and the shortcuts page has no deck to zoom.
+    #[test]
+    fn zooming_changes_no_remap_and_skips_the_shortcuts_page() {
+        let mut app = app();
+        let apply_seq = app.apply_seq;
+        let _ = app.update(Message::Zoom(zoom::Step::In));
+        assert_eq!(app.apply_seq, apply_seq, "no restart for a display choice");
+        let _ = app.update(Message::SetView(View::Shortcuts));
+        let _ = app.update(Message::Zoom(zoom::Step::In));
+        assert_eq!(
+            app.zoom,
+            DeckZoom::Percent(110),
+            "nothing to zoom on the shortcuts page"
+        );
+        let _ = app.update(Message::SetView(View::Tester));
+        let _ = app.update(Message::Zoom(zoom::Step::In));
+        assert_eq!(
+            app.zoom,
+            DeckZoom::Percent(125),
+            "the tester shows the same deck"
+        );
+    }
+
+    /// Ctrl with =, +, −, and 0 zoom the deck when no widget took the
+    /// key press, and a window's new size is followed.
+    #[test]
+    fn runtime_events_carry_the_zoom_shortcuts_and_the_window_size() {
+        use cosmic::iced::keyboard::key::{NativeCode, Physical};
+        use cosmic::iced::keyboard::{Key, Location, Modifiers};
+
+        let press = |text: &str, ctrl: bool| {
+            Event::Keyboard(iced_keyboard::Event::KeyPressed {
+                key: Key::Character(text.into()),
+                modified_key: Key::Character(text.into()),
+                physical_key: Physical::Unidentified(NativeCode::Unidentified),
+                location: Location::Standard,
+                modifiers: if ctrl {
+                    Modifiers::CTRL
+                } else {
+                    Modifiers::empty()
+                },
+                text: None,
+                repeat: false,
+            })
+        };
+        let id = window::Id::unique();
+        let ignored = event::Status::Ignored;
+        assert!(matches!(
+            runtime_events(press("=", true), ignored, id),
+            Some(Message::Zoom(zoom::Step::In))
+        ));
+        assert!(matches!(
+            runtime_events(press("+", true), ignored, id),
+            Some(Message::Zoom(zoom::Step::In))
+        ));
+        assert!(matches!(
+            runtime_events(press("-", true), ignored, id),
+            Some(Message::Zoom(zoom::Step::Out))
+        ));
+        assert!(matches!(
+            runtime_events(press("0", true), ignored, id),
+            Some(Message::Zoom(zoom::Step::Reset))
+        ));
+        assert!(
+            runtime_events(press("=", false), ignored, id).is_none(),
+            "without Ctrl, = is typing"
+        );
+        assert!(
+            runtime_events(press("=", true), event::Status::Captured, id).is_none(),
+            "a focused text input keeps its keys"
+        );
+        let resized = Event::Window(window::Event::Resized(Size::new(800.0, 500.0)));
+        assert!(matches!(
+            runtime_events(resized, ignored, id),
+            Some(Message::WindowResized(_, size)) if size == Size::new(800.0, 500.0)
+        ));
     }
 }

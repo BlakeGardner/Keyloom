@@ -489,6 +489,24 @@ fn decks() {
     shots.capture(&app, "decks/D8-tester-command-held");
 }
 
+/// The deck zoomed: fitted to the smallest window, a level in from the
+/// default window, the largest level scrolling, and the menu's
+/// steppers.
+#[test]
+#[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
+fn zoom() {
+    let mut shots = Shots::new();
+    let mut app = staging::app();
+    shots.capture_at(&app, "zoom/Z1-fit-smallest-window", staging::MIN_WINDOW);
+    let _ = app.update(Message::Zoom(crate::ui::zoom::Step::In));
+    shots.capture(&app, "zoom/Z2-110");
+    app.zoom = crate::config::DeckZoom::Percent(200);
+    shots.capture(&app, "zoom/Z3-200-scrolls");
+    let _ = app.update(Message::Zoom(crate::ui::zoom::Step::Reset));
+    let _ = app.update(Message::TogglePopover(Popover::Menu));
+    shots.capture(&app, "zoom/Z4-menu");
+}
+
 // ---- Storyboards -------------------------------------------------------
 
 /// Frames of one flow, numbered in order under `storyboard/<id>/`.

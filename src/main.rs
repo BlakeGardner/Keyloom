@@ -36,11 +36,11 @@ fn main() -> cosmic::iced::Result {
         // tokens in `ui::theme` adapt to the mode.
         .theme(startup_theme())
         // Fit the 100% keyboard deck like a purpose-built tool.
-        .size(cosmic::iced::Size::new(1210.0, 620.0))
+        .size(app::WINDOW_SIZE)
         .size_limits(
             cosmic::iced::core::layout::Limits::NONE
-                .min_width(760.0)
-                .min_height(480.0),
+                .min_width(app::MIN_WINDOW_SIZE.width)
+                .min_height(app::MIN_WINDOW_SIZE.height),
         );
 
     cosmic::app::run::<app::App>(settings, ())

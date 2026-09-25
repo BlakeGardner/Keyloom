@@ -75,6 +75,15 @@ first-run setup installs that unit and walks through the input permissions
   Apple deck applies to the same physical key on every deck. The action
   catalog still lists the modifiers as Super and Alt: a Command key is
   mapped by choosing Left Super.
+- The deck fits the window by default: a deck wider than the window is
+  drawn smaller, keys and legends together, down to half size, and never
+  larger than its natural size. A zoom level of the user's own, from 50%
+  to 200%, is set with Ctrl+scroll over the keys, Ctrl and + (or =), −,
+  and 0 to fit the window again, or the `⋯` menu's "Keyboard zoom"
+  stepper, whose level goes back to fitting when pressed. A deck zoomed
+  past the window scrolls sideways and down. The level is remembered
+  across launches, applies to the Keyboard and Tester views alike, and is
+  a display choice: no remap is rewritten and xremap is not restarted.
 - Physical key presses do not light up the remap deck; live key highlights
   are reserved for Tester. "Record a key" capture still accepts physical input.
 - Clicking a key opens the key editor, and the deck displays configured tap
@@ -346,6 +355,8 @@ commitment. What an approach would have to solve is noted in
   Without a unique identifier, moving ports can require selecting the size
   again; identical devices with matching names and no unique identifier or
   connection information share overrides.
+- The keyboard zoom persists the same way, saved the moment it changes; a
+  store from before it existed loads with the deck fitted to the window.
   Display changes do not rewrite the remap configuration or restart xremap.
 - Every mapping, layer, application scope, shortcut group, or profile
   change regenerates the xremap document from the internal rule model and

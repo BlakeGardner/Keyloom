@@ -30,7 +30,7 @@
 use std::cell::Cell;
 
 use cosmic::Application;
-use cosmic::iced::core::{Pixels, Settings, Size};
+use cosmic::iced::core::{Event, Pixels, Point, Rectangle, Settings, Size, keyboard, mouse};
 use iced_test::Simulator;
 use iced_test::selector::{Candidate, Target};
 
@@ -40,9 +40,11 @@ use super::staging::{
     service_is, systems, window,
 };
 use super::*;
+use crate::config::DeckZoom;
 use crate::install;
 use crate::session::Desktop;
 use crate::setup::{ActionError, Facts, GroupCheck, Step, UinputCheck, UnitCheck, XremapCheck};
+use crate::ui::zoom;
 
 /// What a fix that asks for a password shows while the prompt is up.
 const APPROVAL: &str = "Waiting for approval…";
@@ -204,6 +206,60 @@ impl Driver {
             };
             ui.point_at(bounds.center());
             let _ = ui.simulate(iced_test::simulator::click());
+            ui.into_messages().collect()
+        };
+        let count = messages.len();
+        for message in messages {
+            self.deliver(message);
+        }
+        count
+    }
+
+    /// Where the window shows `text`, on screen. Fails when it does not.
+    #[track_caller]
+    pub fn text_bounds(&self, text: &str) -> Rectangle {
+        let mut found = None;
+        let _ = self
+            .simulator()
+            .find(|candidate: Candidate<'_>| -> Option<()> {
+                if let Candidate::Text {
+                    content,
+                    visible_bounds,
+                    ..
+                } = candidate
+                    && content == text
+                    && found.is_none()
+                {
+                    found = visible_bounds;
+                }
+                None
+            });
+        found.unwrap_or_else(|| {
+            panic!(
+                "{}expected {text:?} on screen; the window shows {:#?}",
+                self.name,
+                self.texts()
+            )
+        })
+    }
+
+    /// Turn the mouse wheel by `delta` with the cursor at `at`, with
+    /// Ctrl held or not, and give the messages that come of it to
+    /// `update`. Returns how many there were.
+    pub fn wheel(&mut self, at: Point, ctrl: bool, delta: mouse::ScrollDelta) -> usize {
+        let messages: Vec<Message> = {
+            let mut ui = self.simulator();
+            ui.point_at(at);
+            let modifiers = if ctrl {
+                keyboard::Modifiers::CTRL
+            } else {
+                keyboard::Modifiers::empty()
+            };
+            // One pass, so the modifiers are known when the wheel turns.
+            let _ = ui.simulate([
+                Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)),
+                Event::Mouse(mouse::Event::WheelScrolled { delta }),
+            ]);
             ui.into_messages().collect()
         };
         let count = messages.len();
@@ -1560,4 +1616,139 @@ fn storyboard_sb6_download_out_of_date() {
         return;
     }
     storyboards::download_out_of_date(None);
+}
+
+// ---- Zooming -----------------------------------------------------------
+
+/// The menu's stepper: the deck zooms from Fit through the levels and
+/// back, the legends growing with the keys, and the shortcuts page,
+/// with no deck, does without it.
+#[test]
+fn the_menu_steps_the_keyboard_zoom() {
+    let mut driver = Driver::new(app());
+    // The default window fits the deck at its natural size.
+    let natural = driver.text_bounds("Esc");
+
+    driver.click("⋯");
+    driver.expect_shown(&["Keyboard zoom", "Fit"]);
+    // The menu's + and − come last; the keypad's caps come before.
+    assert_eq!(driver.click("+"), 1);
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(110));
+    driver.expect_shown(&["110%"]);
+    let zoomed = driver.text_bounds("Esc");
+    assert!(
+        zoomed.width > natural.width * 1.05 && zoomed.height > natural.height * 1.05,
+        "legends zoom with the keys: {natural:?} -> {zoomed:?}"
+    );
+    // The level itself goes back to fitting.
+    assert_eq!(driver.click("110%"), 1);
+    assert_eq!(driver.app.zoom, DeckZoom::Fit);
+    driver.expect_shown(&["Fit"]);
+    assert_eq!(driver.click("−"), 1);
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(90));
+    driver.expect_shown(&["90%"]);
+
+    driver.deliver(Message::SetView(View::Shortcuts));
+    driver.click("⋯");
+    driver.expect_shown(&["About Keyloom"]);
+    driver.expect_hidden("Keyboard zoom");
+}
+
+/// A step with nothing to do is offered greyed: at the largest level,
+/// pressing `+` changes nothing, and the menu stays open rather than
+/// taking the press for one outside it.
+#[test]
+fn the_stepper_goes_quiet_at_the_ends_of_its_levels() {
+    let mut driver = Driver::new(app());
+    driver.app.zoom = DeckZoom::Percent(200);
+    driver.click("⋯");
+    driver.click("+");
+    assert_eq!(
+        driver.app.zoom,
+        DeckZoom::Percent(200),
+        "the deck is as large as it gets"
+    );
+    assert_eq!(driver.app.popover, Some(Popover::Menu));
+    assert!(!driver.app.apps_open, "nothing under the menu was pressed");
+    assert_eq!(driver.click("−"), 1);
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(175));
+
+    driver.app.zoom = DeckZoom::Percent(50);
+    driver.click("−");
+    assert_eq!(
+        driver.app.zoom,
+        DeckZoom::Percent(50),
+        "the deck is as small as it gets"
+    );
+    assert_eq!(driver.app.popover, Some(Popover::Menu));
+}
+
+/// Ctrl+scroll over the deck zooms it, a notch a level, and touchpad
+/// scrolling adds up to notches; without Ctrl, or away from the deck,
+/// the wheel is left to whatever else it scrolls.
+#[test]
+fn ctrl_scroll_over_the_deck_zooms_it() {
+    let mut driver = Driver::new(app());
+    // The deck moves as it zooms, so it is found again for every turn.
+    let deck = |driver: &Driver| driver.text_bounds("Esc").center();
+    let lines = |y: f32| mouse::ScrollDelta::Lines { x: 0.0, y };
+
+    let at = deck(&driver);
+    assert_eq!(driver.wheel(at, false, lines(1.0)), 0, "a plain scroll");
+    assert_eq!(driver.app.zoom, DeckZoom::Fit);
+
+    assert_eq!(
+        driver.wheel(at, true, lines(1.0)),
+        1,
+        "scrolling up zooms in"
+    );
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(110));
+    let at = deck(&driver);
+    assert_eq!(driver.wheel(at, true, lines(-2.0)), 2, "a notch a level");
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(90));
+
+    let pixels = |y: f32| mouse::ScrollDelta::Pixels { x: 0.0, y };
+    let at = deck(&driver);
+    assert_eq!(
+        driver.wheel(at, true, pixels(45.0)),
+        1,
+        "a notch and a half"
+    );
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(100));
+
+    let header = driver.text_bounds("Keyloom").center();
+    assert_eq!(
+        driver.wheel(header, true, lines(1.0)),
+        0,
+        "away from the deck"
+    );
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(100));
+}
+
+/// A zoomed deck still fits the window: the largest one scrolls in
+/// both directions, and the smallest window fits the deck by shrinking
+/// it, so the keyboard stays whole and reachable.
+#[test]
+fn the_deck_fits_or_scrolls_at_every_size() {
+    let mut driver = Driver::new(app());
+    driver.deliver(Message::Zoom(zoom::Step::In));
+    driver.deliver(Message::Zoom(zoom::Step::In));
+    driver.deliver(Message::Zoom(zoom::Step::In));
+    driver.deliver(Message::Zoom(zoom::Step::In));
+    driver.deliver(Message::Zoom(zoom::Step::In));
+    driver.deliver(Message::Zoom(zoom::Step::In));
+    assert_eq!(driver.app.zoom, DeckZoom::Percent(200));
+    // The first key is on screen where the deck starts; the rest, and
+    // what follows the deck, are there to scroll to.
+    driver.text_bounds("Esc");
+    driver.expect_shown(&["Esc", "0", "No mappings in this profile yet."]);
+
+    let small = Driver::new(app()).at_minimum_size();
+    let esc = small.text_bounds("Esc");
+    let natural = Driver::new(app()).text_bounds("Esc");
+    assert!(
+        esc.height < natural.height * 0.8,
+        "the deck shrinks to fit the smallest window: {natural:?} -> {esc:?}"
+    );
+    small.expect_shown(&["Esc", "0", "No mappings in this profile yet."]);
 }
