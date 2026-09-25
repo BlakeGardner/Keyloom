@@ -7,6 +7,7 @@ mod config;
 mod icons;
 mod install;
 mod keyboard;
+mod known;
 mod monitor;
 mod service;
 mod session;

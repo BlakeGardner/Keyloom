@@ -11,7 +11,7 @@ use crate::ui::theme::{
     ButtonStyle, accent, accent_filled, black, border, fg, flat_button, flat_tab, keycap, muted,
     oklch, outline_button, quiet, tint, white,
 };
-use crate::ui::{Cap, Pill, keycap_chip, legend, mono, pill, txt, txt_semibold};
+use crate::ui::{Cap, Pill, keycap_chip, mono, pill, txt, txt_semibold};
 
 /// The sheet title: the key being edited and, in a layer, the key
 /// held for it, drawn as the deck draws them; in an application scope,
@@ -27,7 +27,7 @@ pub fn key_editor_title(app: &App) -> Element<'_, Message> {
     title = match (app.active_layer(), app.active_app_scope()) {
         (Some(layer), _) => title
             .push(word("While holding"))
-            .push(keycap_chip(legend(&layer.trigger), Cap::Held))
+            .push(keycap_chip(app.legend(&layer.trigger), Cap::Held))
             .push(word("make")),
         (None, Some(scope)) => title
             .push(word("In"))
@@ -36,7 +36,7 @@ pub fn key_editor_title(app: &App) -> Element<'_, Message> {
         (None, None) => title.push(word("Make")),
     };
     title
-        .push(keycap_chip(legend(selected), Cap::Selected))
+        .push(keycap_chip(app.legend(selected), Cap::Selected))
         .push(word("act as…"))
         .into()
 }
@@ -71,7 +71,7 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         summary = match job {
             Some(job) => summary.push(keycap_chip(short(&job.action), Cap::Mapped)),
             None => summary
-                .push(keycap_chip(legend(selected), Cap::Plain))
+                .push(keycap_chip(app.legend(selected), Cap::Plain))
                 .push(note("normal".to_owned())),
         };
         summary = summary.push(note(format!("· in {}", layer.name)));
@@ -84,7 +84,7 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         summary = match mapping.filter(|m| !m.normal).and_then(|m| m.tap.as_deref()) {
             Some(tap) => summary.push(keycap_chip(short(tap), cap)),
             None => summary
-                .push(keycap_chip(legend(selected), Cap::Plain))
+                .push(keycap_chip(app.legend(selected), Cap::Plain))
                 .push(note(
                     if normal_here {
                         "normal here"
@@ -126,10 +126,10 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
         let why = match mapping.filter(|m| !m.normal).and_then(|m| m.tap.as_deref()) {
             Some(tap) => format!(
                 "Keeps {} as it is {here}, even though it is {} elsewhere.",
-                key_name(selected),
+                app.key_name(selected),
                 short(tap)
             ),
-            None => format!("Keeps {} as it is {here}.", key_name(selected)),
+            None => format!("Keeps {} as it is {here}.", app.key_name(selected)),
         };
         section = section.push(
             widget::row::with_capacity(2)
@@ -286,8 +286,8 @@ pub fn key_editor(app: &App) -> Element<'_, Message> {
     } else if let Some(layer) = layer {
         format!(
             "Choose what {} does while {} is held",
-            key_name(selected),
-            key_name(&layer.trigger)
+            app.key_name(selected),
+            app.key_name(&layer.trigger)
         )
     } else {
         match app.mode {
@@ -510,7 +510,7 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
         let combo_from = if picked.is_empty() {
             "pick a modifier".to_owned()
         } else {
-            format!("{} + {}", picked.join(" + "), key_name(selected))
+            format!("{} + {}", picked.join(" + "), app.key_name(selected))
         };
 
         let mut builder = widget::column::with_capacity(5)
@@ -597,7 +597,7 @@ fn advanced_area<'a>(app: &'a App, selected: &'static str) -> Element<'a, Messag
     let swap_on = mapping.is_some_and(|m| m.swap);
     let swap_sub = tap.map_or_else(
         || "set a tap action first".to_owned(),
-        |tap| format!("{} → {}", short(tap), key_name(selected)),
+        |tap| format!("{} → {}", short(tap), app.key_name(selected)),
     );
     let mut swap = widget::button::custom(txt(
         format!("Two-way swap · {swap_sub}"),

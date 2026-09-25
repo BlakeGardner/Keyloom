@@ -19,7 +19,6 @@ use crate::setup::{
     UinputCheck, UnitCheck, XREMAP_GNOME_EXTENSION_URL, XREMAP_NO_SUDO_URL, XREMAP_URL,
     XremapAction, XremapCheck, uinput_commands,
 };
-use crate::ui::model::key_name;
 use crate::ui::theme::{
     accent, accent_button, border, fg, ghost_button, menu_row, muted, oklch, quiet, scrim, tint,
     white,
@@ -453,9 +452,9 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
             continue;
         }
         let mut full_to = if mapping.normal {
-            format!("{} · normal here", key_name(code))
+            format!("{} · normal here", app.key_name(code))
         } else {
-            mapping.tap.clone().unwrap_or_else(|| key_name(code))
+            mapping.tap.clone().unwrap_or_else(|| app.key_name(code))
         };
         if let Some(hold) = &mapping.hold {
             full_to.push_str(&format!(" · When held: {hold}"));
@@ -474,7 +473,7 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
                                 widget::row::with_capacity(3)
                                     .spacing(12)
                                     .align_y(Alignment::Center)
-                                    .push(mono(key_name(code), 13.0, fg()))
+                                    .push(mono(app.key_name(code), 13.0, fg()))
                                     .push(txt("→", 13.0, muted()))
                                     .push(txt_semibold(full_to, 14.0, fg())),
                             )
@@ -521,7 +520,9 @@ pub fn remaps_dialog(app: &App) -> Element<'_, Message> {
 
 /// The "Press the key you want to use" recording dialog.
 pub fn capture_dialog(app: &App) -> Element<'_, Message> {
-    let subject = app.selected.map_or_else(|| "this key".to_owned(), key_name);
+    let subject = app
+        .selected
+        .map_or_else(|| "this key".to_owned(), |code| app.key_name(code));
     let description = format!(
         "Choose the output for {subject}{}",
         match app.mode {
@@ -633,7 +634,7 @@ pub fn remove_mapping_dialog(app: &App) -> Element<'_, Message> {
     let entry = app
         .confirm_remove_mapping
         .and_then(|index| app.maps().get(index));
-    let name = entry.map_or_else(|| "this key".to_owned(), |(code, _)| key_name(code));
+    let name = entry.map_or_else(|| "this key".to_owned(), |(code, _)| app.key_name(code));
     let scope = entry
         .map(|(_, mapping)| mapping)
         .filter(|mapping| !mapping.is_general())
@@ -684,7 +685,7 @@ pub fn delete_layer_dialog(app: &App) -> Element<'_, Message> {
     let body = layer.map_or_else(
         || "You can undo right after deleting.".to_owned(),
         |layer| {
-            let key = key_name(&layer.trigger);
+            let key = app.key_name(&layer.trigger);
             let jobs = match layer.keys.len() {
                 0 => String::new(),
                 1 => "Its 1 key goes back to normal, and holding ".to_owned(),

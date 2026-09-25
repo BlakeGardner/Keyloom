@@ -22,6 +22,7 @@ use crate::config::{
     self, KeyboardLayouts, KeyloomConfig, LayoutOverride, ProfileState, SetupState,
 };
 use crate::keyboard;
+use crate::known;
 use crate::monitor;
 use crate::service;
 use crate::setup;
@@ -532,6 +533,8 @@ pub struct App {
     pub form: usize,
     /// Whether the deck uses the ISO assembly instead of ANSI.
     pub iso: bool,
+    /// The key caps drawn for the form, variant, and keyboard shown.
+    deck: Vec<model::KeyCap>,
     keyboard_layouts: KeyboardLayouts,
     /// The layer shown and edited on the deck (`None`: the normal keys).
     pub layer: Option<String>,
@@ -877,8 +880,56 @@ impl App {
     }
 
     /// The key caps of the currently displayed deck.
-    pub fn deck(&self) -> &'static [model::KeyCap] {
-        model::deck(self.form, self.iso)
+    pub fn deck(&self) -> &[model::KeyCap] {
+        &self.deck
+    }
+
+    /// The cap of the shown deck that sends `code`, if it is drawn.
+    fn deck_cap(&self, code: &str) -> Option<&model::KeyCap> {
+        self.deck.iter().find(|cap| cap.code == code)
+    }
+
+    /// The name of a key as the shown deck calls it: an Apple deck says
+    /// Command and Option where the registry says Super and Alt.
+    pub fn key_name(&self, code: &str) -> String {
+        self.deck_cap(code)
+            .filter(|cap| !cap.name.is_empty())
+            .map_or_else(|| key_name(code), |cap| cap.name.to_owned())
+    }
+
+    /// The printed legend of a key on the shown deck (its symbol and
+    /// word), or the registry's legend for a key the deck does not draw.
+    pub fn legend(&self, code: &str) -> String {
+        match self.deck_cap(code) {
+            Some(cap) if !cap.label.is_empty() && !cap.sub.is_empty() => {
+                format!("{} {}", cap.label, cap.sub)
+            }
+            Some(cap) if !cap.label.is_empty() => cap.label.to_owned(),
+            _ => ui::legend(code),
+        }
+    }
+
+    /// The main legend of a key's cap as the shown deck prints it, for
+    /// the tester's big cap; the registry's for a key it does not draw.
+    pub fn cap_label(&self, code: &str) -> String {
+        let label = self.deck_cap(code).map_or_else(
+            || model::key(code).map_or("?", |cap| cap.label),
+            |cap| cap.label,
+        );
+        if label.is_empty() {
+            "Space".to_owned()
+        } else {
+            label.to_owned()
+        }
+    }
+
+    /// The modifier families as the shown deck names them, in the order
+    /// of [`model::MODS`].
+    pub fn modifier_names(&self) -> [&'static str; 4] {
+        match keyboard::family(self.form) {
+            keyboard::Family::Apple => ["Control", "Shift", "Option", "Command"],
+            keyboard::Family::Standard => ["Control", "Shift", "Alt", "Super"],
+        }
     }
 
     fn selected_device(&self) -> Option<&monitor::KeyboardDevice> {
@@ -1082,6 +1133,37 @@ impl App {
             .or_else(|| self.detected_form())
             .unwrap_or(keyboard::FORM_FULL);
         self.iso = choice.iso.or_else(|| self.detected_iso()).unwrap_or(false);
+        self.deck = self.build_deck();
+    }
+
+    /// The caps of the shown deck: for an Apple form, the deck of the
+    /// recognised keyboard the scope shows (or the default Apple deck);
+    /// otherwise the standard deck of the form and variant.
+    fn build_deck(&self) -> Vec<model::KeyCap> {
+        match keyboard::family(self.form) {
+            keyboard::Family::Apple => {
+                let spec = self.recognized_for_deck().map_or_else(
+                    || model::AppleDeck::defaults(self.form, self.iso),
+                    |seen| model::AppleDeck::for_keyboard(self.form, self.iso, &seen),
+                );
+                model::apple_deck(&spec)
+            }
+            keyboard::Family::Standard => model::deck(self.form, self.iso).to_vec(),
+        }
+    }
+
+    /// The recognised keyboard the deck is drawn for: the selected one,
+    /// or, for All keyboards, a connected physical keyboard of the form
+    /// the aggregate chose.
+    fn recognized_for_deck(&self) -> Option<known::Recognized> {
+        if self.device == "all" {
+            self.devices
+                .iter()
+                .filter(|device| device.connected && !device.virtual_device)
+                .find_map(|device| device.known.filter(|seen| seen.keyboard.form == self.form))
+        } else {
+            self.selected_device().and_then(|device| device.known)
+        }
     }
 
     /// Save display settings without rewriting remaps or restarting xremap.
@@ -2531,6 +2613,7 @@ impl cosmic::Application for App {
             device: "all".to_owned(),
             form: keyboard::FORM_FULL,
             iso: false,
+            deck: Vec::new(),
             keyboard_layouts,
             layer: None,
             layers_open: false,
@@ -4396,7 +4479,29 @@ mod tests {
             form_hinted,
             iso: false,
             virtual_device: false,
+            known: None,
         }
+    }
+
+    /// A Magic Keyboard with Touch ID as the monitor reports it: the
+    /// model recognised, the variant read, and `hid_apple` driving it
+    /// with the given settings.
+    fn magic_keyboard(
+        path: &str,
+        variant: known::Variant,
+        driver: Option<known::AppleDriver>,
+    ) -> monitor::KeyboardDevice {
+        let mut device = test_device(path, "Blake’s Magic Keyboard", keyboard::FORM_FULL, false);
+        device.known = Some(known::Recognized {
+            keyboard: known::identify(known::APPLE_BLUETOOTH, 0x029a, &device.name)
+                .expect("the Magic Keyboard with Touch ID is recognised"),
+            variant,
+            apple_driver: driver,
+        });
+        device.form = keyboard::FORM_APPLE_COMPACT;
+        device.form_hinted = true;
+        device.iso = variant.is_iso();
+        device
     }
 
     fn started(form: usize, form_hinted: bool) -> Message {
@@ -4437,6 +4542,111 @@ mod tests {
             keyboard::FORM_SIXTY_FIVE,
             "the size picker always wins over detection"
         );
+    }
+
+    /// A recognised Apple keyboard is drawn as its own deck, in the
+    /// variant its country code says, with its keys named as printed.
+    #[test]
+    fn a_recognised_apple_keyboard_gets_its_deck_variant_and_names() {
+        let mut app = app();
+        let device = magic_keyboard(
+            "/dev/input/event20",
+            known::Variant::Iso,
+            Some(known::AppleDriver::default()),
+        );
+        let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
+        for scope in ["all", "/dev/input/event20"] {
+            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            assert_eq!(
+                (app.form, app.iso),
+                (keyboard::FORM_APPLE_COMPACT, true),
+                "{scope}"
+            );
+            let codes: Vec<&str> = app.deck().iter().map(|cap| cap.code).collect();
+            assert!(codes.contains(&"Power"), "the Touch ID key is drawn");
+            assert!(codes.contains(&"Spotlight"), "F4 sends Spotlight");
+            assert!(!codes.contains(&"F4"), "F4 itself is behind fn");
+            assert!(codes.contains(&"IntlBackslash"), "the ISO key is drawn");
+            assert_eq!(app.key_name("MetaLeft"), "Left Command");
+            assert_eq!(app.key_name("AltRight"), "Right Option");
+            assert_eq!(app.key_name("Backspace"), "Delete");
+            assert_eq!(app.key_name("Power"), "Touch ID");
+            assert_eq!(app.key_name("KeyA"), "A", "letters keep their names");
+            assert_eq!(app.legend("MetaLeft"), "⌘ command");
+            assert_eq!(app.legend("MissionControl"), "▦ F3");
+            assert_eq!(app.cap_label("MetaLeft"), "⌘");
+            assert_eq!(app.cap_label("Space"), "Space");
+            assert_eq!(
+                app.modifier_names(),
+                ["Control", "Shift", "Option", "Command"]
+            );
+        }
+        assert_eq!(
+            app.layout_override(),
+            LayoutOverride::default(),
+            "detection defaults the deck without saving a choice"
+        );
+    }
+
+    /// The deck follows the driver: with F keys first, the function
+    /// row carries the F codes and the media legends go small; under
+    /// another driver nothing is translated or swapped.
+    #[test]
+    fn the_apple_deck_follows_the_drivers_settings() {
+        let mut app = app();
+        let f_keys_first = known::AppleDriver {
+            fnmode: 2,
+            swap_opt_cmd: 1,
+            ..known::AppleDriver::default()
+        };
+        let device = magic_keyboard(
+            "/dev/input/event20",
+            known::Variant::Ansi,
+            Some(f_keys_first),
+        );
+        let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
+        let _ = app.update(Message::SelectDevice("/dev/input/event20".to_owned()));
+        assert_eq!((app.form, app.iso), (keyboard::FORM_APPLE_COMPACT, false));
+        let f3 = app
+            .deck()
+            .iter()
+            .find(|cap| cap.code == "F3")
+            .expect("F3 is drawn");
+        assert_eq!((f3.label, f3.sub), ("F3", "▦"));
+        assert!(!app.deck().iter().any(|cap| cap.code == "MissionControl"));
+        // The printed command key sends the option code and keeps its
+        // printed name, so the tester calls what was pressed by its cap.
+        assert_eq!(app.key_name("AltLeft"), "Left Command");
+        assert_eq!(app.key_name("MetaLeft"), "Left Option");
+        assert_eq!(app.legend("AltLeft"), "⌘ command");
+
+        let generic = magic_keyboard("/dev/input/event21", known::Variant::Ansi, None);
+        let _ = app.update(Message::Monitor(monitor::Event::Connected(generic)));
+        let _ = app.update(Message::SelectDevice("/dev/input/event21".to_owned()));
+        assert!(app.deck().iter().any(|cap| cap.code == "F3"));
+        assert_eq!(app.key_name("MetaLeft"), "Left Command");
+    }
+
+    /// Standard decks keep the registry's names, and a manual Apple
+    /// size for an ordinary keyboard draws the default Apple deck.
+    #[test]
+    fn names_follow_the_shown_deck() {
+        let mut app = app();
+        let _ = app.update(started(keyboard::FORM_TKL, true));
+        assert_eq!(app.key_name("MetaLeft"), "Left Super");
+        assert_eq!(app.legend("MetaLeft"), "Super");
+        assert_eq!(
+            app.cap_label("MissionControl"),
+            "▦",
+            "off-deck keys use the registry"
+        );
+        assert_eq!(app.modifier_names(), ["Control", "Shift", "Alt", "Super"]);
+
+        let _ = app.update(Message::SetForm(keyboard::FORM_APPLE_FULL));
+        assert_eq!(app.form, keyboard::FORM_APPLE_FULL);
+        assert!(app.deck().iter().any(|cap| cap.code == "F19"));
+        assert_eq!(app.key_name("Delete"), "Forward Delete");
+        assert_eq!(app.key_name("MetaLeft"), "Left Command");
     }
 
     fn connected(path: &str, name: &str, form: usize, form_hinted: bool) -> Message {

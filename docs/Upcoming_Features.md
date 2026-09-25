@@ -34,10 +34,14 @@ without a user-facing feature of its own.
 
 ## Keyboards and interface
 
-- **Mac keyboards on Linux.** Support Mac keyboard layouts and show their
-  familiar key names and symbols, including Command and Option, in the
-  keyboard view, tester, and key editor. This goes beyond the existing
-  Mac-style mapping profiles; it does not imply a macOS version of Keyloom.
+- **The rest of the Apple keyboards.** Apple's Magic Keyboards are
+  recognised and drawn as printed (see
+  [Supported_Keyboards.md](Supported_Keyboards.md)); still to come: the JIS
+  decks (a JIS keyboard is recognised and named but drawn as ANSI), MacBook
+  built-in keyboards (the same compact shape, with product ids the kernel's
+  `hid_apple` driver also lists), the aluminium keyboards from before 2015,
+  the fn set of the function row as a second face of the deck, and Command
+  and Option in the action catalog, which still names them Super and Alt.
 - **Non-English keyboards.** Support non-English keyboard layouts with
   matching key labels in the keyboard view, tester, and key editor. Language
   layouts are separate from the existing keyboard sizes and ANSI/ISO physical

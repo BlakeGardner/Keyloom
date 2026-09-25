@@ -22,6 +22,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::keyboard;
+use crate::known;
 
 /// How often to look for newly attached keyboards.
 const HOTPLUG_INTERVAL: Duration = Duration::from_secs(2);
@@ -53,6 +54,9 @@ pub struct KeyboardDevice {
     pub iso: bool,
     /// Whether Linux exposes this as a software-created input device.
     pub virtual_device: bool,
+    /// What Keyloom knows about the model beyond evdev, when it
+    /// recognises the keyboard (see [`known`]).
+    pub known: Option<known::Recognized>,
 }
 
 /// Best available persistent identity, independent of `/dev/input/eventN`.
@@ -91,7 +95,8 @@ impl KeyboardId {
     }
 }
 
-/// Prefer size hints in device names over potentially inflated capabilities.
+/// Prefer size hints in device names (and recognised models) over
+/// potentially inflated capabilities; among those, the largest board.
 pub fn detected_form<'a>(devices: impl Iterator<Item = &'a KeyboardDevice>) -> Option<usize> {
     let mut physical_hinted = None;
     let mut physical_fallback = None;
@@ -103,9 +108,9 @@ pub fn detected_form<'a>(devices: impl Iterator<Item = &'a KeyboardDevice>) -> O
         } else {
             (&mut physical_hinted, &mut physical_fallback)
         };
-        *fallback = Some(fallback.map_or(device.form, |form: usize| form.min(device.form)));
+        *fallback = Some(fallback.map_or(device.form, |form| keyboard::larger(form, device.form)));
         if device.form_hinted {
-            *hinted = Some(hinted.map_or(device.form, |form: usize| form.min(device.form)));
+            *hinted = Some(hinted.map_or(device.form, |form| keyboard::larger(form, device.form)));
         }
     }
     physical_hinted
@@ -193,29 +198,38 @@ fn form_guess(device: &Device) -> (bool, usize) {
     }
 }
 
-/// Describe one opened device for the application.
+/// Describe one opened device for the application. A keyboard Keyloom
+/// recognises by its identifiers takes its size and variant from what
+/// is known about the model; any other is guessed from its name and
+/// the keys it reports.
 fn device_entry(path: &Path, device: &Device) -> KeyboardDevice {
-    let (form_hinted, form) = form_guess(device);
     let name = device
         .name()
         .filter(|name| !name.is_empty())
         .unwrap_or("Unnamed keyboard");
+    let input = device.input_id();
+    let known = known::identify(input.vendor(), input.product(), name)
+        .map(|keyboard| known::Recognized::observe(keyboard, path));
+    let (form_hinted, form, iso) = match &known {
+        Some(seen) => (true, seen.keyboard.form, seen.variant.is_iso()),
+        None => {
+            let (hinted, form) = form_guess(device);
+            let iso = device
+                .supported_keys()
+                .is_some_and(|keys| keys.contains(KeyCode::KEY_102ND));
+            (hinted, form, iso)
+        }
+    };
     KeyboardDevice {
         path: path.to_owned(),
-        id: KeyboardId::new(
-            device.input_id(),
-            device.unique_name(),
-            device.physical_path(),
-            name,
-        ),
+        id: KeyboardId::new(input, device.unique_name(), device.physical_path(), name),
         name: name.to_owned(),
         connected: true,
         form,
         form_hinted,
-        iso: device
-            .supported_keys()
-            .is_some_and(|keys| keys.contains(KeyCode::KEY_102ND)),
+        iso,
         virtual_device: is_virtual_device(path),
+        known,
     }
 }
 
@@ -499,6 +513,7 @@ mod tests {
             form_hinted: true,
             iso,
             virtual_device,
+            known: None,
         }
     }
 
@@ -539,6 +554,30 @@ mod tests {
         assert_eq!(
             detected_form([&broad_virtual].into_iter()),
             Some(keyboard::FORM_FULL)
+        );
+    }
+
+    /// The largest board wins across families: an Apple keyboard with
+    /// a keypad outranks a compact one, and a recognised keyboard
+    /// counts as hinted, so its deck is not displaced by a capability
+    /// guess.
+    #[test]
+    fn aggregate_form_takes_the_largest_recognised_keyboard() {
+        let mut compact = layout_device(true, false, false);
+        compact.form = keyboard::FORM_APPLE_COMPACT;
+        let mut full = layout_device(true, false, false);
+        full.form = keyboard::FORM_APPLE_FULL;
+        assert_eq!(
+            detected_form([&compact, &full].into_iter()),
+            Some(keyboard::FORM_APPLE_FULL)
+        );
+        let mut guessed = layout_device(true, false, false);
+        guessed.form = keyboard::FORM_FULL;
+        guessed.form_hinted = false;
+        assert_eq!(
+            detected_form([&guessed, &compact].into_iter()),
+            Some(keyboard::FORM_APPLE_COMPACT),
+            "a capability guess never displaces a recognised keyboard"
         );
     }
 
@@ -598,6 +637,43 @@ mod tests {
         // Reporting an empty set here would claim every keyboard is
         // free, which is a different thing from not being able to look.
         assert_eq!(grabbed_nodes_in(Path::new("/keyloom-no-such-proc")), None);
+    }
+
+    /// What Keyloom would make of the keyboards attached to this
+    /// machine: a diagnostic for checking recognition against real
+    /// hardware, never run on its own. It reads the devices the way
+    /// the monitor does (non-exclusively) and prints one line each.
+    #[test]
+    #[ignore = "reads this machine's keyboards; run with --ignored --nocapture"]
+    fn list_connected_keyboards() {
+        for (path, device) in evdev::enumerate() {
+            if !is_keyboard(&device) {
+                continue;
+            }
+            let entry = device_entry(&path, &device);
+            let seen = entry.known.map_or_else(
+                || "not recognised".to_owned(),
+                |seen| {
+                    format!(
+                        "{} · {} · driver {}",
+                        seen.keyboard.model,
+                        seen.variant,
+                        seen.apple_driver
+                            .map_or_else(|| "other".to_owned(), |driver| format!("{driver:?}"))
+                    )
+                },
+            );
+            eprintln!(
+                "{}: {} ({:04x}:{:04x}) form {} iso {} virtual {} · {seen}",
+                path.display(),
+                entry.name,
+                device.input_id().vendor(),
+                device.input_id().product(),
+                keyboard::FORM_FACTORS[entry.form].name,
+                entry.iso,
+                entry.virtual_device,
+            );
+        }
     }
 
     #[test]

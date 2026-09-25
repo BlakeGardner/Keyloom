@@ -8,6 +8,7 @@ use evdev::KeyCode;
 use serde::{Deserialize, Serialize};
 
 use crate::keyboard;
+use crate::known::{AppleLegends, Corner, Recognized};
 
 /// One key unit in the deck, in logical pixels (`U` in the export).
 pub const UNIT: f32 = 49.0;
@@ -90,6 +91,14 @@ pub struct KeyCap {
     pub h: f32,
     /// Horizontal block offset in logical pixels (main / nav / numpad).
     pub gx: f32,
+    /// A smaller second legend under the main one: the F number on an
+    /// Apple function key, the word under a modifier's symbol. Empty
+    /// on most caps.
+    pub sub: &'static str,
+    /// The key's name where the printed legend calls it something else
+    /// than the registry does (Command for the Super key); empty to
+    /// use [`key_name`].
+    pub name: &'static str,
 }
 
 /// Blocks a key can belong to, used by the TKL filter in the export.
@@ -107,6 +116,8 @@ macro_rules! caps {
             w: $w,
             h: $h,
             gx: $gx,
+            sub: "",
+            name: "",
         },)*]
     };
 }
@@ -236,11 +247,12 @@ pub const EXTRA_KEYS: &[KeyCap] = caps![
     "Fn", "Fn", KeyCode::KEY_FN, 11.0, 5.5, 1.0, 1.0, 0.0;
 ];
 
-/// Keys no deck draws: media, brightness, and the Apple keyboards'
-/// Mission Control and Launchpad keys. They are still physical keys the
-/// monitor sees, so they can be remapped (by pressing them from the
-/// remaps list), recorded as a chord's key, and named by the tester.
-/// Their geometry is unused. Labels are what the tester's cap shows.
+/// Keys no standard deck draws: media and brightness keys, and the keys
+/// of Apple keyboards (drawn on the Apple decks). They are still
+/// physical keys the monitor sees, so they can be remapped (by pressing
+/// them from the remaps list), recorded as a chord's key, and named by
+/// the tester. Their geometry is unused. Labels are what the tester's
+/// cap shows.
 #[rustfmt::skip]
 pub const OFF_DECK_KEYS: &[KeyCap] = caps![
     "AudioVolumeUp", "Vol +", KeyCode::KEY_VOLUMEUP, 0.0, 0.0, 1.0, 1.0, 0.0;
@@ -253,6 +265,19 @@ pub const OFF_DECK_KEYS: &[KeyCap] = caps![
     "BrightnessDown", "Bri −", KeyCode::KEY_BRIGHTNESSDOWN, 0.0, 0.0, 1.0, 1.0, 0.0;
     "MissionControl", "▦", KeyCode::KEY_SCALE, 0.0, 0.0, 1.0, 1.0, 0.0;
     "Launchpad", "⁙", KeyCode::KEY_DASHBOARD, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "Spotlight", "⚲", KeyCode::KEY_SEARCH, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "Dictation", "mic", KeyCode::KEY_MICMUTE, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "DoNotDisturb", "☾", KeyCode::KEY_SLEEP, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "Power", "power", KeyCode::KEY_POWER, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "Eject", "⏏", KeyCode::KEY_EJECTCD, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "F13", "F13", KeyCode::KEY_F13, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "F14", "F14", KeyCode::KEY_F14, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "F15", "F15", KeyCode::KEY_F15, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "F16", "F16", KeyCode::KEY_F16, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "F17", "F17", KeyCode::KEY_F17, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "F18", "F18", KeyCode::KEY_F18, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "F19", "F19", KeyCode::KEY_F19, 0.0, 0.0, 1.0, 1.0, 0.0;
+    "NumpadEqual", "=", KeyCode::KEY_KPEQUAL, 0.0, 0.0, 1.0, 1.0, 0.0;
 ];
 
 /// Every physical key the app knows, across all decks and variants,
@@ -261,7 +286,7 @@ pub fn registry() -> impl Iterator<Item = &'static KeyCap> {
     ALL_KEYS.iter().chain(EXTRA_KEYS).chain(OFF_DECK_KEYS)
 }
 
-/// Whether a key is one no deck draws (see [`OFF_DECK_KEYS`]).
+/// Whether a key is one no standard deck draws (see [`OFF_DECK_KEYS`]).
 pub fn is_off_deck(code: &str) -> bool {
     OFF_DECK_KEYS.iter().any(|cap| cap.code == code)
 }
@@ -319,8 +344,13 @@ fn place(code: &str, x: f32, y: f32, w: f32) -> KeyCap {
 
 /// Assemble one deck. The 100% and TKL decks reuse the design export's
 /// exact geometry; the compact boards follow the classic assemblies
-/// (right-hand column, ↑ carved out of right Shift, squeezed bottom row).
+/// (right-hand column, ↑ carved out of right Shift, squeezed bottom row);
+/// the Apple decks are their own (see [`apple_deck`]), here with nothing
+/// known about the keyboard.
 fn build_deck(form: usize, iso: bool) -> Vec<KeyCap> {
+    if keyboard::family(form) == keyboard::Family::Apple {
+        return apple_deck(&AppleDeck::defaults(form, iso));
+    }
     let mut keys = match form {
         keyboard::FORM_TKL => ALL_KEYS
             .iter()
@@ -457,6 +487,478 @@ fn to_iso(keys: &mut Vec<KeyCap>) {
     }
 }
 
+// ---- Apple decks ------------------------------------------------------
+
+/// Where the navigation cluster and the keypad of the full-size Apple
+/// deck start, in logical pixels: after the 14.5-unit main block and a
+/// narrow gap, then after the 3-unit cluster and another gap.
+const APPLE_NAV_GX: f32 = 14.7 * UNIT;
+const APPLE_NUMPAD_GX: f32 = 17.9 * UNIT;
+
+/// Everything that decides how an Apple deck is drawn: the keyboard's
+/// shape and printing, and what the kernel's `hid_apple` driver makes
+/// its keys send (see [`crate::known::AppleDriver`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppleDeck {
+    /// Full-size with the numeric keypad, or compact.
+    pub full: bool,
+    pub iso: bool,
+    pub legends: AppleLegends,
+    pub corner: Corner,
+    /// The fn key starts the bottom row. Otherwise it starts the
+    /// navigation cluster and the bottom row is the older, wider one.
+    pub fn_at_left: bool,
+    /// The function row sends media keys unless fn is held.
+    pub media_first: bool,
+    /// The driver swaps the codes of the key in the top-left corner and
+    /// the key beside the left shift, as it does for an ISO keyboard.
+    pub iso_swapped: bool,
+    /// Option and command swapped by the driver: 0 as printed, 1 on
+    /// both sides, 2 on the left side only.
+    pub swap_opt_cmd: u8,
+    pub swap_ctrl_cmd: bool,
+    pub swap_fn_leftctrl: bool,
+}
+
+impl AppleDeck {
+    /// The deck for a form with nothing known about the keyboard: the
+    /// current Magic Keyboard with the driver's defaults.
+    pub fn defaults(form: usize, iso: bool) -> Self {
+        Self {
+            full: form == keyboard::FORM_APPLE_FULL,
+            iso,
+            legends: AppleLegends::Modern,
+            corner: Corner::TouchId,
+            fn_at_left: true,
+            media_first: true,
+            iso_swapped: iso,
+            swap_opt_cmd: 0,
+            swap_ctrl_cmd: false,
+            swap_fn_leftctrl: false,
+        }
+    }
+
+    /// The deck for a recognised Apple keyboard, drawn at `form` in the
+    /// `iso` variant: the picker's choices, defaulted by detection.
+    pub fn for_keyboard(form: usize, iso: bool, seen: &Recognized) -> Self {
+        let mut deck = Self::defaults(form, iso);
+        if let Some(model) = seen.apple() {
+            deck.legends = model.legends;
+            deck.corner = model.corner;
+            deck.fn_at_left = model.fn_at_left;
+        }
+        match seen.apple_driver {
+            Some(driver) => {
+                deck.media_first = driver.media_keys_first();
+                deck.iso_swapped = driver.iso_swapped(seen.variant);
+                deck.swap_opt_cmd = driver.swap_opt_cmd;
+                deck.swap_ctrl_cmd = driver.swap_ctrl_cmd;
+                deck.swap_fn_leftctrl = driver.swap_fn_leftctrl;
+            }
+            // Another driver than hid_apple: the function row is plain
+            // F keys and nothing is swapped.
+            None => {
+                deck.media_first = false;
+                deck.iso_swapped = false;
+            }
+        }
+        deck
+    }
+}
+
+/// A cap's printing on an Apple deck.
+#[derive(Clone, Copy)]
+struct Legend {
+    label: &'static str,
+    sub: &'static str,
+    /// The key's name where the printed legend calls it something else
+    /// than the registry does; empty to use [`key_name`].
+    name: &'static str,
+}
+
+const fn printed(label: &'static str, sub: &'static str) -> Legend {
+    Legend {
+        label,
+        sub,
+        name: "",
+    }
+}
+
+const fn named(label: &'static str, sub: &'static str, name: &'static str) -> Legend {
+    Legend { label, sub, name }
+}
+
+/// A registry key placed on an Apple deck with its printed legend:
+/// `at` is `[x, y, w, h]` in key units, `gx` the block offset.
+fn apple_cap(code: &str, legend: Legend, at: [f32; 4], gx: f32) -> KeyCap {
+    let cap = key(code).expect("Apple deck key must exist in the registry");
+    KeyCap {
+        label: legend.label,
+        sub: legend.sub,
+        name: legend.name,
+        x: at[0],
+        y: at[1],
+        w: at[2],
+        h: at[3],
+        gx,
+        ..*cap
+    }
+}
+
+fn print(cap: &mut KeyCap, legend: Legend) {
+    cap.label = legend.label;
+    cap.sub = legend.sub;
+    cap.name = legend.name;
+}
+
+/// The code a modifier sends after the driver's swaps, applied in the
+/// driver's order: fn with the left control, then option with command,
+/// then control with command.
+fn swapped_modifier(code: &'static str, spec: &AppleDeck) -> &'static str {
+    let mut code = code;
+    if spec.swap_fn_leftctrl {
+        code = match code {
+            "Fn" => "ControlLeft",
+            "ControlLeft" => "Fn",
+            other => other,
+        };
+    }
+    code = match (spec.swap_opt_cmd, code) {
+        (1 | 2, "AltLeft") => "MetaLeft",
+        (1 | 2, "MetaLeft") => "AltLeft",
+        (1, "AltRight") => "MetaRight",
+        (1, "MetaRight") => "AltRight",
+        (_, other) => other,
+    };
+    if spec.swap_ctrl_cmd {
+        code = match code {
+            "ControlLeft" => "MetaLeft",
+            "MetaLeft" => "ControlLeft",
+            "ControlRight" => "MetaRight",
+            "MetaRight" => "ControlRight",
+            other => other,
+        };
+    }
+    code
+}
+
+/// The function row as printed: each F key with the media key it sends
+/// under the driver's default settings and that key's legend, or `None`
+/// for a blank cap that sends the F key. The legends are code points
+/// the colour emoji font does not cover, so they draw as text in the
+/// interface's own style (`☀` and `⏏` would come out as emoji).
+fn apple_f_keys(
+    legends: AppleLegends,
+) -> [(&'static str, Option<(&'static str, &'static str)>); 12] {
+    let (f4, f5, f6) = match legends {
+        AppleLegends::Classic => (Some(("Launchpad", "⁙")), None, None),
+        AppleLegends::Modern => (
+            Some(("Spotlight", "⚲")),
+            Some(("Dictation", "mic")),
+            Some(("DoNotDisturb", "☾")),
+        ),
+    };
+    [
+        ("F1", Some(("BrightnessDown", "☼"))),
+        ("F2", Some(("BrightnessUp", "✺"))),
+        ("F3", Some(("MissionControl", "▦"))),
+        ("F4", f4),
+        ("F5", f5),
+        ("F6", f6),
+        ("F7", Some(("MediaTrackPrevious", "◁◁"))),
+        ("F8", Some(("MediaPlayPause", "▷‖"))),
+        ("F9", Some(("MediaTrackNext", "▷▷"))),
+        ("F10", Some(("AudioVolumeMute", "mute"))),
+        ("F11", Some(("AudioVolumeDown", "vol −"))),
+        ("F12", Some(("AudioVolumeUp", "vol +"))),
+    ]
+}
+
+/// The function row: a wide esc, F1 to F12 carrying the code each sends
+/// and the other legend small, and the corner key.
+fn apple_function_row(spec: &AppleDeck) -> Vec<KeyCap> {
+    let mut row = Vec::with_capacity(14);
+    row.push(apple_cap(
+        "Escape",
+        printed("esc", ""),
+        [0.0, 0.0, 1.5, 1.0],
+        0.0,
+    ));
+    for (i, (f, media)) in apple_f_keys(spec.legends).into_iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let at = [1.5 + i as f32, 0.0, 1.0, 1.0];
+        row.push(match media {
+            Some((code, glyph)) if spec.media_first => apple_cap(code, printed(glyph, f), at, 0.0),
+            Some((_, glyph)) => apple_cap(f, printed(f, glyph), at, 0.0),
+            None => apple_cap(f, printed(f, ""), at, 0.0),
+        });
+    }
+    let corner = [13.5, 0.0, 1.0, 1.0];
+    row.push(match spec.corner {
+        Corner::Eject => apple_cap("Eject", printed("▲", "eject"), corner, 0.0),
+        Corner::Lock => apple_cap("Power", named("lock", "", "Lock"), corner, 0.0),
+        Corner::TouchId => apple_cap("Power", named("○", "Touch ID", "Touch ID"), corner, 0.0),
+    });
+    row
+}
+
+/// The number row through the letter rows: the design's rows drawn
+/// directly under the function row with Apple's widths, legends, and
+/// names.
+fn apple_main_rows(spec: &AppleDeck) -> Vec<KeyCap> {
+    const DELETE: Legend = named("⌫", "delete", "Delete");
+    const TAB: Legend = printed("⇥", "tab");
+    const CAPS_LOCK: Legend = printed("⇪", "caps lock");
+    const RETURN: Legend = named("⏎", "return", "Return");
+    const SHIFT: Legend = printed("⇧", "shift");
+
+    let mut keys: Vec<KeyCap> = ALL_KEYS
+        .iter()
+        .filter(|cap| cap.gx == 0.0 && cap.y >= 1.5 && cap.y < 5.5)
+        .map(|cap| KeyCap {
+            y: cap.y - 0.5,
+            ..*cap
+        })
+        .collect();
+    for cap in &mut keys {
+        match cap.code {
+            "Backspace" => {
+                cap.w = 1.5;
+                print(cap, DELETE);
+            }
+            "Backslash" => cap.w = 1.0,
+            "Enter" => {
+                cap.x = 12.75;
+                cap.w = 1.75;
+                print(cap, RETURN);
+            }
+            "ShiftLeft" => print(cap, SHIFT),
+            "ShiftRight" => {
+                cap.w = 2.25;
+                print(cap, SHIFT);
+            }
+            "Tab" => print(cap, TAB),
+            "CapsLock" => print(cap, CAPS_LOCK),
+            _ => {}
+        }
+    }
+    if spec.iso {
+        apple_iso(&mut keys, spec.iso_swapped);
+    }
+    keys
+}
+
+/// Apple's ISO assembly: the tall return in two segments, the `\` key
+/// beside its lower one, a narrow left shift, the `§` key in the corner,
+/// and the `` ` `` key beside the shift. The driver swaps the codes of
+/// those two small keys on an ISO keyboard (`swapped`), so the caps
+/// carry the codes the keys send.
+fn apple_iso(keys: &mut Vec<KeyCap>, swapped: bool) {
+    if let Some(index) = keys.iter().position(|cap| cap.code == "Enter") {
+        keys[index].x = 13.5;
+        keys[index].y = 2.0;
+        keys[index].w = 1.0;
+        let lower = KeyCap {
+            label: "",
+            sub: "",
+            x: 13.75,
+            y: 3.0,
+            w: 0.75,
+            ..keys[index]
+        };
+        keys.push(lower);
+    }
+    if let Some(backslash) = keys.iter_mut().find(|cap| cap.code == "Backslash") {
+        backslash.x = 12.75;
+        backslash.y = 3.0;
+        backslash.w = 1.0;
+    }
+    if let Some(shift) = keys.iter_mut().find(|cap| cap.code == "ShiftLeft") {
+        shift.w = 1.25;
+    }
+    keys.retain(|cap| cap.code != "Backquote");
+    let (corner, beside_shift) = if swapped {
+        ("IntlBackslash", "Backquote")
+    } else {
+        ("Backquote", "IntlBackslash")
+    };
+    keys.push(apple_cap(
+        corner,
+        named("§", "±", "Section"),
+        [0.0, 1.0, 1.0, 1.0],
+        0.0,
+    ));
+    keys.push(apple_cap(
+        beside_shift,
+        named("`", "~", "Backtick"),
+        [1.25, 4.0, 1.0, 1.0],
+        0.0,
+    ));
+}
+
+/// The bottom row as printed, each modifier carrying the code it sends
+/// after the driver's swaps.
+fn apple_bottom_row(spec: &AppleDeck) -> Vec<KeyCap> {
+    const FN: Legend = named("fn", "", "Fn");
+    const CONTROL_LEFT: Legend = named("⌃", "control", "Left Control");
+    const OPTION_LEFT: Legend = named("⌥", "option", "Left Option");
+    const COMMAND_LEFT: Legend = named("⌘", "command", "Left Command");
+    const SPACE: Legend = printed("", "");
+    const COMMAND_RIGHT: Legend = named("⌘", "command", "Right Command");
+    const OPTION_RIGHT: Legend = named("⌥", "option", "Right Option");
+    const CONTROL_RIGHT: Legend = named("⌃", "control", "Right Control");
+
+    let mut row: Vec<(&'static str, Legend, f32, f32)> = Vec::with_capacity(8);
+    if spec.full && !spec.fn_at_left {
+        row.extend([
+            ("ControlLeft", CONTROL_LEFT, 0.0, 1.5),
+            ("AltLeft", OPTION_LEFT, 1.5, 1.25),
+            ("MetaLeft", COMMAND_LEFT, 2.75, 1.5),
+        ]);
+    } else {
+        row.extend([
+            ("Fn", FN, 0.0, 1.0),
+            ("ControlLeft", CONTROL_LEFT, 1.0, 1.0),
+            ("AltLeft", OPTION_LEFT, 2.0, 1.0),
+            ("MetaLeft", COMMAND_LEFT, 3.0, 1.25),
+        ]);
+    }
+    if spec.full {
+        row.extend([
+            ("Space", SPACE, 4.25, 6.0),
+            ("MetaRight", COMMAND_RIGHT, 10.25, 1.5),
+            ("AltRight", OPTION_RIGHT, 11.75, 1.25),
+            ("ControlRight", CONTROL_RIGHT, 13.0, 1.5),
+        ]);
+    } else {
+        row.extend([
+            ("Space", SPACE, 4.25, 5.0),
+            ("MetaRight", COMMAND_RIGHT, 9.25, 1.25),
+            ("AltRight", OPTION_RIGHT, 10.5, 1.0),
+        ]);
+    }
+    row.into_iter()
+        .map(|(code, legend, x, w)| {
+            apple_cap(swapped_modifier(code, spec), legend, [x, 5.0, w, 1.0], 0.0)
+        })
+        .collect()
+}
+
+/// The compact deck's arrows: full-height left and right with up and
+/// down stacked between them.
+fn apple_compact_arrows() -> [KeyCap; 4] {
+    [
+        apple_cap("ArrowLeft", printed("←", ""), [11.5, 5.0, 1.0, 1.0], 0.0),
+        apple_cap("ArrowUp", printed("↑", ""), [12.5, 5.0, 1.0, 0.5], 0.0),
+        apple_cap("ArrowDown", printed("↓", ""), [12.5, 5.5, 1.0, 0.5], 0.0),
+        apple_cap("ArrowRight", printed("→", ""), [13.5, 5.0, 1.0, 1.0], 0.0),
+    ]
+}
+
+/// The full-size deck's navigation cluster under F13 to F15, with the
+/// full-height arrows below it.
+fn apple_nav_cluster(spec: &AppleDeck) -> Vec<KeyCap> {
+    let gx = APPLE_NAV_GX;
+    let first = if spec.fn_at_left {
+        apple_cap(
+            "ContextMenu",
+            named("menu", "", "Menu"),
+            [0.0, 1.0, 1.0, 1.0],
+            gx,
+        )
+    } else {
+        apple_cap(
+            swapped_modifier("Fn", spec),
+            named("fn", "", "Fn"),
+            [0.0, 1.0, 1.0, 1.0],
+            gx,
+        )
+    };
+    vec![
+        apple_cap("F13", printed("F13", ""), [0.0, 0.0, 1.0, 1.0], gx),
+        apple_cap("F14", printed("F14", ""), [1.0, 0.0, 1.0, 1.0], gx),
+        apple_cap("F15", printed("F15", ""), [2.0, 0.0, 1.0, 1.0], gx),
+        first,
+        apple_cap("Home", printed("⇱", "home"), [1.0, 1.0, 1.0, 1.0], gx),
+        apple_cap("PageUp", printed("⇞", "page up"), [2.0, 1.0, 1.0, 1.0], gx),
+        apple_cap(
+            "Delete",
+            named("⌦", "delete", "Forward Delete"),
+            [0.0, 2.0, 1.0, 1.0],
+            gx,
+        ),
+        apple_cap("End", printed("⇲", "end"), [1.0, 2.0, 1.0, 1.0], gx),
+        apple_cap(
+            "PageDown",
+            printed("⇟", "page down"),
+            [2.0, 2.0, 1.0, 1.0],
+            gx,
+        ),
+        apple_cap("ArrowUp", printed("↑", ""), [1.0, 4.0, 1.0, 1.0], gx),
+        apple_cap("ArrowLeft", printed("←", ""), [0.0, 5.0, 1.0, 1.0], gx),
+        apple_cap("ArrowDown", printed("↓", ""), [1.0, 5.0, 1.0, 1.0], gx),
+        apple_cap("ArrowRight", printed("→", ""), [2.0, 5.0, 1.0, 1.0], gx),
+    ]
+}
+
+/// The full-size deck's keypad under F16 to F19: clear, =, /, and * on
+/// its top row, a tall enter, and a wide 0.
+fn apple_keypad() -> Vec<KeyCap> {
+    let gx = APPLE_NUMPAD_GX;
+    let plain =
+        |code: &str, label: &'static str, at: [f32; 4]| apple_cap(code, printed(label, ""), at, gx);
+    vec![
+        plain("F16", "F16", [0.0, 0.0, 1.0, 1.0]),
+        plain("F17", "F17", [1.0, 0.0, 1.0, 1.0]),
+        plain("F18", "F18", [2.0, 0.0, 1.0, 1.0]),
+        plain("F19", "F19", [3.0, 0.0, 1.0, 1.0]),
+        apple_cap(
+            "NumLock",
+            named("⌧", "clear", "Clear"),
+            [0.0, 1.0, 1.0, 1.0],
+            gx,
+        ),
+        plain("NumpadEqual", "=", [1.0, 1.0, 1.0, 1.0]),
+        plain("NumpadDivide", "/", [2.0, 1.0, 1.0, 1.0]),
+        plain("NumpadMultiply", "*", [3.0, 1.0, 1.0, 1.0]),
+        plain("Numpad7", "7", [0.0, 2.0, 1.0, 1.0]),
+        plain("Numpad8", "8", [1.0, 2.0, 1.0, 1.0]),
+        plain("Numpad9", "9", [2.0, 2.0, 1.0, 1.0]),
+        plain("NumpadSubtract", "−", [3.0, 2.0, 1.0, 1.0]),
+        plain("Numpad4", "4", [0.0, 3.0, 1.0, 1.0]),
+        plain("Numpad5", "5", [1.0, 3.0, 1.0, 1.0]),
+        plain("Numpad6", "6", [2.0, 3.0, 1.0, 1.0]),
+        plain("NumpadAdd", "+", [3.0, 3.0, 1.0, 1.0]),
+        plain("Numpad1", "1", [0.0, 4.0, 1.0, 1.0]),
+        plain("Numpad2", "2", [1.0, 4.0, 1.0, 1.0]),
+        plain("Numpad3", "3", [2.0, 4.0, 1.0, 1.0]),
+        apple_cap(
+            "NumpadEnter",
+            printed("⏎", "enter"),
+            [3.0, 4.0, 1.0, 2.0],
+            gx,
+        ),
+        plain("Numpad0", "0", [0.0, 5.0, 2.0, 1.0]),
+        plain("NumpadDecimal", ".", [2.0, 5.0, 1.0, 1.0]),
+    ]
+}
+
+/// The Apple deck `spec` describes: the 14.5-unit main block with its
+/// full-height function row, and either the compact arrows or the
+/// navigation cluster and keypad.
+pub fn apple_deck(spec: &AppleDeck) -> Vec<KeyCap> {
+    let mut keys = apple_function_row(spec);
+    keys.extend(apple_main_rows(spec));
+    keys.extend(apple_bottom_row(spec));
+    if spec.full {
+        keys.extend(apple_nav_cluster(spec));
+        keys.extend(apple_keypad());
+    } else {
+        keys.extend(apple_compact_arrows());
+    }
+    keys
+}
+
 /// Friendly display name for a key code (`keyName` in the export).
 pub fn key_name(code: &str) -> String {
     const NAMES: &[(&str, &str)] = &[
@@ -512,6 +1014,12 @@ pub fn key_name(code: &str) -> String {
         ("BrightnessDown", "Brightness Down"),
         ("MissionControl", "Mission Control"),
         ("Launchpad", "Launchpad"),
+        ("Spotlight", "Spotlight"),
+        ("Dictation", "Dictation"),
+        ("DoNotDisturb", "Do Not Disturb"),
+        ("Power", "Power"),
+        ("Eject", "Eject"),
+        ("NumpadEqual", "Numpad Equal"),
     ];
     if let Some((_, name)) = NAMES.iter().find(|(c, _)| *c == code) {
         return (*name).to_owned();
@@ -572,6 +1080,10 @@ pub fn short(action: &str) -> &str {
         ("Brightness Down", "Bri −"),
         ("Mission Control", "Mission"),
         ("Launchpad", "Launch"),
+        ("Spotlight", "Search"),
+        ("Dictation", "Dictate"),
+        ("Do Not Disturb", "DND"),
+        ("Numpad Equal", "Num ="),
         ("Disabled", "Off"),
         ("Print Screen", "PrtSc"),
         ("Scroll Lock", "ScrLk"),
@@ -669,6 +1181,10 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
             "Brightness Down",
             "Mission Control",
             "Launchpad",
+            "Spotlight",
+            "Dictation",
+            "Do Not Disturb",
+            "Eject",
         ],
     ),
     (
@@ -702,12 +1218,14 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
             "Numpad Divide",
             "Numpad Enter",
             "Numpad Decimal",
+            "Numpad Equal",
         ],
     ),
     (
         "Function keys",
         &[
-            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "F13",
+            "F14", "F15", "F16", "F17", "F18", "F19",
         ],
     ),
     (
@@ -737,6 +1255,7 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
             "Menu",
             "Insert",
             "Fn",
+            "Power",
             "Disabled",
         ],
     ),
@@ -744,21 +1263,20 @@ pub const ACTION_GROUPS: &[(&str, &[&str])] = &[
 
 /// Category preselected in the editor for a given key (`autoGroup`).
 pub fn auto_group(code: &str) -> &'static str {
-    if is_off_deck(code) {
+    let function_key =
+        code.len() >= 2 && code.starts_with('F') && code[1..].chars().all(|c| c.is_ascii_digit());
+    if function_key {
+        "Function keys"
+    } else if code == "Fn" || code == "Power" {
+        "Other"
+    } else if code.starts_with("Numpad") || code == "NumLock" {
+        "Numpad"
+    } else if is_off_deck(code) {
         "Media"
     } else if code.starts_with("Key") {
         "Letters"
-    } else if code.starts_with("Numpad") || code == "NumLock" {
-        "Numpad"
     } else if code.starts_with("Digit") {
         "Numbers"
-    } else if code == "Fn" {
-        "Other"
-    } else if code.len() >= 2
-        && code.starts_with('F')
-        && code[1..].chars().all(|c| c.is_ascii_digit())
-    {
-        "Function keys"
     } else if [
         "Minus",
         "Equal",
@@ -1241,8 +1759,19 @@ fn shortcut_examples_profile() -> Starter {
 mod tests {
     use super::*;
     use crate::keyboard::{
-        FORM_FACTORS, FORM_FULL, FORM_SEVENTY_FIVE, FORM_SIXTY, FORM_SIXTY_FIVE, FORM_TKL,
+        FORM_APPLE_COMPACT, FORM_APPLE_FULL, FORM_FACTORS, FORM_FULL, FORM_SEVENTY_FIVE,
+        FORM_SIXTY, FORM_SIXTY_FIVE, FORM_TKL, Family, family,
     };
+    use crate::known::{APPLE_USB, AppleDriver, Variant, identify};
+
+    /// The PC sizes: every form but the Apple decks.
+    const STANDARD_FORMS: [usize; 5] = [
+        FORM_FULL,
+        FORM_TKL,
+        FORM_SEVENTY_FIVE,
+        FORM_SIXTY_FIVE,
+        FORM_SIXTY,
+    ];
 
     fn codes(form: usize, iso: bool) -> Vec<&'static str> {
         deck(form, iso).iter().map(|cap| cap.code).collect()
@@ -1313,7 +1842,8 @@ mod tests {
     }
 
     /// The ISO transform adds the 102nd key, splits Enter into two
-    /// segments sharing a scancode, and relabels AltGr on every size.
+    /// segments sharing a scancode, and relabels AltGr on every PC size
+    /// (an Apple keyboard keeps its option key).
     #[test]
     fn iso_decks_use_the_iso_assembly() {
         for form in 0..FORM_FACTORS.len() {
@@ -1325,7 +1855,10 @@ mod tests {
             let enters = iso.iter().filter(|cap| cap.code == "Enter").count();
             assert_eq!(enters, 2, "form {form} splits Enter into two segments");
             let alt = iso.iter().find(|cap| cap.code == "AltRight").unwrap();
-            assert_eq!(alt.label, "AltGr");
+            match family(form) {
+                Family::Standard => assert_eq!(alt.label, "AltGr"),
+                Family::Apple => assert_eq!(alt.label, "⌥"),
+            }
 
             let ansi = deck(form, false);
             assert!(!ansi.iter().any(|cap| cap.code == "IntlBackslash"));
@@ -1374,8 +1907,8 @@ mod tests {
         assert_eq!(modifier_short("Any"), "Any");
     }
 
-    /// The keys no deck draws are in the registry under the catalog's
-    /// names, found by scancode, and absent from every deck.
+    /// The keys no standard deck draws are in the registry under the
+    /// catalog's names, found by scancode, and absent from every PC deck.
     #[test]
     fn off_deck_keys_are_known_but_never_drawn() {
         for cap in OFF_DECK_KEYS {
@@ -1393,8 +1926,14 @@ mod tests {
                 "{} is offered as {name}",
                 cap.code
             );
-            assert_eq!(auto_group(cap.code), "Media");
-            for form in 0..FORM_FACTORS.len() {
+            let group = match cap.code {
+                "Power" => "Other",
+                "NumpadEqual" => "Numpad",
+                code if code.starts_with('F') => "Function keys",
+                _ => "Media",
+            };
+            assert_eq!(auto_group(cap.code), group, "{}", cap.code);
+            for form in STANDARD_FORMS {
                 for iso in [false, true] {
                     assert!(
                         !deck(form, iso).iter().any(|drawn| drawn.code == cap.code),
@@ -1404,6 +1943,25 @@ mod tests {
                 }
             }
         }
+        let drawn_on_apple: Vec<&str> = deck(FORM_APPLE_FULL, false)
+            .iter()
+            .filter(|cap| is_off_deck(cap.code))
+            .map(|cap| cap.code)
+            .collect();
+        for code in [
+            "Spotlight",
+            "Dictation",
+            "DoNotDisturb",
+            "Power",
+            "F13",
+            "F19",
+            "NumpadEqual",
+        ] {
+            assert!(
+                drawn_on_apple.contains(&code),
+                "{code} is drawn on the Apple deck"
+            );
+        }
         assert_eq!(
             key_by_evdev(KeyCode::KEY_SCALE.0)
                 .map(|cap| key_name(cap.code))
@@ -1411,6 +1969,243 @@ mod tests {
             Some("Mission Control")
         );
         assert!(!is_off_deck("KeyA"));
+    }
+
+    /// The Apple decks: the compact keyboard's 78 keys in a 14.5-unit
+    /// block, the full-size keyboard's 110 (109 before the USB-C
+    /// generation, whose fn key sits in the navigation cluster), and
+    /// the ISO compact's section key and two-segment return.
+    #[test]
+    fn apple_decks_match_the_keyboards() {
+        let compact = deck(FORM_APPLE_COMPACT, false);
+        assert_eq!(compact.len(), 78);
+        let right_edge = |keys: &[KeyCap], y: f32| {
+            keys.iter()
+                .filter(|cap| cap.gx == 0.0 && (cap.y - y).abs() < 0.01)
+                .map(|cap| cap.x + cap.w)
+                .fold(0.0, f32::max)
+        };
+        for y in [0.0, 1.0, 2.0, 3.0, 4.0, 5.0] {
+            assert!(
+                (right_edge(compact, y) - 14.5).abs() < 0.01,
+                "row {y} ends at {}",
+                right_edge(compact, y)
+            );
+        }
+        assert_eq!(deck_size(compact), (14.5 * UNIT - 5.0, 6.0 * UNIT - 5.5));
+        let up = compact.iter().find(|cap| cap.code == "ArrowUp").unwrap();
+        assert_eq!((up.h, up.y), (0.5, 5.0), "stacked arrows");
+        assert!(
+            compact
+                .iter()
+                .any(|cap| cap.code == "Fn" && cap.x == 0.0 && cap.y == 5.0)
+        );
+
+        let full = deck(FORM_APPLE_FULL, false);
+        assert_eq!(full.len(), 110);
+        for y in [0.0, 1.0, 2.0, 3.0, 4.0, 5.0] {
+            assert!((right_edge(full, y) - 14.5).abs() < 0.01, "row {y}");
+        }
+        assert!(
+            full.iter()
+                .any(|cap| cap.code == "ContextMenu" && cap.gx == APPLE_NAV_GX)
+        );
+        assert!(full.iter().any(|cap| cap.code == "Fn" && cap.gx == 0.0));
+        assert!(
+            full.iter()
+                .any(|cap| cap.code == "F19" && cap.gx == APPLE_NUMPAD_GX)
+        );
+        let up = full.iter().find(|cap| cap.code == "ArrowUp").unwrap();
+        assert_eq!((up.h, up.gx), (1.0, APPLE_NAV_GX), "full-height arrows");
+        let enter = full.iter().find(|cap| cap.code == "NumpadEnter").unwrap();
+        assert_eq!(enter.h, 2.0);
+        let older = apple_deck(&AppleDeck {
+            fn_at_left: false,
+            ..AppleDeck::defaults(FORM_APPLE_FULL, false)
+        });
+        assert_eq!(older.len(), 109);
+        assert!(
+            older
+                .iter()
+                .any(|cap| cap.code == "Fn" && cap.gx == APPLE_NAV_GX)
+        );
+        assert!(!older.iter().any(|cap| cap.code == "ContextMenu"));
+        assert!(
+            older
+                .iter()
+                .any(|cap| cap.code == "ControlLeft" && cap.x == 0.0 && cap.w == 1.5)
+        );
+
+        assert_eq!(codes(FORM_APPLE_COMPACT, true).len(), 80);
+    }
+
+    /// The function row carries the codes its keys send: media keys
+    /// with the driver's default settings, F keys otherwise, and the
+    /// blank keys and eject of the classic printing.
+    #[test]
+    fn apple_function_row_carries_what_the_keys_send() {
+        let media = deck(FORM_APPLE_COMPACT, false);
+        let f3 = media
+            .iter()
+            .find(|cap| cap.code == "MissionControl")
+            .unwrap();
+        assert_eq!((f3.label, f3.sub, f3.x), ("▦", "F3", 3.5));
+        assert!(!media.iter().any(|cap| cap.code == "F3"));
+        let touch_id = media.iter().find(|cap| cap.code == "Power").unwrap();
+        assert_eq!((touch_id.name, touch_id.x), ("Touch ID", 13.5));
+
+        let defaults = AppleDeck::defaults(FORM_APPLE_COMPACT, false);
+        let f_first = apple_deck(&AppleDeck {
+            media_first: false,
+            ..defaults
+        });
+        let f3 = f_first.iter().find(|cap| cap.code == "F3").unwrap();
+        assert_eq!((f3.label, f3.sub), ("F3", "▦"));
+        assert!(!f_first.iter().any(|cap| cap.code == "MissionControl"));
+
+        let classic = apple_deck(&AppleDeck {
+            legends: AppleLegends::Classic,
+            corner: Corner::Eject,
+            ..defaults
+        });
+        assert!(classic.iter().any(|cap| cap.code == "Launchpad"));
+        let f5 = classic.iter().find(|cap| cap.code == "F5").unwrap();
+        assert_eq!((f5.label, f5.sub), ("F5", ""));
+        assert!(classic.iter().any(|cap| cap.code == "Eject"));
+        assert!(
+            !classic
+                .iter()
+                .any(|cap| cap.code == "Power" || cap.code == "Spotlight")
+        );
+
+        let lock = apple_deck(&AppleDeck {
+            corner: Corner::Lock,
+            ..defaults
+        });
+        assert_eq!(
+            lock.iter().find(|cap| cap.code == "Power").unwrap().name,
+            "Lock"
+        );
+    }
+
+    /// The driver's swaps move codes between the printed caps, in the
+    /// driver's order, and every cap keeps its registry identity.
+    #[test]
+    fn apple_decks_follow_the_drivers_swaps() {
+        let base = AppleDeck::defaults(FORM_APPLE_COMPACT, false);
+        let sends = |keys: &[KeyCap], name: &str| {
+            keys.iter()
+                .find(|cap| cap.name == name)
+                .map(|cap| cap.code)
+                .unwrap_or_else(|| panic!("{name} is drawn"))
+        };
+        let plain = apple_deck(&base);
+        assert_eq!(sends(&plain, "Left Command"), "MetaLeft");
+        assert_eq!(sends(&plain, "Fn"), "Fn");
+
+        let both = apple_deck(&AppleDeck {
+            swap_opt_cmd: 1,
+            ..base
+        });
+        assert_eq!(sends(&both, "Left Command"), "AltLeft");
+        assert_eq!(sends(&both, "Left Option"), "MetaLeft");
+        assert_eq!(sends(&both, "Right Option"), "MetaRight");
+        assert_eq!(sends(&both, "Right Command"), "AltRight");
+
+        let left_only = apple_deck(&AppleDeck {
+            swap_opt_cmd: 2,
+            ..base
+        });
+        assert_eq!(sends(&left_only, "Left Option"), "MetaLeft");
+        assert_eq!(sends(&left_only, "Right Option"), "AltRight");
+
+        let controls = apple_deck(&AppleDeck {
+            swap_ctrl_cmd: true,
+            swap_fn_leftctrl: true,
+            ..base
+        });
+        // The swaps compose as the driver applies them: fn becomes the
+        // left control, which the next swap turns into command.
+        assert_eq!(sends(&controls, "Fn"), "MetaLeft");
+        assert_eq!(sends(&controls, "Left Control"), "Fn");
+        assert_eq!(sends(&controls, "Left Command"), "ControlLeft");
+        assert_eq!(sends(&controls, "Right Command"), "ControlRight");
+
+        for cap in plain.iter().chain(&both).chain(&controls) {
+            assert_eq!(key(cap.code).unwrap().evdev, cap.evdev, "{}", cap.code);
+        }
+    }
+
+    /// An ISO Apple deck places the section and backtick keys with the
+    /// codes the driver sends for them, swapped or not.
+    #[test]
+    fn apple_iso_places_the_swapped_keys_as_the_driver_sends_them() {
+        fn at(keys: &[KeyCap], x: f32, y: f32) -> &KeyCap {
+            keys.iter()
+                .find(|cap| cap.gx == 0.0 && cap.x == x && cap.y == y)
+                .unwrap_or_else(|| panic!("a key at {x},{y}"))
+        }
+        let swapped = deck(FORM_APPLE_COMPACT, true);
+        assert_eq!(
+            (at(swapped, 0.0, 1.0).code, at(swapped, 0.0, 1.0).label),
+            ("IntlBackslash", "§")
+        );
+        assert_eq!(
+            (at(swapped, 1.25, 4.0).code, at(swapped, 1.25, 4.0).label),
+            ("Backquote", "`")
+        );
+        assert_eq!(at(swapped, 0.0, 4.0).w, 1.25, "narrow left shift");
+        assert_eq!(at(swapped, 12.75, 3.0).code, "Backslash");
+        assert_eq!(swapped.iter().filter(|cap| cap.code == "Enter").count(), 2);
+
+        let unswapped = apple_deck(&AppleDeck {
+            iso_swapped: false,
+            ..AppleDeck::defaults(FORM_APPLE_COMPACT, true)
+        });
+        assert_eq!(at(&unswapped, 0.0, 1.0).code, "Backquote");
+        assert_eq!(at(&unswapped, 1.25, 4.0).code, "IntlBackslash");
+    }
+
+    /// A recognised keyboard's deck takes its printing from the model
+    /// and its codes from the driver; another driver means plain F
+    /// keys and nothing swapped.
+    #[test]
+    fn apple_deck_for_a_keyboard_reads_the_model_and_driver() {
+        let keyboard = identify(APPLE_USB, 0x026c, "Magic Keyboard with Numeric Keypad").unwrap();
+        let seen = Recognized {
+            keyboard,
+            variant: Variant::Iso,
+            apple_driver: Some(AppleDriver {
+                fnmode: 2,
+                ..AppleDriver::default()
+            }),
+        };
+        assert_eq!(
+            AppleDeck::for_keyboard(FORM_APPLE_FULL, true, &seen),
+            AppleDeck {
+                full: true,
+                iso: true,
+                legends: AppleLegends::Classic,
+                corner: Corner::Eject,
+                fn_at_left: false,
+                media_first: false,
+                iso_swapped: true,
+                swap_opt_cmd: 0,
+                swap_ctrl_cmd: false,
+                swap_fn_leftctrl: false,
+            }
+        );
+        let generic = Recognized {
+            apple_driver: None,
+            ..seen
+        };
+        let spec = AppleDeck::for_keyboard(FORM_APPLE_COMPACT, false, &generic);
+        assert!(!spec.media_first && !spec.iso_swapped && !spec.full);
+        assert_eq!(
+            spec.corner,
+            Corner::Eject,
+            "the model's printing still applies"
+        );
     }
 
     /// Physical identities are unique in the registry.
