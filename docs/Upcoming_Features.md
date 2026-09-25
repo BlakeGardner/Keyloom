@@ -59,6 +59,14 @@ without a user-facing feature of its own.
 - **A translated interface.** Use Fluent for internationalization so
   Keyloom's interface can be translated into other languages. Specific
   translations will be planned separately.
+- **Zooming the deck and the interface.** The deck is drawn at one fixed
+  key size: it centres in a wide window and scrolls sideways in a narrow
+  one, and a full-size keyboard with the keypad is a lot of small legends
+  on a laptop screen. A zoom control, with Ctrl+scroll and Ctrl and +/−,
+  would scale the keys and their legends, fitting the deck to the window
+  by default and remembering the chosen level. An interface size
+  independent of the desktop's scale factor, which the whole window
+  follows today, could sit alongside it for larger text and controls.
 - **A log viewer.** Provide an in-app viewer for remapping service logs so
   users can investigate failures without opening a terminal.
 - **An update check.** Notice when a newer Keyloom release exists and say
