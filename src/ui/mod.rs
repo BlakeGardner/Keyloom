@@ -8,6 +8,7 @@ pub mod overlays;
 pub mod shortcuts;
 pub mod tester;
 pub mod theme;
+pub mod zoom;
 
 use cosmic::iced::core::text::LineHeight;
 use cosmic::iced::font::Weight;
@@ -72,10 +73,12 @@ pub fn panel<'a>(content: impl Into<Element<'a, Message>>) -> Panel<'a> {
     }))
 }
 
-/// Floating popover/dialog chrome.
+/// Floating popover/dialog chrome. A press inside it that no control
+/// takes (on its padding, a label, or a greyed button) is swallowed:
+/// the popover would otherwise take it for a press outside, close, and
+/// let it through to whatever is underneath.
 pub fn popover_panel<'a>(content: impl Into<Element<'a, Message>>) -> Panel<'a> {
-    container(content)
-        .padding(8)
+    container(widget::mouse_area(container(content).padding(8)).on_press(Message::PopupPressed))
         .class(ctheme::Container::custom(|_| container::Style {
             background: Some(oklch(0.26, 0.008, 152.0).into()),
             border: Border {

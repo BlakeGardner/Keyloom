@@ -14,6 +14,7 @@ use crate::ui::theme::{
     ButtonStyle, accent, accent_button, chip, fg, ghost_button, muted, oklch, tint, vgradient,
     white,
 };
+use crate::ui::zoom;
 use crate::ui::{
     Cap, Pill, cap_colors, eyebrow, keycap_chip, panel, pill, tester, txt, txt_semibold,
 };
@@ -152,9 +153,9 @@ pub fn device_toolbar(app: &App) -> Element<'_, Message> {
                 .spacing(10)
                 .padding(Padding {
                     top: 12.0,
-                    right: 30.0,
+                    right: SIDE_PADDING,
                     bottom: 12.0,
-                    left: 30.0,
+                    left: SIDE_PADDING,
                 })
                 .align_y(Alignment::Start)
                 .push(device)
@@ -429,6 +430,18 @@ pub fn rule(color: Color) -> Element<'static, Message> {
         .into()
 }
 
+/// The keyboard area's padding on each side of the window.
+const SIDE_PADDING: f32 = 30.0;
+
+/// Room the deck's frame takes on each side of it.
+const FRAME: f32 = 5.0;
+
+/// The width a deck can take in a window `window_width` logical pixels
+/// wide before it has to scroll: what fitting it aims for.
+pub fn deck_room(window_width: f32) -> f32 {
+    window_width - 2.0 * (SIDE_PADDING + FRAME)
+}
+
 /// The keyboard area: the tester's notice and panels (in the tester),
 /// the deck, and the empty state or mapping summary.
 pub fn area(app: &App) -> Element<'_, Message> {
@@ -436,9 +449,9 @@ pub fn area(app: &App) -> Element<'_, Message> {
         .spacing(20)
         .padding(Padding {
             top: 26.0,
-            right: 30.0,
+            right: SIDE_PADDING,
             bottom: 20.0,
-            left: 30.0,
+            left: SIDE_PADDING,
         });
 
     if app.view == View::Tester {
@@ -453,30 +466,39 @@ pub fn area(app: &App) -> Element<'_, Message> {
         column = column.push(bar);
     }
 
-    let (deck_width, deck_height) = model::deck_size(app.deck());
-    // The deck centers itself in the available width; only when the
-    // window is narrower does it fall back to a horizontal scroll.
-    // (Inside the scrollable, width limits are unbounded, so a plain
-    // centering `Fill` container would collapse to the deck's width.)
-    column = column.push(
-        container(widget::responsive(move |size| {
-            let deck = container(canvas(app))
-                .width(Length::Fixed(deck_width))
-                .height(Length::Fixed(deck_height));
-            let framed = container(deck).padding(5);
-            let element: Element<'_, Message> = if size.width >= deck_width + 10.0 {
-                framed.width(Length::Fill).align_x(Alignment::Center).into()
-            } else {
-                widget::scrollable::horizontal(framed)
-                    .width(Length::Fill)
-                    .into()
-            };
-            element
-        }))
-        .width(Length::Fill)
-        .height(Length::Fixed(deck_height + 10.0)),
-    );
+    // The deck sizes itself to the room left in the window, so what
+    // follows it goes inside the same measured area.
+    column = column.push(widget::responsive(move |room| deck_area(app, room)));
 
+    column.into()
+}
+
+/// The deck at the zoom the room allows, with the empty state or the
+/// mapping summary under it.
+fn deck_area(app: &App, room: cosmic::iced::Size) -> Element<'_, Message> {
+    let keys = app.deck();
+    let (natural_width, natural_height) = model::deck_size(keys);
+    let scale = app.zoom.factor(natural_width, room.width - 2.0 * FRAME);
+    let deck_width = natural_width * scale;
+    let deck_height = natural_height * scale;
+
+    let deck = container(zoom::area(canvas(app, scale), Message::Zoom))
+        .width(Length::Fixed(deck_width))
+        .height(Length::Fixed(deck_height));
+    let framed = container(deck).padding(FRAME);
+    // The deck centers itself in the available width; only when it is
+    // wider does it fall back to a horizontal scroll. (Inside the
+    // scrollable, width limits are unbounded, so a plain centering
+    // `Fill` container would collapse to the deck's width.)
+    let deck: Element<'_, Message> = if deck_width + 2.0 * FRAME <= room.width {
+        framed.width(Length::Fill).align_x(Alignment::Center).into()
+    } else {
+        widget::scrollable::horizontal(framed)
+            .width(Length::Fill)
+            .into()
+    };
+
+    let mut column = widget::column::with_capacity(2).spacing(20).push(deck);
     if app.view == View::Keyboard && app.layer.is_none() && app.selected.is_none() {
         if app.maps().is_empty() {
             column = column.push(
@@ -500,7 +522,8 @@ pub fn area(app: &App) -> Element<'_, Message> {
         }
     }
 
-    column.into()
+    // A deck zoomed past the room's height scrolls, like the shortcuts.
+    widget::scrollable(column).width(Length::Fill).into()
 }
 
 /// Right-aligned access to the remaps dialog (`.remaps-summary-access`).
@@ -540,10 +563,13 @@ fn chip_text(active: bool) -> Color {
     }
 }
 
-/// The displayed deck of key caps, absolutely positioned like the export.
-fn canvas(app: &App) -> Element<'_, Message> {
+/// The displayed deck of key caps, absolutely positioned like the
+/// export and drawn at `scale` times their natural size.
+fn canvas(app: &App, scale: f32) -> Element<'_, Message> {
     let keys = app.deck();
-    let (deck_width, deck_height) = model::deck_size(keys);
+    let (natural_width, natural_height) = model::deck_size(keys);
+    let deck_width = natural_width * scale;
+    let deck_height = natural_height * scale;
     let mut layers: Vec<Element<'_, Message>> = Vec::with_capacity(keys.len() + 1);
     layers.push(
         widget::Space::new()
@@ -554,10 +580,10 @@ fn canvas(app: &App) -> Element<'_, Message> {
 
     for cap in keys {
         layers.push(
-            container(key_button(app, cap))
+            container(key_button(app, cap, scale))
                 .padding(Padding {
-                    top: cap.y * model::UNIT,
-                    left: cap.gx + cap.x * model::UNIT,
+                    top: cap.y * model::UNIT * scale,
+                    left: (cap.gx + cap.x * model::UNIT) * scale,
                     right: 0.0,
                     bottom: 0.0,
                 })
@@ -573,9 +599,13 @@ fn canvas(app: &App) -> Element<'_, Message> {
         .into()
 }
 
-/// One key cap with all its visual states.
+/// One key cap with all its visual states, at `scale` times its
+/// natural size: the cap, its legends, and its badges all zoom
+/// together, and only the hairline borders stay at least a pixel.
 #[allow(clippy::too_many_lines)]
-fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> {
+fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap, scale: f32) -> Element<'a, Message> {
+    let px = move |value: f32| value * scale;
+    let hairline = move |width: f32| px(width).max(1.0);
     let layer = app.active_layer();
     let nav_active = layer.is_some();
     let is_trigger = layer.is_some_and(|layer| layer.trigger == cap.code);
@@ -611,7 +641,7 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
 
     // Base cap colors, overridden per state exactly like the export.
     let (mut bg, mut border, mut color) = cap_colors(Cap::Plain);
-    let mut border_width = 1.0;
+    let mut border_width = hairline(1.0);
     let mut outline = None;
 
     if nav_active && layer_label.is_none() && !is_trigger {
@@ -638,14 +668,14 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
     }
     if selected {
         border = accent();
-        border_width = 1.5;
-        outline = Some((3.0, tint(0.5, 0.09).scale_alpha(0.35)));
+        border_width = hairline(1.5);
+        outline = Some((px(3.0), tint(0.5, 0.09).scale_alpha(0.35)));
     }
     if pressed {
         bg = vgradient(tint(0.5, 0.1), tint(0.42, 0.09));
         color = oklch(0.99, 0.01, 152.0);
         border = accent();
-        border_width = 1.0;
+        border_width = hairline(1.0);
     }
 
     // Cap legend: original label, mapped action or layer job, and the
@@ -722,19 +752,19 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
     };
 
     let mut labels = widget::column::with_capacity(3)
-        .spacing(2)
+        .spacing(px(2.0))
         .align_x(Alignment::Center);
     if show_orig {
-        labels = labels.push(txt(cap.label.to_owned(), 8.0, muted()));
+        labels = labels.push(txt(cap.label.to_owned(), px(8.0), muted()));
     }
-    labels = labels.push(txt(main, main_size, main_color).font(Font {
+    labels = labels.push(txt(main, px(main_size), main_color).font(Font {
         weight: main_weight,
         ..Font::DEFAULT
     }));
     // The printed second legend (the word under a symbol, the F number
     // under a media key), where a plain cap has room for it.
     if !cap.sub.is_empty() && !show_orig && hold_line.is_none() && cap.h >= 1.0 {
-        labels = labels.push(txt(cap.sub.to_owned(), 7.5, muted()));
+        labels = labels.push(txt(cap.sub.to_owned(), px(7.5), muted()));
     }
     if let Some(hold) = hold_line {
         let hold_color = if is_trigger {
@@ -746,7 +776,7 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
         } else {
             oklch(0.72, 0.13, 16.0)
         };
-        labels = labels.push(txt_semibold(hold, 7.5, hold_color));
+        labels = labels.push(txt_semibold(hold, px(7.5), hold_color));
     }
 
     let centered = container(labels)
@@ -774,7 +804,7 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
         badges.push(
             container(txt_semibold(
                 badge,
-                7.0,
+                px(7.0),
                 if pressed {
                     oklch(0.99, 0.01, 152.0)
                 } else {
@@ -784,8 +814,8 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
             .width(Length::Fill)
             .align_x(Alignment::End)
             .padding(Padding {
-                top: 2.0,
-                right: 3.0,
+                top: px(2.0),
+                right: px(3.0),
                 bottom: 0.0,
                 left: 0.0,
             })
@@ -793,11 +823,11 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
         );
     }
     if elsewhere {
-        let dot = container(widget::Space::new().width(5.0).height(5.0)).class(
-            ctheme::Container::custom(|_| container::Style {
+        let dot = container(widget::Space::new().width(px(5.0)).height(px(5.0))).class(
+            ctheme::Container::custom(move |_| container::Style {
                 background: Some(oklch(0.72, 0.1, 196.0).into()),
                 border: cosmic::iced::Border {
-                    radius: 3.0.into(),
+                    radius: px(3.0).into(),
                     ..cosmic::iced::Border::default()
                 },
                 ..container::Style::default()
@@ -806,10 +836,10 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
         badges.push(
             container(dot)
                 .padding(Padding {
-                    top: 4.0,
+                    top: px(4.0),
                     right: 0.0,
                     bottom: 0.0,
-                    left: 4.0,
+                    left: px(4.0),
                 })
                 .into(),
         );
@@ -829,15 +859,15 @@ fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> 
                 bg: Some(bg),
                 border,
                 border_width,
-                radius: 7.0,
+                radius: px(7.0),
                 outline,
                 ..ButtonStyle::default()
             }
             .class(),
         )
         .padding(0)
-        .width(Length::Fixed(cap.w * model::UNIT - 5.0))
-        .height(Length::Fixed(cap.h * model::UNIT - 5.0))
+        .width(Length::Fixed(px(cap.w * model::UNIT - 5.0)))
+        .height(Length::Fixed(px(cap.h * model::UNIT - 5.0)))
         .on_press(Message::SelectKey(cap.code))
         .into()
 }

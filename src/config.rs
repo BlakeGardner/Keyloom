@@ -63,6 +63,17 @@ pub struct KeyboardLayouts {
     pub devices: HashMap<KeyboardId, LayoutOverride>,
 }
 
+/// How large the deck is drawn: fitted to the window, or a chosen
+/// percentage of its natural size (`ui::zoom`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeckZoom {
+    /// As large as the window allows, up to the natural size.
+    #[default]
+    Fit,
+    /// A fixed percentage of the natural size, whatever the window.
+    Percent(u16),
+}
+
 /// Where first-run setup stands, so it opens on its own only until the
 /// user has been through it once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +99,8 @@ pub struct KeyloomConfig {
     pub custom_profiles: u32,
     pub keyboard_layouts: KeyboardLayouts,
     pub setup: SetupState,
+    /// Absent from stores written before the deck could be zoomed.
+    pub deck_zoom: DeckZoom,
 }
 
 impl KeyloomConfig {
@@ -116,6 +129,7 @@ impl KeyloomConfig {
         state: &ProfileState,
         keyboard_layouts: &KeyboardLayouts,
         setup: SetupState,
+        deck_zoom: DeckZoom,
     ) -> Self {
         Self {
             active_profile: state.active.clone(),
@@ -134,6 +148,7 @@ impl KeyloomConfig {
             custom_profiles: state.custom_profiles,
             keyboard_layouts: keyboard_layouts.clone(),
             setup,
+            deck_zoom,
         }
     }
 
@@ -253,12 +268,18 @@ mod tests {
             },
             ..KeyboardLayouts::default()
         };
-        let snapshot = KeyloomConfig::snapshot(&state, &layouts, SetupState::Deferred);
+        let snapshot = KeyloomConfig::snapshot(
+            &state,
+            &layouts,
+            SetupState::Deferred,
+            DeckZoom::Percent(125),
+        );
         assert_eq!(
             snapshot.keyboard_layouts, layouts,
             "profile saves preserve display preferences"
         );
         assert_eq!(snapshot.setup, SetupState::Deferred);
+        assert_eq!(snapshot.deck_zoom, DeckZoom::Percent(125));
         let restored = snapshot.into_state();
 
         assert_eq!(restored.profiles, profiles);
@@ -351,6 +372,7 @@ mod tests {
                 )]),
             },
             setup: SetupState::Complete,
+            deck_zoom: DeckZoom::Percent(150),
         };
         config.write_entry(&handle).unwrap();
         assert_eq!(KeyloomConfig::load(&handle), config);
@@ -384,6 +406,11 @@ mod tests {
             loaded.setup,
             SetupState::NotStarted,
             "an existing store without a setup record has not been through setup"
+        );
+        assert_eq!(
+            loaded.deck_zoom,
+            DeckZoom::Fit,
+            "a store from before zooming shows the deck fitted to the window"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

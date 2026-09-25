@@ -19,12 +19,12 @@ use crate::install;
 use crate::session::{Desktop, Session};
 use crate::setup::{Facts, GroupCheck, Step, UinputCheck, UnitCheck, XremapCheck};
 
-/// The window's default size (`src/main.rs`), in logical pixels, so
-/// pages get exactly the room they have at runtime, clipping included.
-pub const WINDOW: Size = Size::new(1210.0, 620.0);
+/// The window's default size, in logical pixels, so pages get exactly
+/// the room they have at runtime, clipping included.
+pub const WINDOW: Size = WINDOW_SIZE;
 
-/// The smallest the window can be made (`src/main.rs`).
-pub const MIN_WINDOW: Size = Size::new(760.0, 480.0);
+/// The smallest the window can be made.
+pub const MIN_WINDOW: Size = MIN_WINDOW_SIZE;
 
 /// The window as the runtime composes it: the header bar with the
 /// application's own header widgets, the content beneath, and any
