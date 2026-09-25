@@ -25,6 +25,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use cosmic::Application;
 use cosmic::iced::core::renderer::{Headless, Style};
 use cosmic::iced::core::theme::Base;
 use cosmic::iced::core::{Event, Pixels, Size, clipboard, mouse, time::Instant, window};
@@ -361,6 +362,131 @@ fn cross_cutting_variations() {
 
     let long_paths = app_on_step(Step::Service, systems::long_paths(), |s| s.details = true);
     shots.capture(&long_paths, "variations/C4-long-paths");
+}
+
+// ---- Decks ---------------------------------------------------------------
+
+/// A recognised keyboard as the monitor reports it, for staging its
+/// deck without a keyboard attached.
+fn recognised(
+    name: &str,
+    product: u16,
+    variant: known::Variant,
+    driver: Option<known::AppleDriver>,
+) -> monitor::KeyboardDevice {
+    let keyboard =
+        known::identify(known::APPLE_BLUETOOTH, product, name).expect("a listed product id");
+    monitor::KeyboardDevice {
+        path: PathBuf::from(DECK_DEVICE),
+        id: monitor::KeyboardId::new(
+            evdev::InputId::new(
+                evdev::BusType::BUS_BLUETOOTH,
+                known::APPLE_BLUETOOTH,
+                product,
+                1,
+            ),
+            Some(name),
+            None,
+            name,
+        ),
+        name: name.to_owned(),
+        connected: true,
+        form: keyboard.form,
+        form_hinted: true,
+        iso: variant.is_iso(),
+        virtual_device: false,
+        known: Some(known::Recognized {
+            keyboard,
+            variant,
+            apple_driver: driver,
+        }),
+    }
+}
+
+/// The event node the staged keyboards sit on.
+const DECK_DEVICE: &str = "/dev/input/event20";
+
+/// The application showing a recognised keyboard's deck.
+fn app_showing(device: monitor::KeyboardDevice) -> App {
+    let mut app = staging::app();
+    let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
+    let _ = app.update(Message::SelectDevice(DECK_DEVICE.to_owned()));
+    app
+}
+
+/// The Apple decks of `docs/Supported_Keyboards.md`: each generation
+/// in the keyboard view, the function row with F keys first, and the
+/// tester naming a held key as printed.
+#[test]
+#[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
+fn decks() {
+    let mut shots = Shots::new();
+    let models: [(&str, &str, u16, known::Variant); 6] = [
+        (
+            "D1-touch-id-2021",
+            "Blake’s Magic Keyboard",
+            0x029a,
+            known::Variant::Ansi,
+        ),
+        (
+            "D2-touch-id-2021-iso",
+            "Magic Keyboard",
+            0x029a,
+            known::Variant::Iso,
+        ),
+        (
+            "D3-lock-2024",
+            "Magic Keyboard",
+            0x0320,
+            known::Variant::Ansi,
+        ),
+        (
+            "D4-numeric-keypad-2017",
+            "Magic Keyboard with Numeric Keypad",
+            0x026c,
+            known::Variant::Ansi,
+        ),
+        (
+            "D5-touch-id-numeric-keypad-2021",
+            "Magic Keyboard with Touch ID and Numeric Keypad",
+            0x029f,
+            known::Variant::Ansi,
+        ),
+        (
+            "D6-touch-id-numeric-keypad-2024",
+            "Magic Keyboard with Touch ID and Numeric Keypad",
+            0x0322,
+            known::Variant::Ansi,
+        ),
+    ];
+    for (id, name, product, variant) in models {
+        let app = app_showing(recognised(
+            name,
+            product,
+            variant,
+            Some(known::AppleDriver::default()),
+        ));
+        shots.capture(&app, &format!("decks/{id}"));
+    }
+
+    let f_keys_first = known::AppleDriver {
+        fnmode: 2,
+        ..known::AppleDriver::default()
+    };
+    let mut app = app_showing(recognised(
+        "Blake’s Magic Keyboard",
+        0x029a,
+        known::Variant::Ansi,
+        Some(f_keys_first),
+    ));
+    shots.capture(&app, "decks/D7-f-keys-first");
+
+    let _ = app.update(Message::SetView(View::Tester));
+    let _ = app.update(Message::Monitor(monitor::Event::Key {
+        device: PathBuf::from(DECK_DEVICE),
+        event: monitor::KeyEvent::Pressed(evdev::KeyCode::KEY_LEFTMETA.0),
+    }));
+    shots.capture(&app, "decks/D8-tester-command-held");
 }
 
 // ---- Storyboards -------------------------------------------------------

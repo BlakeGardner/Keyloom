@@ -15,7 +15,7 @@ use crate::ui::theme::{
     white,
 };
 use crate::ui::{
-    Cap, Pill, cap_colors, eyebrow, keycap_chip, legend, panel, pill, tester, txt, txt_semibold,
+    Cap, Pill, cap_colors, eyebrow, keycap_chip, panel, pill, tester, txt, txt_semibold,
 };
 use crate::xremap;
 
@@ -183,7 +183,7 @@ fn layer_chips(app: &App) -> Element<'_, Message> {
         let hold = if layer.trigger.is_empty() {
             "choose a key…".to_owned()
         } else {
-            format!("hold {}", short(&key_name(&layer.trigger)))
+            format!("hold {}", short(&app.key_name(&layer.trigger)))
         };
         chips.push(
             widget::button::custom(
@@ -379,7 +379,7 @@ fn layer_bar(app: &App) -> Option<Element<'_, Message>> {
         } else {
             txt_semibold(layer.name.clone(), 15.0, fg()).into()
         };
-        let key = key_name(&layer.trigger);
+        let key = app.key_name(&layer.trigger);
         let jobs = layer.keys.len();
         let hint = format!(
             "Click a key to choose what it does while {key} is held. Bright: the held key. Tinted: keys with a job. Dimmed keys keep working normally · {jobs} key{} with a job",
@@ -394,7 +394,7 @@ fn layer_bar(app: &App) -> Option<Element<'_, Message>> {
                     .push(eyebrow("Layer"))
                     .push(name)
                     .push(txt("while", 12.5, muted()))
-                    .push(keycap_chip(legend(&layer.trigger), Cap::Held))
+                    .push(keycap_chip(app.legend(&layer.trigger), Cap::Held))
                     .push(txt("is held", 12.5, muted()))
                     .push(action("Change key", Message::ChooseLayerKey))
                     .push(crate::ui::hspace())
@@ -575,7 +575,7 @@ fn canvas(app: &App) -> Element<'_, Message> {
 
 /// One key cap with all its visual states.
 #[allow(clippy::too_many_lines)]
-fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Message> {
+fn key_button<'a>(app: &'a App, cap: &'a model::KeyCap) -> Element<'a, Message> {
     let layer = app.active_layer();
     let nav_active = layer.is_some();
     let is_trigger = layer.is_some_and(|layer| layer.trigger == cap.code);
@@ -677,7 +677,11 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         } else if is_trigger {
             (
                 cap.label.to_owned(),
-                if cap.label.len() > 2 { 9.5 } else { 13.0 },
+                if cap.label.chars().count() > 2 {
+                    9.5
+                } else {
+                    13.0
+                },
                 color,
                 Weight::Semibold,
             )
@@ -691,7 +695,11 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         } else {
             (
                 cap.label.to_owned(),
-                if cap.label.len() > 2 { 9.5 } else { 13.0 },
+                if cap.label.chars().count() > 2 {
+                    9.5
+                } else {
+                    13.0
+                },
                 color,
                 Weight::Medium,
             )
@@ -723,6 +731,11 @@ fn key_button<'a>(app: &'a App, cap: &'static model::KeyCap) -> Element<'a, Mess
         weight: main_weight,
         ..Font::DEFAULT
     }));
+    // The printed second legend (the word under a symbol, the F number
+    // under a media key), where a plain cap has room for it.
+    if !cap.sub.is_empty() && !show_orig && hold_line.is_none() && cap.h >= 1.0 {
+        labels = labels.push(txt(cap.sub.to_owned(), 7.5, muted()));
+    }
     if let Some(hold) = hold_line {
         let hold_color = if is_trigger {
             tint(0.97, 0.02)

@@ -6,7 +6,6 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message};
-use crate::ui::model::{self, key_name};
 use crate::ui::theme::{accent, muted, oklch, tint, vgradient};
 use crate::ui::{eyebrow, mono, panel, txt, txt_semibold};
 
@@ -59,14 +58,7 @@ pub fn panels(app: &App) -> Element<'_, Message> {
 fn key_panel(app: &App) -> crate::ui::Panel<'_> {
     let last = app.last.as_ref();
 
-    let cap_label = last.map_or("—".to_owned(), |last| {
-        let label = model::key(last.code).map_or("?", |cap| cap.label);
-        if label.is_empty() {
-            "Space".to_owned()
-        } else {
-            label.to_owned()
-        }
-    });
+    let cap_label = last.map_or("—".to_owned(), |last| app.cap_label(last.code));
     let has_last = last.is_some();
     let cap = container(
         txt_semibold(
@@ -112,7 +104,10 @@ fn key_panel(app: &App) -> crate::ui::Panel<'_> {
         ..container::Style::default()
     }));
 
-    let title = last.map_or_else(|| "Press any key".to_owned(), |last| key_name(last.code));
+    let title = last.map_or_else(
+        || "Press any key".to_owned(),
+        |last| app.key_name(last.code),
+    );
     let code = last.map_or_else(
         || {
             if app.grabbed_selection().is_some() {
@@ -147,11 +142,12 @@ fn key_panel(app: &App) -> crate::ui::Panel<'_> {
 /// Live view of which modifiers are held.
 fn modifier_panel(app: &App) -> crate::ui::Panel<'_> {
     let [ctrl, shift, alt, sup] = app.held_mods();
+    let [ctrl_name, shift_name, alt_name, super_name] = app.modifier_names();
     let chips = [
-        ("Shift", shift),
-        ("Control", ctrl),
-        ("Alt", alt),
-        ("Super", sup),
+        (shift_name, shift),
+        (ctrl_name, ctrl),
+        (alt_name, alt),
+        (super_name, sup),
     ];
 
     let chips: Vec<Element<'_, Message>> = chips
@@ -201,7 +197,7 @@ fn output_panel(app: &App) -> crate::ui::Panel<'_> {
 
     let output = last.map_or_else(
         || "—".to_owned(),
-        |last| mapped.clone().unwrap_or_else(|| key_name(last.code)),
+        |last| mapped.clone().unwrap_or_else(|| app.key_name(last.code)),
     );
     let note = last.map_or_else(
         || "output appears here".to_owned(),

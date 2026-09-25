@@ -190,6 +190,24 @@ does not run.
 | SB5 | Reopened after completion: W2 → F1 → each step from the summary, Continue → F1 → closed (F5) |
 | SB6 | Keyloom's download out of date: W2 → X3 → T1 → F1 |
 
+## Decks (screenshots only)
+
+The Apple decks of [Supported_Keyboards.md](Supported_Keyboards.md), each
+staged from a recognised keyboard (`screenshots::decks`, written under
+`target/setup-shots/decks/`); their geometry, codes, and names are
+asserted in `src/ui/model.rs` and `src/app.rs` tests.
+
+| ID | State | Shows |
+| --- | --- | --- |
+| D1 | Magic Keyboard with Touch ID (2021), ANSI | the compact deck: media legends with F numbers, Touch ID in the corner, stacked ↑↓ |
+| D2 | The same, ISO | `§` in the corner, `` ` `` beside the narrow shift, `\` beside the two-segment return |
+| D3 | Magic Keyboard (USB-C), ANSI | the lock key in the corner |
+| D4 | Magic Keyboard with Numeric Keypad (2017) | Launchpad on F4, blank F5 and F6, eject, fn in the navigation cluster, the wider bottom row |
+| D5 | Magic Keyboard with Touch ID and Numeric Keypad (2021) | Touch ID, fn in the navigation cluster |
+| D6 | Magic Keyboard with Touch ID and Numeric Keypad (USB-C) | the globe key at the bottom left, the contextual-menu key |
+| D7 | D1 with `fnmode=2` | F keys as the main legends, media legends small |
+| D8 | D1 in the tester with the command key held | "Left Command", the `⌘` cap, the Option and Command modifier chips |
+
 ## Not covered by any kind
 
 The checks themselves (`setup::probe`) read `/proc`, `/etc/group`,

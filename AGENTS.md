@@ -45,6 +45,13 @@ roadmap commitment.
   feature of its own, such as test infrastructure, packaging, and
   investigations. Keep user-visible limitations in `Current_Features.md` and
   record only what an approach would have to solve.
+- `docs/Supported_Keyboards.md`: list every keyboard Keyloom recognises by
+  its identifiers (`KNOWN_KEYBOARDS` in `src/known.rs`) and draws specially,
+  with how each entry was verified. Whenever a recognised model, family,
+  deck, or the way keyboards are identified is added or changed, update this
+  list and the "Recognised keyboards" section of
+  `docs/Form_Factor_Detection.md` in the same change; the table and the
+  code must agree.
 
 Documentation updates are generally unnecessary for animations, spacing,
 styling, copy edits, small usability refinements, internal refactors,

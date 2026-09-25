@@ -57,12 +57,24 @@ first-run setup installs that unit and walks through the input permissions
 ## Keyboard view
 
 - Renders every form factor (100%, 80% TKL, 75%, 65%, 60%) in ANSI and ISO
-  assemblies.
+  assemblies, and Apple's keyboards as two decks of their own, compact and
+  full-size with the numeric keypad, printed as Apple prints them: `⌘
+  command`, `⌥ option`, `⌃ control`, `⇧ shift`, `⌫ delete`, `⏎ return`, the
+  media legends of the function row with the F number small, and the Touch
+  ID, lock, or eject key in the corner (see
+  [Supported_Keyboards.md](Supported_Keyboards.md)).
 - The deck follows the selected keyboard's detected form factor. Manual size
   and ANSI/ISO choices are remembered per keyboard, with independent choices
   for "All keyboards". The Size picker selects the detected size and ANSI/ISO
   variant by default; manual selections change only the display (see
   [Form_Factor_Detection.md](Form_Factor_Detection.md)).
+- On an Apple deck, keys are named as printed wherever the interface names
+  them: Command and Option (also on the tester's modifier chips), Delete
+  and Return, Forward Delete, Touch ID or Lock, Fn. Stored mappings and the
+  generated configuration keep the standard names, so a mapping made on an
+  Apple deck applies to the same physical key on every deck. The action
+  catalog still lists the modifiers as Super and Alt: a Command key is
+  mapped by choosing Left Super.
 - Physical key presses do not light up the remap deck; live key highlights
   are reserved for Tester. "Record a key" capture still accepts physical input.
 - Clicking a key opens the key editor, and the deck displays configured tap
@@ -80,18 +92,21 @@ first-run setup installs that unit and walks through the input permissions
   mappings in the active profile, each with the keyboard and application it
   applies to. Selecting a row opens the mapping in its own scope. Removal
   requires confirmation and is undoable.
-- Keys no deck draws can be remapped too: media and brightness keys, and
-  the Mission Control and Launchpad keys of Apple keyboards. "Remap a key
-  that isn't shown" in the remaps dialog listens for the key and opens the
-  key editor for it; such mappings appear in the remaps list, the keys can
-  start a shortcut chord, and the tester names them.
+- Keys no PC deck draws can be remapped too: media and brightness keys,
+  and the keys of Apple keyboards (Mission Control, Launchpad, Spotlight,
+  Dictation, Do Not Disturb, eject, the Touch ID or lock key, F13 to F19,
+  and the keypad's =), which the Apple decks draw. "Remap a key that isn't
+  shown" in the remaps dialog listens for the key and opens the key editor
+  for it; such mappings appear in the remaps list, the keys can start a
+  shortcut chord, and the tester names them.
 - "Applies to" device scope selector on the toolbar (see Devices below).
 
 ## Key editor
 
 - Searchable action catalog with categories: modifiers, navigation, media
-  (including Mission Control and Launchpad), letters, numbers, numpad,
-  function keys, punctuation, other (including Disabled). Modifiers name
+  (including Mission Control, Launchpad, Spotlight, Dictation, Do Not
+  Disturb, and eject), letters, numbers, numpad, function keys (F1 to F19),
+  punctuation, other (including Fn, Power, and Disabled). Modifiers name
   their side explicitly (Left/Right Control, Shift, Alt, Super), and the
   catalog offers every key the app knows.
 - Mapping a key to itself is rejected with a short explanation, except when a
@@ -223,6 +238,14 @@ first-run setup installs that unit and walks through the input permissions
   reported keys, used for the selected keyboard's deck in both Keyboard and Tester.
   "All keyboards" uses an aggregate guess from connected keyboards (see
   [Form_Factor_Detection.md](Form_Factor_Detection.md)).
+- Recognised keyboards: Apple's Magic Keyboards (2015 on) are recognised by
+  their USB or Bluetooth identifiers and drawn as their own decks, with the
+  ANSI or ISO variant read from the keyboard's HID country code rather than
+  guessed, and the kernel driver's settings (`hid_apple`'s `fnmode` and
+  its key swaps) honoured so every cap carries the code its key sends.
+  The models, what was verified, and the limitations are listed in
+  [Supported_Keyboards.md](Supported_Keyboards.md); a JIS keyboard is
+  drawn as ANSI, and MacBook built-in keyboards are not recognised yet.
 - A disconnected selection retains its last known layout. Reconnecting the
   same device restores its selection and saved display choices when its
   identity can be matched. If another keyboard reuses the selected event
