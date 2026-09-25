@@ -59,15 +59,6 @@ without a user-facing feature of its own.
 - **A translated interface.** Use Fluent for internationalization so
   Keyloom's interface can be translated into other languages. Specific
   translations will be planned separately.
-- **An interface size of Keyloom's own.** The whole window follows the
-  desktop's scale factor; an interface size chosen in Keyloom, for larger
-  text and controls beside the keyboard zoom, would sit in the same menu.
-  It is blocked by libcosmic: the pinned revision never hands its scale
-  factor to iced, so its `ScaleFactor` action and the `COSMIC_SCALE`
-  variable change nothing on screen. Once libcosmic passes
-  `Cosmic::scale_factor` to the daemon it builds, the size can be applied
-  with that action, remembered like the zoom, and the window resized
-  with it so its layout keeps the same room.
 - **A log viewer.** Provide an in-app viewer for remapping service logs so
   users can investigate failures without opening a terminal.
 - **An update check.** Notice when a newer Keyloom release exists and say
