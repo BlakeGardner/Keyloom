@@ -42,6 +42,16 @@ without a user-facing feature of its own.
   `hid_apple` driver also lists), the aluminium keyboards from before 2015,
   the fn set of the function row as a second face of the deck, and Command
   and Option in the action catalog, which still names them Super and Alt.
+- **macOS shortcuts for Apple keyboards.** A starter profile, much like
+  Kinto or Toshy, that makes Command the shortcut modifier on an Apple
+  keyboard: Command with C, V, X, Z, A, S, F, T, W, Q and the like sends
+  the Ctrl shortcut, Command+Tab switches windows, and Command and Option
+  with the arrows move by line and by word. Terminals get their Ctrl+Shift
+  equivalents, so Ctrl keeps its terminal meaning. Today's Mac-style
+  starter only swaps where Alt and Super sit, and Shortcut examples covers
+  just copy, paste, and undo. The profile would be scoped to Apple
+  keyboards, or offered when one is recognised, so other keyboards behave
+  as before.
 - **Non-English keyboards.** Support non-English keyboard layouts with
   matching key labels in the keyboard view, tester, and key editor. Language
   layouts are separate from the existing keyboard sizes and ANSI/ISO physical
