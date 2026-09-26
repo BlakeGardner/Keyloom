@@ -409,8 +409,9 @@ const DECK_DEVICE: &str = "/dev/input/event20";
 /// The application showing a recognised keyboard's deck.
 fn app_showing(device: monitor::KeyboardDevice) -> App {
     let mut app = staging::app();
+    let scope = device.id.scope_id();
     let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
-    let _ = app.update(Message::SelectDevice(DECK_DEVICE.to_owned()));
+    let _ = app.update(Message::SelectDevice(scope));
     app
 }
 

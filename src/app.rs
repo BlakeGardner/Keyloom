@@ -28,8 +28,8 @@ use crate::service;
 use crate::setup;
 use crate::ui;
 use crate::ui::model::{
-    self, AppRef, AppScope, Chord, Group, Layer, LayerKey, Mapping, Maps, ModifierSide, Profile,
-    Rule, key_by_evdev, key_name,
+    self, AppRef, AppScope, Chord, Group, Keyboards, Layer, LayerKey, Mapping, Maps, ModifierSide,
+    Profile, Rule, SavedKeyboard, key_by_evdev, key_name,
 };
 use crate::ui::zoom;
 use crate::xremap;
@@ -593,6 +593,9 @@ pub struct App {
     sheet_closing: Option<SheetCloseAnimation>,
     // Hardware monitoring.
     pub devices: Vec<monitor::KeyboardDevice>,
+    /// The keyboards that remaps and layer jobs are limited to, by
+    /// device scope id, as last seen: they stay known while unplugged.
+    saved_keyboards: Keyboards,
     pub monitor_started: bool,
     pub pressed: HashSet<(PathBuf, u16)>,
     pub last: Option<LastKey>,
@@ -839,15 +842,42 @@ impl App {
             .map_or("Default", |profile| profile.name.as_str())
     }
 
-    /// Display name for a device scope id.
+    /// Display name for a device scope id: the keyboard's name, whether
+    /// it is connected or only remembered for its remaps.
     pub fn device_label(&self, id: &str) -> String {
-        if id == "all" {
+        if model::every_device(id) {
             return "All keyboards".to_owned();
         }
+        self.keyboard(id)
+            .map(|device| device.name.clone())
+            .or_else(|| {
+                self.saved_keyboards
+                    .get(id)
+                    .map(|keyboard| keyboard.name.clone())
+            })
+            .unwrap_or_else(|| id.to_owned())
+    }
+
+    /// The detected keyboard a device scope id names, preferring a
+    /// connected input node when a keyboard has several.
+    fn keyboard(&self, id: &str) -> Option<&monitor::KeyboardDevice> {
         self.devices
             .iter()
-            .find(|device| device.path.to_string_lossy() == id)
-            .map_or_else(|| id.to_owned(), |device| device.name.clone())
+            .filter(|device| device.id.scope_id() == id)
+            .min_by_key(|device| !device.connected)
+    }
+
+    /// Every keyboard Keyloom knows, by device scope id: the saved
+    /// ones, updated by the keyboards seen since launch (a connected
+    /// input node has the last word).
+    pub fn known_keyboards(&self) -> Keyboards {
+        let mut keyboards = self.saved_keyboards.clone();
+        let (connected, gone): (Vec<_>, Vec<_>) =
+            self.devices.iter().partition(|device| device.connected);
+        for device in gone.into_iter().chain(connected) {
+            keyboards.insert(device.id.scope_id(), saved_keyboard(device));
+        }
+        keyboards
     }
 
     /// The device rows offered by the "Applies to" popover:
@@ -867,6 +897,12 @@ impl App {
             },
         )];
         for device in &self.devices {
+            let id = device.id.scope_id();
+            // A keyboard with several input nodes is one scope.
+            if entries.iter().any(|(listed, _, _)| *listed == id) {
+                continue;
+            }
+            let device = self.keyboard(&id).unwrap_or(device);
             let path = device.path.display();
             let sub = if !device.connected {
                 format!("{path} (disconnected)")
@@ -875,18 +911,34 @@ impl App {
             } else {
                 path.to_string()
             };
-            entries.push((
-                device.path.to_string_lossy().into_owned(),
-                device.name.clone(),
-                sub,
-            ));
+            entries.push((id, device.name.clone(), sub));
         }
+        // Keyboards not seen since launch, remembered for their remaps.
+        let mut remembered: Vec<(String, String, String)> = self
+            .saved_keyboards
+            .iter()
+            .filter(|(id, _)| self.keyboard(id).is_none())
+            .map(|(id, keyboard)| {
+                (
+                    id.clone(),
+                    keyboard.name.clone(),
+                    "Not connected".to_owned(),
+                )
+            })
+            .collect();
+        remembered.sort_by(|(_, a, _), (_, b, _)| a.cmp(b));
+        entries.extend(remembered);
         entries
     }
 
     /// Whether a device contributes to the current view's live input.
     fn shows_input_from(&self, device: &Path) -> bool {
-        self.view != View::Tester || self.device == "all" || device == Path::new(&self.device)
+        self.view != View::Tester
+            || self.device == "all"
+            || self
+                .devices
+                .iter()
+                .any(|entry| entry.path == device && entry.id.scope_id() == self.device)
     }
 
     /// Whether a key is held, respecting the tester's device filter.
@@ -955,9 +1007,7 @@ impl App {
     }
 
     fn selected_device(&self) -> Option<&monitor::KeyboardDevice> {
-        self.devices
-            .iter()
-            .find(|device| device.path == Path::new(&self.device))
+        self.keyboard(&self.device)
     }
 
     /// The selected keyboard when the remapper is holding it, which is
@@ -1114,12 +1164,15 @@ impl App {
     }
 
     /// The selected keyboard's guess, or the aggregate for All keyboards.
-    /// A disconnected selection keeps its last known guess.
+    /// A disconnected selection keeps its last known guess; one not
+    /// detected since launch has its model's size, if Keyloom knows it.
     pub fn detected_form(&self) -> Option<usize> {
         if self.device == "all" {
             monitor::detected_form(self.devices.iter())
         } else {
-            self.selected_device().map(|device| device.form)
+            self.selected_device()
+                .map(|device| device.form)
+                .or_else(|| self.remembered_model().map(|model| model.form))
         }
     }
 
@@ -1128,8 +1181,28 @@ impl App {
         if self.device == "all" {
             monitor::detected_iso(self.devices.iter())
         } else {
-            self.selected_device().map(|device| device.iso)
+            self.selected_device().map(|device| device.iso).or_else(|| {
+                self.remembered_model()
+                    .and_then(|model| model.variant)
+                    .map(|variant| variant.is_iso())
+            })
         }
+    }
+
+    /// The model Keyloom recognises the selected keyboard as, from what
+    /// is saved about it, while the keyboard is not detected.
+    fn remembered_model(&self) -> Option<&'static known::KnownKeyboard> {
+        let saved = self.saved_keyboards.get(&self.device)?;
+        known::identify(saved.vendor, saved.product, &saved.name)
+    }
+
+    /// The identity the selected keyboard's display choices are saved
+    /// under: the detected keyboard's, or the one its scope id was made
+    /// from while it is not detected.
+    fn selected_identity(&self) -> Option<monitor::KeyboardId> {
+        self.selected_device()
+            .map(|device| device.id.clone())
+            .or_else(|| monitor::KeyboardId::from_scope_id(&self.device))
     }
 
     /// Manual choices for the active scope; automatic axes remain absent.
@@ -1137,8 +1210,8 @@ impl App {
         let mut choice = if self.device == "all" {
             self.keyboard_layouts.all
         } else {
-            self.selected_device()
-                .and_then(|device| self.keyboard_layouts.devices.get(&device.id))
+            self.selected_identity()
+                .and_then(|id| self.keyboard_layouts.devices.get(&id))
                 .copied()
                 .unwrap_or_default()
         };
@@ -1192,8 +1265,7 @@ impl App {
     fn set_layout_override(&mut self, choice: LayoutOverride) {
         if self.device == "all" {
             self.keyboard_layouts.all = choice;
-        } else if let Some(device) = self.selected_device() {
-            let id = device.id.clone();
+        } else if let Some(id) = self.selected_identity() {
             if choice == LayoutOverride::default() {
                 self.keyboard_layouts.devices.remove(&id);
             } else {
@@ -1351,6 +1423,7 @@ impl App {
     /// Called after every change to profiles or their mappings; a
     /// changed file schedules the debounced apply.
     fn persist(&mut self) {
+        self.remember_keyboards();
         // Tests exercise the update loop; never touch the real
         // ~/.config from them. The apply is still scheduled so the
         // debounce logic stays observable (its tasks never run).
@@ -1358,6 +1431,13 @@ impl App {
             self.schedule_apply();
             return;
         }
+        self.save_store();
+        self.write_xremap(true);
+    }
+
+    /// Save the configuration model: profiles, the keyboards their
+    /// remaps are limited to, and display choices.
+    fn save_store(&self) {
         if let Some(settings) = &self.settings {
             let snapshot = KeyloomConfig::snapshot(
                 &self.profile_state(),
@@ -1369,7 +1449,102 @@ impl App {
                 eprintln!("keyloom: failed to save settings: {err}");
             }
         }
-        self.write_xremap(true);
+    }
+
+    /// Save what each keyboard some remap or layer job is limited to is
+    /// called and matched by, as seen now, so it stays known while it
+    /// is unplugged. Returns whether a saved keyboard changed.
+    fn remember_keyboards(&mut self) -> bool {
+        let known = self.known_keyboards();
+        let scoped =
+            model::keyboard_scopes(self.profile_maps.values(), self.profile_layers.values());
+        let mut changed = false;
+        for id in scoped {
+            if let Some(keyboard) = known.get(id)
+                && self.saved_keyboards.get(id) != Some(keyboard)
+            {
+                self.saved_keyboards.insert(id.to_owned(), keyboard.clone());
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Profiles saved before keyboards had a stable id limit remaps to
+    /// the event node (`/dev/input/eventN`) the keyboard had when the
+    /// scope was chosen, and Keyloom matched whichever keyboard held
+    /// that node. Such a scope now becomes the id of the keyboard at
+    /// its node, as it would have been matched; one that no keyboard
+    /// holds stays as it is, applying nowhere, until one does. Returns
+    /// whether a scope changed.
+    fn adopt_node_scopes(&mut self) -> bool {
+        let nodes: HashMap<String, String> = self
+            .devices
+            .iter()
+            .filter(|device| device.connected && !monitor::is_remapper_output(device))
+            .map(|device| {
+                (
+                    device.path.to_string_lossy().into_owned(),
+                    device.id.scope_id(),
+                )
+            })
+            .collect();
+        let mut changed = false;
+        for maps in self.profile_maps.values_mut() {
+            for index in 0..maps.len() {
+                let (code, mapping) = &maps[index];
+                let Some(id) = nodes.get(&mapping.device) else {
+                    continue;
+                };
+                // The keyboard's own remap of the key there wins.
+                let taken = maps
+                    .iter()
+                    .any(|(key, other)| key == code && other.scoped_to(id, &mapping.app));
+                if !taken {
+                    maps[index].1.device.clone_from(id);
+                    changed = true;
+                }
+            }
+        }
+        let jobs = self
+            .profile_layers
+            .values_mut()
+            .flatten()
+            .flat_map(|layer| layer.keys.iter_mut());
+        for job in jobs {
+            if let Some(id) = nodes.get(&job.device) {
+                job.device.clone_from(id);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Take in the keyboards now detected: scopes saved as event nodes
+    /// adopt the keyboard at their node, and the saved keyboards are
+    /// brought up to date. What changed is saved, and the generated
+    /// file brought in line without restarting the remapper, as at
+    /// launch.
+    fn keyboards_seen(&mut self) {
+        let adopted = self.adopt_node_scopes();
+        if self.remember_keyboards() || adopted {
+            self.save_store();
+        }
+        self.refresh_xremap();
+    }
+
+    /// Rewrite the generated file to match the model without restarting
+    /// the remapper, which reads it the next time it starts. A config
+    /// Keyloom did not write is left alone.
+    fn refresh_xremap(&self) {
+        // Never touch the real ~/.config from tests.
+        if cfg!(test) {
+            return;
+        }
+        let yaml = xremap::generate(self.rules(), &self.known_keyboards());
+        if let Err(err) = xremap::write(&yaml, false) {
+            eprintln!("keyloom: failed to update the xremap config: {err}");
+        }
     }
 
     /// Regenerate the xremap YAML from the active profile's mappings
@@ -1379,7 +1554,7 @@ impl App {
     /// replaced only when `overwrite_foreign` is set (a user edit);
     /// startup leaves foreign files alone.
     fn write_xremap(&mut self, overwrite_foreign: bool) {
-        let yaml = xremap::generate(self.rules(), |id| self.device_label(id));
+        let yaml = xremap::generate(self.rules(), &self.known_keyboards());
         match xremap::write(&yaml, overwrite_foreign) {
             // Only a real content change warrants a service restart.
             Ok(xremap::WriteOutcome::Written(_)) => self.schedule_apply(),
@@ -1577,6 +1752,7 @@ impl App {
             layers: self.keyed_layers(),
             apps: self.profile_apps.clone(),
             groups: self.profile_groups.clone(),
+            keyboards: self.saved_keyboards.clone(),
             active: self.profile.clone(),
             custom_profiles: u32::try_from(self.custom_profiles).unwrap_or(u32::MAX),
         }
@@ -2645,6 +2821,7 @@ impl cosmic::Application for App {
             layers: profile_layers,
             apps: profile_apps,
             groups: profile_groups,
+            keyboards: saved_keyboards,
             active: profile,
             custom_profiles,
         } = state;
@@ -2701,6 +2878,7 @@ impl cosmic::Application for App {
             sheet_opened: None,
             sheet_closing: None,
             devices: Vec::new(),
+            saved_keyboards,
             monitor_started: false,
             pressed: HashSet::new(),
             last: None,
@@ -3627,24 +3805,18 @@ impl cosmic::Application for App {
                     self.monitor_started = true;
                     self.pressed.clear();
                     self.refresh_layout();
+                    self.keyboards_seen();
                 }
                 monitor::Event::Connected(device) => {
-                    let id = device.path.to_string_lossy().into_owned();
-                    // A replugged keyboard usually returns on a new
-                    // event node: follow it if its stale entry was the
-                    // selected mapping scope.
-                    if self.devices.iter().any(|old| {
-                        !old.connected
-                            && old.id == device.id
-                            && old.path.to_string_lossy() == self.device
-                    }) {
-                        self.device = id;
-                    } else if self
+                    // The selected scope names a keyboard, not its event
+                    // node, so a keyboard that returns on a new node
+                    // stays selected. Another keyboard reusing the
+                    // selected one's node replaces its entry, though,
+                    // and the selection returns to all keyboards.
+                    if self
                         .selected_device()
                         .is_some_and(|old| old.path == device.path && old.id != device.id)
                     {
-                        // An unrelated keyboard reused the selected event
-                        // node. Do not silently adopt it as the selected scope.
                         self.device = "all".to_owned();
                         self.last = None;
                     }
@@ -3659,6 +3831,7 @@ impl cosmic::Application for App {
                     self.devices
                         .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
                     self.refresh_layout();
+                    self.keyboards_seen();
                     let toast = self.flash(
                         format!("{name} connected"),
                         "Keys light up as you type; mappings can target it.",
@@ -3790,6 +3963,15 @@ impl cosmic::Application for App {
             self.close_sheet();
         }
         Task::none()
+    }
+}
+
+/// What is saved about a detected keyboard for the scopes limited to it.
+fn saved_keyboard(device: &monitor::KeyboardDevice) -> SavedKeyboard {
+    SavedKeyboard {
+        name: device.name.clone(),
+        vendor: device.id.vendor(),
+        product: device.id.product(),
     }
 }
 
@@ -4521,7 +4703,7 @@ mod tests {
         ));
         let _ = app.update(Message::SelectKey("Numpad7"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
-        let yaml = crate::xremap::generate(app.rules(), |id| id.to_owned());
+        let yaml = crate::xremap::generate(app.rules(), &app.known_keyboards());
         let apply_seq = app.apply_seq;
 
         // Numpad7 is absent from the 60% deck; the rule must survive
@@ -4534,7 +4716,7 @@ mod tests {
             Some("Escape")
         );
         assert_eq!(
-            crate::xremap::generate(app.rules(), |id| id.to_owned()),
+            crate::xremap::generate(app.rules(), &app.known_keyboards()),
             yaml
         );
 
@@ -4544,11 +4726,11 @@ mod tests {
             Some("Escape")
         );
         for scope in ["/dev/input/event0", "/dev/input/event1", "all"] {
-            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            let _ = app.update(Message::SelectDevice(keyboard_at(&app, scope)));
             let _ = app.update(Message::SetForm(app.detected_form().unwrap()));
             let _ = app.update(Message::SetVariant(app.detected_iso().unwrap()));
             assert_eq!(
-                crate::xremap::generate(app.rules(), |id| id.to_owned()),
+                crate::xremap::generate(app.rules(), &app.known_keyboards()),
                 yaml
             );
         }
@@ -4580,6 +4762,37 @@ mod tests {
             virtual_device: false,
             known: None,
         }
+    }
+
+    /// The device scope id of the keyboard detected at an event node,
+    /// or every keyboard for `all`.
+    fn keyboard_at(app: &App, node: &str) -> String {
+        if node == "all" {
+            return node.to_owned();
+        }
+        app.devices
+            .iter()
+            .find(|device| device.path == Path::new(node))
+            .map(|device| device.id.scope_id())
+            .unwrap_or_else(|| panic!("no keyboard at {node}"))
+    }
+
+    /// Two keyboards detected at launch, on `event0` and `event1`.
+    fn two_keyboards() -> Message {
+        Message::Monitor(monitor::Event::Started(vec![
+            test_device(
+                "/dev/input/event0",
+                "Test Keyboard",
+                keyboard::FORM_FULL,
+                true,
+            ),
+            test_device(
+                "/dev/input/event1",
+                "Laptop",
+                keyboard::FORM_SIXTY_FIVE,
+                false,
+            ),
+        ]))
     }
 
     /// A Magic Keyboard with Touch ID as the monitor reports it: the
@@ -4621,7 +4834,7 @@ mod tests {
         device.iso = true;
         let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
         for scope in ["all", "/dev/input/event0"] {
-            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            let _ = app.update(Message::SelectDevice(keyboard_at(&app, scope)));
             assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, true));
             let _ = app.update(Message::TogglePopover(Popover::Size));
             assert_eq!(app.layout_override(), LayoutOverride::default());
@@ -4655,7 +4868,7 @@ mod tests {
         );
         let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
         for scope in ["all", "/dev/input/event20"] {
-            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            let _ = app.update(Message::SelectDevice(keyboard_at(&app, scope)));
             assert_eq!(
                 (app.form, app.iso),
                 (keyboard::FORM_APPLE_COMPACT, true),
@@ -4704,7 +4917,10 @@ mod tests {
             Some(f_keys_first),
         );
         let _ = app.update(Message::Monitor(monitor::Event::Started(vec![device])));
-        let _ = app.update(Message::SelectDevice("/dev/input/event20".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event20",
+        )));
         assert_eq!((app.form, app.iso), (keyboard::FORM_APPLE_COMPACT, false));
         let f3 = app
             .deck()
@@ -4719,9 +4935,19 @@ mod tests {
         assert_eq!(app.key_name("MetaLeft"), "Left Option");
         assert_eq!(app.legend("AltLeft"), "⌘ command");
 
-        let generic = magic_keyboard("/dev/input/event21", known::Variant::Ansi, None);
+        // Another unit of the model, under a driver other than hid_apple.
+        let mut generic = magic_keyboard("/dev/input/event21", known::Variant::Ansi, None);
+        generic.id = monitor::KeyboardId::new(
+            evdev::InputId::new(evdev::BusType::BUS_USB, 1, 1, 1),
+            Some("another unit"),
+            None,
+            &generic.name,
+        );
         let _ = app.update(Message::Monitor(monitor::Event::Connected(generic)));
-        let _ = app.update(Message::SelectDevice("/dev/input/event21".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event21",
+        )));
         assert!(app.deck().iter().any(|cap| cap.code == "F3"));
         assert_eq!(app.key_name("MetaLeft"), "Left Command");
     }
@@ -4785,10 +5011,16 @@ mod tests {
             );
             assert!(app.iso, "All keyboards includes the connected ISO key");
 
-            let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+            let _ = app.update(Message::SelectDevice(keyboard_at(
+                &app,
+                "/dev/input/event1",
+            )));
             assert_eq!(app.detected_form(), Some(keyboard::FORM_FULL));
             assert_eq!((app.form, app.iso), (keyboard::FORM_FULL, false));
-            let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+            let _ = app.update(Message::SelectDevice(keyboard_at(
+                &app,
+                "/dev/input/event0",
+            )));
             assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, true));
             let _ = app.update(connected(
                 "/dev/input/event2",
@@ -4817,11 +5049,17 @@ mod tests {
         let _ = app.update(Message::SetForm(keyboard::FORM_SEVENTY_FIVE));
         let _ = app.update(Message::SetVariant(true));
 
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, false));
         let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY_FIVE));
         let _ = app.update(Message::SetVariant(true));
-        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event1",
+        )));
         assert_eq!((app.form, app.iso), (keyboard::FORM_FULL, false));
         let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
 
@@ -4831,7 +5069,7 @@ mod tests {
             ("/dev/input/event1", keyboard::FORM_SIXTY, false),
         ] {
             let _ = app.update(Message::SetView(View::Tester));
-            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            let _ = app.update(Message::SelectDevice(keyboard_at(&app, scope)));
             assert_eq!((app.form, app.iso), (form, iso));
             let _ = app.update(Message::SetView(View::Keyboard));
             assert_eq!((app.form, app.iso), (form, iso));
@@ -4849,7 +5087,10 @@ mod tests {
         app.devices[0].iso = true;
         app.refresh_layout();
         let _ = app.update(Message::SetForm(keyboard::FORM_FULL));
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
         let _ = app.update(Message::SetVariant(false));
 
@@ -4891,7 +5132,10 @@ mod tests {
             keyboard::FORM_FULL,
             true,
         ));
-        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event1",
+        )));
         let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
             PathBuf::from("/dev/input/event1"),
         )));
@@ -4935,7 +5179,11 @@ mod tests {
             first.clone(),
             second.clone(),
         ])));
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
+        let selected = app.device.clone();
         let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
         let _ = app.update(Message::SetVariant(true));
         let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
@@ -4947,16 +5195,24 @@ mod tests {
         second.path = PathBuf::from("/dev/input/event7");
         let _ = app.update(Message::Monitor(monitor::Event::Connected(second)));
         assert_eq!(
-            app.device, "/dev/input/event0",
+            app.device, selected,
             "same name does not steal the selection"
         );
         assert_eq!((app.form, app.iso), (keyboard::FORM_SIXTY, true));
         first.path = PathBuf::from("/dev/input/event8");
         let _ = app.update(Message::Monitor(monitor::Event::Connected(first)));
-        assert_eq!(app.device, "/dev/input/event8");
+        assert_eq!(app.device, selected);
+        assert_eq!(
+            app.selected_device().map(|device| device.path.as_path()),
+            Some(Path::new("/dev/input/event8")),
+            "the selection follows its keyboard to the new node"
+        );
         assert_eq!((app.form, app.iso), (keyboard::FORM_SIXTY, true));
         assert_eq!(app.devices.len(), 2);
-        let _ = app.update(Message::SelectDevice("/dev/input/event7".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event7",
+        )));
         assert_eq!((app.form, app.iso), (keyboard::FORM_TKL, false));
     }
 
@@ -4964,7 +5220,10 @@ mod tests {
     fn unrelated_keyboard_reusing_event_node_does_not_inherit_override_or_selection() {
         let mut app = app();
         let _ = app.update(started(keyboard::FORM_TKL, true));
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         let _ = app.update(Message::SetForm(keyboard::FORM_SIXTY));
         let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
             PathBuf::from("/dev/input/event0"),
@@ -4976,7 +5235,10 @@ mod tests {
             true,
         ));
         assert_eq!(app.device, "all");
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         assert_eq!(app.form, keyboard::FORM_FULL);
         assert_eq!(app.layout_override().form, None);
     }
@@ -5011,7 +5273,10 @@ mod tests {
         original.settings = Some(handle);
         let _ = original.update(started(keyboard::FORM_TKL, true));
         let _ = original.update(Message::SetForm(keyboard::FORM_SEVENTY_FIVE));
-        let _ = original.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = original.update(Message::SelectDevice(keyboard_at(
+            &original,
+            "/dev/input/event0",
+        )));
         let _ = original.update(Message::SetForm(keyboard::FORM_SIXTY_FIVE));
         let _ = original.update(Message::SetVariant(true));
         // The zoom is a display choice saved the same way, the moment
@@ -5038,7 +5303,10 @@ mod tests {
             keyboard::FORM_SEVENTY_FIVE,
             "All keyboards override survives reload"
         );
-        let _ = restored.update(Message::SelectDevice("/dev/input/event9".to_owned()));
+        let _ = restored.update(Message::SelectDevice(keyboard_at(
+            &restored,
+            "/dev/input/event9",
+        )));
         assert_eq!(
             (restored.form, restored.iso),
             (keyboard::FORM_SIXTY_FIVE, true)
@@ -5091,7 +5359,10 @@ mod tests {
     fn replugged_keyboard_replaces_its_stale_entry() {
         let mut app = app();
         let _ = app.update(started(keyboard::FORM_FULL, true));
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
             PathBuf::from("/dev/input/event0"),
         )));
@@ -5108,9 +5379,223 @@ mod tests {
         assert!(app.devices[0].connected);
         assert_eq!(app.devices[0].path, PathBuf::from("/dev/input/event7"));
         assert_eq!(
-            app.device, "/dev/input/event7",
+            app.device,
+            keyboard_at(&app, "/dev/input/event7"),
             "the selected scope follows the replugged keyboard"
         );
+    }
+
+    /// A Bluetooth keyboard with ids of its own; `unit` tells units
+    /// of one model apart.
+    fn keyboard_with_ids(
+        path: &str,
+        name: &str,
+        vendor: u16,
+        product: u16,
+        unit: &str,
+    ) -> monitor::KeyboardDevice {
+        let mut device = test_device(path, name, keyboard::FORM_FULL, true);
+        device.id = monitor::KeyboardId::new(
+            evdev::InputId::new(evdev::BusType::BUS_BLUETOOTH, vendor, product, 1),
+            Some(unit),
+            None,
+            name,
+        );
+        device
+    }
+
+    fn magic_at(path: &str) -> monitor::KeyboardDevice {
+        keyboard_with_ids(path, "Magic Keyboard", 0x004c, 0x029a, "a4:83:e7:0b:52:10")
+    }
+
+    fn keychron_at(path: &str) -> monitor::KeyboardDevice {
+        keyboard_with_ids(path, "Keychron K2", 0x05ac, 0x024f, "dc:2c:26:00:00:01")
+    }
+
+    /// The app as the next launch loads it from what `before` saves.
+    fn relaunched(before: &App) -> App {
+        let state = KeyloomConfig::snapshot(
+            &before.profile_state(),
+            &before.keyboard_layouts,
+            before.setup_state,
+            before.zoom,
+        )
+        .into_state();
+        let mut after = app();
+        after.profiles = state.profiles;
+        after.profile = state.active;
+        after.profile_maps = state.maps;
+        after.profile_layers = state.layers;
+        after.profile_apps = state.apps;
+        after.profile_groups = state.groups;
+        after.saved_keyboards = state.keyboards;
+        after
+    }
+
+    /// A remap limited to a keyboard names the keyboard, not the event
+    /// node it had: it stays with the keyboard when it returns on
+    /// another node, when another keyboard takes its old node, and
+    /// across a restart with the keyboard unplugged.
+    #[test]
+    fn a_keyboards_remaps_follow_it_across_event_nodes_and_restarts() {
+        let mut app = app();
+        let _ = app.update(Message::Monitor(monitor::Event::Started(vec![
+            magic_at("/dev/input/event3"),
+            keychron_at("/dev/input/event4"),
+        ])));
+        let magic = keyboard_at(&app, "/dev/input/event3");
+        let _ = app.update(Message::SelectDevice(magic.clone()));
+        let _ = app.update(Message::SelectKey("CapsLock"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        assert_eq!(
+            app.own_mapping("CapsLock")
+                .map(|mapping| mapping.device.as_str()),
+            Some(magic.as_str())
+        );
+        let block = "  - name: 'Keyloom mappings (Magic Keyboard)'\n\
+                     \x20   device:\n\
+                     \x20     only: ['ids:0x004c:0x029a']\n\
+                     \x20   remap:\n\
+                     \x20     KEY_CAPSLOCK: KEY_ESC\n";
+        let generated = yaml(&app);
+        assert!(generated.contains(block), "{generated}");
+
+        // Both leave; the Keychron returns first, on the Magic
+        // Keyboard's old node, and the Magic Keyboard on a new one.
+        for node in ["/dev/input/event3", "/dev/input/event4"] {
+            let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
+                PathBuf::from(node),
+            )));
+        }
+        let _ = app.update(Message::Monitor(monitor::Event::Connected(keychron_at(
+            "/dev/input/event3",
+        ))));
+        let _ = app.update(Message::Monitor(monitor::Event::Connected(magic_at(
+            "/dev/input/event9",
+        ))));
+        assert_eq!(yaml(&app), generated, "the remap stays with its keyboard");
+        let _ = app.update(Message::SelectDevice(magic.clone()));
+        assert_eq!(
+            app.own_mapping("CapsLock")
+                .and_then(|mapping| mapping.tap.as_deref()),
+            Some("Escape")
+        );
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event3",
+        )));
+        assert!(
+            app.mapping("CapsLock").is_none(),
+            "nor is it the Keychron's"
+        );
+
+        // The next launch, with the Magic Keyboard unplugged.
+        let mut next = relaunched(&app);
+        let _ = next.update(Message::Monitor(monitor::Event::Started(vec![
+            keychron_at("/dev/input/event3"),
+        ])));
+        assert!(
+            yaml(&next).contains(block),
+            "an unplugged keyboard is still matched"
+        );
+        assert_eq!(next.device_label(&magic), "Magic Keyboard");
+        assert!(
+            next.device_entries().contains(&(
+                magic.clone(),
+                "Magic Keyboard".to_owned(),
+                "Not connected".to_owned()
+            )),
+            "and still offered, to edit its remaps"
+        );
+
+        // Shown while unplugged, it has its model's deck and its remap,
+        // and a size chosen for it then is the one it returns with.
+        let _ = next.update(Message::SelectDevice(magic.clone()));
+        assert_eq!(next.form, keyboard::FORM_APPLE_COMPACT);
+        assert_eq!(
+            next.own_mapping("CapsLock")
+                .and_then(|mapping| mapping.tap.as_deref()),
+            Some("Escape")
+        );
+        let _ = next.update(Message::SetForm(keyboard::FORM_APPLE_FULL));
+        assert_eq!(next.form, keyboard::FORM_APPLE_FULL);
+
+        // Renamed while away, it returns under the new name.
+        let mut renamed = magic_at("/dev/input/event5");
+        renamed.name = "Blake’s Magic Keyboard".to_owned();
+        let _ = next.update(Message::Monitor(monitor::Event::Connected(renamed)));
+        assert_eq!(
+            next.saved_keyboards
+                .get(&magic)
+                .map(|keyboard| keyboard.name.as_str()),
+            Some("Blake’s Magic Keyboard")
+        );
+        assert!(yaml(&next).contains(
+            "  - name: 'Keyloom mappings (Blake’s Magic Keyboard)'\n\
+             \x20   device:\n\
+             \x20     only: ['ids:0x004c:0x029a']\n"
+        ));
+        assert_eq!(next.device, magic, "it is still the one shown");
+        assert_eq!(next.form, keyboard::FORM_APPLE_FULL);
+    }
+
+    /// Profiles saved before keyboards had ids limit remaps to an event
+    /// node, which Keyloom matched against whichever keyboard held it.
+    /// The keyboard found there takes them over; a node no keyboard
+    /// holds matches nothing until one does.
+    #[test]
+    fn remaps_saved_with_an_event_node_adopt_the_keyboard_found_there() {
+        let mut app = app();
+        let magic = magic_at("/dev/input/event3");
+        let scope = magic.id.scope_id();
+        let remap = |tap: &str, device: &str| Mapping {
+            tap: Some(tap.to_owned()),
+            device: device.to_owned(),
+            ..Mapping::default()
+        };
+        app.profile_maps.insert(
+            "default".to_owned(),
+            vec![
+                ("CapsLock".to_owned(), remap("Escape", "/dev/input/event3")),
+                ("KeyA".to_owned(), remap("B", "/dev/input/event5")),
+                ("F1".to_owned(), remap("F2", &scope)),
+                ("F1".to_owned(), remap("F3", "/dev/input/event3")),
+            ],
+        );
+        let mut layer = model::navigation_layer();
+        layer.keys[0].device = "/dev/input/event3".to_owned();
+        app.profile_layers.insert("default".to_owned(), vec![layer]);
+
+        let _ = app.update(Message::Monitor(monitor::Event::Started(vec![magic])));
+        let devices: Vec<&str> = app
+            .maps()
+            .iter()
+            .map(|(_, mapping)| mapping.device.as_str())
+            .collect();
+        assert_eq!(
+            devices,
+            [
+                scope.as_str(),
+                "/dev/input/event5",
+                scope.as_str(),
+                "/dev/input/event3"
+            ],
+            "the keyboard's own F1 remap wins over the node's"
+        );
+        assert_eq!(app.layers()[0].keys[0].device, scope);
+        assert!(app.saved_keyboards.contains_key(&scope));
+        let generated = yaml(&app);
+        assert!(
+            generated.contains("      only: ['ids:0x004c:0x029a']\n"),
+            "{generated}"
+        );
+        assert!(!generated.contains("KEY_A: KEY_B"), "{generated}");
+
+        // The remapper's own keyboard taking that node is not the user's.
+        let mut output = test_device("/dev/input/event5", "xremap", keyboard::FORM_FULL, false);
+        output.virtual_device = true;
+        let _ = app.update(Message::Monitor(monitor::Event::Connected(output)));
+        assert_eq!(app.maps()[1].1.device, "/dev/input/event5");
     }
 
     #[test]
@@ -5809,7 +6294,8 @@ mod tests {
 
         for scope in ["all", "/dev/input/event0"] {
             let mut app = app();
-            let _ = app.update(Message::SelectDevice(scope.to_owned()));
+            let _ = app.update(two_keyboards());
+            let _ = app.update(Message::SelectDevice(keyboard_at(&app, scope)));
             let _ = app.update(Message::SelectKey("CapsLock"));
             app.phys_press(&first, K::KEY_A.0);
             app.phys_press(&second, K::KEY_B.0);
@@ -5847,8 +6333,12 @@ mod tests {
     fn tester_filters_physical_keys_and_modifiers_by_device() {
         use evdev::KeyCode as K;
         let mut app = app();
+        let _ = app.update(two_keyboards());
         let _ = app.update(Message::SetView(View::Tester));
-        let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         let key = |device: &str, event| {
             Message::Monitor(monitor::Event::Key {
                 device: PathBuf::from(device),
@@ -5910,6 +6400,7 @@ mod tests {
     fn tester_filter_switches_keep_held_state_and_clear_last_key() {
         use evdev::KeyCode as K;
         let mut app = app();
+        let _ = app.update(two_keyboards());
         let first = PathBuf::from("/dev/input/event0");
         let second = PathBuf::from("/dev/input/event1");
         app.phys_press(&first, K::KEY_A.0);
@@ -5923,12 +6414,18 @@ mod tests {
         assert!(app.is_pressed(K::KEY_A.0));
         assert_eq!(app.held_mods(), [false, true, false, false]);
 
-        let _ = app.update(Message::SelectDevice(first.to_string_lossy().into_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         assert!(app.last.is_none());
         assert!(app.is_pressed(K::KEY_A.0));
         assert_eq!(app.held_mods(), [false; 4]);
         app.phys_press(&first, K::KEY_B.0);
-        let _ = app.update(Message::SelectDevice(second.to_string_lossy().into_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event1",
+        )));
         assert!(app.last.is_none());
         assert!(!app.is_pressed(K::KEY_A.0));
         assert_eq!(app.held_mods(), [false, true, false, false]);
@@ -5936,7 +6433,10 @@ mod tests {
         let _ = app.update(Message::SelectDevice("all".to_owned()));
         assert!(app.is_pressed(K::KEY_A.0));
         assert_eq!(app.held_mods(), [false, true, false, false]);
-        let _ = app.update(Message::SelectDevice(first.to_string_lossy().into_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event0",
+        )));
         let _ = app.update(Message::SetView(View::Keyboard));
         assert_eq!(
             app.held_mods(),
@@ -5954,7 +6454,10 @@ mod tests {
             let mut app = app();
             let _ = app.update(started(keyboard::FORM_FULL, true));
             let _ = app.update(Message::SetView(View::Tester));
-            let _ = app.update(Message::SelectDevice("/dev/input/event0".to_owned()));
+            let _ = app.update(Message::SelectDevice(keyboard_at(
+                &app,
+                "/dev/input/event0",
+            )));
             app.phys_press(&PathBuf::from("/dev/input/event0"), K::KEY_LEFTSHIFT.0);
             let _ = app.update(Message::Monitor(monitor::Event::Disconnected(
                 PathBuf::from("/dev/input/event0"),
@@ -5963,7 +6466,7 @@ mod tests {
             let _ = app.update(connected(path, "Test Keyboard", keyboard::FORM_FULL, true));
             assert_eq!(app.devices.len(), 1);
             assert!(app.devices[0].connected);
-            assert_eq!(app.device, path);
+            assert_eq!(app.device, keyboard_at(&app, path));
             let _ = app.update(Message::Monitor(monitor::Event::Key {
                 device: PathBuf::from(path),
                 event: monitor::KeyEvent::Pressed(K::KEY_A.0),
@@ -6032,7 +6535,10 @@ mod tests {
         let mut app = app();
         let _ = app.update(remapped_pair());
         let _ = app.update(Message::SetView(View::Tester));
-        let _ = app.update(Message::SelectDevice("/dev/input/event5".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event5",
+        )));
         assert!(
             app.grabbed_selection().is_none(),
             "nothing is held before the monitor reports a grab"
@@ -6054,7 +6560,10 @@ mod tests {
         assert!(!subs.iter().any(|sub| sub.contains("held by remapping")));
 
         // Selecting a keyboard the remapper leaves alone is unaffected.
-        let _ = app.update(Message::SelectDevice("/dev/input/event19".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event19",
+        )));
         assert!(app.grabbed_selection().is_none());
         let _ = app.update(Message::SelectDevice("all".to_owned()));
         assert!(
@@ -6063,7 +6572,10 @@ mod tests {
         );
 
         // Releasing the keyboards clears the notice.
-        let _ = app.update(Message::SelectDevice("/dev/input/event5".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event5",
+        )));
         let _ = app.update(grabbed(&[]));
         assert!(app.grabbed_selection().is_none());
     }
@@ -6322,7 +6834,7 @@ mod tests {
     }
 
     fn yaml(app: &App) -> String {
-        crate::xremap::generate(app.rules(), |id| id.to_owned())
+        crate::xremap::generate(app.rules(), &app.known_keyboards())
     }
 
     fn toast_text(app: &App) -> &str {
@@ -6631,17 +7143,22 @@ mod tests {
         ));
         let _ = app.update(Message::AddLayer);
         let _ = app.update(Message::SelectKey("CapsLock"));
-        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event1",
+        )));
         let _ = app.update(Message::SelectKey("KeyH"));
         let _ = app.update(Message::PickAction("Arrow Left".to_owned()));
         assert_eq!(
             layer(&app, "layer-1").key("KeyH").unwrap().device,
-            "/dev/input/event1"
+            keyboard_at(&app, "/dev/input/event1")
         );
+        let yaml = crate::xremap::generate(app.rules(), &app.known_keyboards());
         assert!(
-            crate::xremap::generate(app.rules(), |id| app.device_label(id)).contains(
-                "    device:\n      only: ['Laptop']\n    remap:\n      KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"
-            )
+            yaml.contains(
+                "hold Caps Lock (Laptop)'\n    device:\n      only: ['ids:0x0001:0x0001']\n    remap:\n      KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"
+            ),
+            "{yaml}"
         );
     }
 
@@ -7015,7 +7532,10 @@ mod tests {
         let _ = app.update(Message::SelectKey("CapsLock"));
         let _ = app.update(Message::PickAction("Escape".to_owned()));
         let _ = app.update(Message::ClosePanel);
-        let _ = app.update(Message::SelectDevice("/dev/input/event1".to_owned()));
+        let _ = app.update(Message::SelectDevice(keyboard_at(
+            &app,
+            "/dev/input/event1",
+        )));
         let inherited = app.effective_mapping("CapsLock").unwrap();
         assert!(!inherited.own);
         assert_eq!(app.inherited_from(inherited.mapping), "all keyboards");
@@ -7026,7 +7546,8 @@ mod tests {
         assert_eq!(app.maps().len(), 2);
         assert_eq!(
             app.own_mapping("CapsLock").unwrap().device,
-            "/dev/input/event1"
+            keyboard_at(&app, "/dev/input/event1"),
+            "the remap names the keyboard, not its event node"
         );
         let _ = app.update(Message::SelectDevice("all".to_owned()));
         assert_eq!(

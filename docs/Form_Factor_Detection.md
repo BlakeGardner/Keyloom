@@ -32,7 +32,9 @@ aggregation), [`src/ui/model.rs`](../src/ui/model.rs) (the decks), and
 - A disconnected selection keeps its last known guess and manual choices.
   Reconnecting a matching device restores the selection even if its event
   node changes. If an unrelated keyboard reuses the selected event node,
-  selection returns to **All keyboards**.
+  selection returns to **All keyboards**. A keyboard not seen since launch,
+  listed for its remaps, shows its manual choices, or its model's size and
+  variant when Keyloom recognises it.
 - Layout choices belong to keyboards, independently of remap profiles.
   Changing size or variant preserves mappings, including keys hidden by a
   smaller deck, and does not regenerate remaps or restart xremap.

@@ -243,6 +243,22 @@ first-run setup installs that unit and walks through the input permissions
   keyboard; with that keyboard selected in "Applies to", the deck shows its
   own mapping, or the all-keyboards one faded, and edits made there apply to
   that keyboard alone.
+- Remaps and layer jobs limited to a keyboard belong to the keyboard
+  itself, known by the same identity as its display choices (see
+  [Form_Factor_Detection.md](Form_Factor_Detection.md#saved-identity)),
+  not to the `/dev/input/event*` node it happens to use. They stay with it
+  when it comes back on another node, across restarts, and when another
+  keyboard takes its old node. Keyloom remembers such a keyboard's name
+  and ids, so its remaps apply as soon as it returns, and while it is
+  unplugged "Applies to" lists it as "Not connected", where its remaps
+  can still be edited. Remaps saved by earlier versions named the event
+  node; each goes to the keyboard Keyloom next finds at that node, the one
+  it was matched against before, and applies nowhere until then.
+- Limitations: a keyboard without a serial number is known by its port,
+  so moved to another one it is listed again as a new keyboard; its
+  remaps keep applying but stay with the old entry. Two keyboards of the
+  same model and name cannot be told apart, so a remap limited to one
+  applies to both.
 - Best-effort form-factor and ANSI/ISO guesses per device from its name and
   reported keys, used for the selected keyboard's deck in both Keyboard and Tester.
   "All keyboards" uses an aggregate guess from connected keyboards (see
@@ -343,7 +359,8 @@ commitment. What an approach would have to solve is noted in
 ## Persistence and generated configuration
 
 - Profiles with their mappings, layers, application scopes, and shortcut
-  groups (plus the active profile) are stored via cosmic-config under
+  groups (plus the active profile, and the name and ids of each keyboard
+  a remap is limited to) are stored via cosmic-config under
   `~/.config/cosmic/io.github.blakegardner.Keyloom/` and restored on launch;
   a fresh install seeds the Default profile and the starter profiles, which
   persist like any other from then on. Profiles saved before layers,
@@ -364,11 +381,14 @@ commitment. What an approach would have to solve is noted in
 - The generator translates friendly action names into xremap `KEY_*` names
   and emits one `modmap` block per scope: filtered on the application scope's
   ids (`application.only`), on the keyboard (`device.only`), on both, or on
-  neither. Blocks come most specific first, in the precedence order above,
-  because xremap uses the first block that mentions a key and whose filters
-  match. Tap/hold renders as `held`/`alone`, two-way swaps as two entries,
-  Disabled keys as an empty output (`[]`), and "normal here" as the key
-  mapped to itself.
+  neither. A keyboard is matched by its vendor and product ids
+  (`ids:0x004c:0x029a`), because xremap also finds a name inside longer
+  names; by its name only when it reports no ids, or when another keyboard
+  Keyloom knows reports the same ones. Blocks come most specific first, in
+  the precedence order above, because xremap uses the first block that
+  mentions a key and whose filters match. Tap/hold renders as
+  `held`/`alone`, two-way swaps as two entries, Disabled keys as an empty
+  output (`[]`), and "normal here" as the key mapped to itself.
 - Layers become xremap `virtual_modifiers` plus `keymap` rules. Each layer
   key is remapped to a stand-in virtual modifier (braille-dot key codes,
   which no keyboard emits and xremap never passes on), as the hold side of a
