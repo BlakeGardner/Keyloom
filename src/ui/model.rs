@@ -2,6 +2,7 @@
 //! key geometry, the action catalog, and the starter profiles seeded
 //! on first launch, plus the per-form-factor deck assembly.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use evdev::KeyCode;
@@ -1307,7 +1308,10 @@ pub fn auto_group(code: &str) -> &'static str {
 pub struct Mapping {
     pub tap: Option<String>,
     pub hold: Option<String>,
-    /// Device scope id (`all` or a specific keyboard id).
+    /// Device scope id: `all`, or one keyboard's
+    /// [`crate::monitor::KeyboardId::scope_id`]. Profiles saved before
+    /// keyboards had one hold the keyboard's `/dev/input/event*` node
+    /// until a keyboard is seen there.
     pub device: String,
     /// Application scope id ([`AppScope::id`]); empty for every
     /// application. Absent from stores written before application
@@ -1363,6 +1367,42 @@ pub fn same_device(a: &str, b: &str) -> bool {
     (every_device(a) && every_device(b)) || a == b
 }
 
+/// A keyboard that a device scope id names, as Keyloom last saw it.
+/// Kept with the profiles, so a remap limited to a keyboard still names
+/// and matches it while the keyboard is unplugged.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedKeyboard {
+    /// The name the keyboard reports.
+    pub name: String,
+    /// Its USB or Bluetooth vendor and product ids; zero when it
+    /// reports none.
+    pub vendor: u16,
+    pub product: u16,
+}
+
+/// Keyboards by device scope id.
+pub type Keyboards = BTreeMap<String, SavedKeyboard>;
+
+/// Every keyboard (by device scope id) that some of these mappings and
+/// layer jobs are limited to.
+pub fn keyboard_scopes<'a>(
+    maps: impl IntoIterator<Item = &'a Maps>,
+    layers: impl IntoIterator<Item = &'a Vec<Layer>>,
+) -> BTreeSet<&'a str> {
+    let mapped = maps
+        .into_iter()
+        .flatten()
+        .map(|(_, mapping)| mapping.device.as_str());
+    let jobs = layers
+        .into_iter()
+        .flatten()
+        .flat_map(|layer| layer.keys.iter().map(|key| key.device.as_str()));
+    mapped
+        .chain(jobs)
+        .filter(|device| !every_device(device))
+        .collect()
+}
+
 /// Precedence of a scope, lowest first. Among the mappings of one key
 /// that apply somewhere, the most specific wins: an application's
 /// remap beats a keyboard's (an exception made for an application has
@@ -1384,7 +1424,7 @@ pub struct LayerKey {
     pub code: String,
     /// Action from the catalog, or `Disabled`.
     pub action: String,
-    /// Device scope id (`all` or a specific keyboard id).
+    /// Device scope id, as for [`Mapping::device`].
     pub device: String,
     /// Application scope id; empty for every application. Absent from
     /// older stores.

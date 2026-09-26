@@ -43,7 +43,8 @@ pub enum KeyEvent {
 #[derive(Clone, Debug)]
 pub struct KeyboardDevice {
     pub path: PathBuf,
-    /// Identity used to restore display preferences across event-node changes.
+    /// Identity that display preferences and remaps limited to this
+    /// keyboard follow across event-node changes.
     pub id: KeyboardId,
     pub name: String,
     pub connected: bool,
@@ -92,6 +93,54 @@ impl KeyboardId {
             product: input.product(),
             location,
         }
+    }
+
+    /// The USB or Bluetooth vendor id; zero when the device reports none.
+    pub fn vendor(&self) -> u16 {
+        self.vendor
+    }
+
+    /// The product id; zero when the device reports none.
+    pub fn product(&self) -> u16 {
+        self.product
+    }
+
+    /// The device scope id that remaps and layer jobs limited to this
+    /// keyboard store ([`crate::ui::model::Mapping::device`]): bus,
+    /// vendor, and product as four hex digits each, then what tells the
+    /// unit apart, such as `0005:004c:029a:uniq=a4:83:e7:0b:52:10`. It
+    /// is saved with the profiles, so its form must not change.
+    pub fn scope_id(&self) -> String {
+        let (kind, value) = match &self.location {
+            KeyboardLocation::Unique(value) => ("uniq", value),
+            KeyboardLocation::Physical(value) => ("phys", value),
+            KeyboardLocation::Name(value) => ("name", value),
+        };
+        format!(
+            "{:04x}:{:04x}:{:04x}:{kind}={value}",
+            self.bus, self.vendor, self.product
+        )
+    }
+
+    /// The identity a [`Self::scope_id`] was made from, or `None` for
+    /// text that is not one (such as a scope saved as an event node).
+    pub fn from_scope_id(id: &str) -> Option<Self> {
+        let mut parts = id.splitn(4, ':');
+        let mut number = || u16::from_str_radix(parts.next()?, 16).ok();
+        let (bus, vendor, product) = (number()?, number()?, number()?);
+        let (kind, value) = parts.next()?.split_once('=')?;
+        let location = match kind {
+            "uniq" => KeyboardLocation::Unique(value.to_owned()),
+            "phys" => KeyboardLocation::Physical(value.to_owned()),
+            "name" => KeyboardLocation::Name(value.to_owned()),
+            _ => return None,
+        };
+        Some(Self {
+            bus,
+            vendor,
+            product,
+            location,
+        })
     }
 }
 
@@ -664,7 +713,7 @@ mod tests {
                 },
             );
             eprintln!(
-                "{}: {} ({:04x}:{:04x}) form {} iso {} virtual {} · {seen}",
+                "{}: {} ({:04x}:{:04x}) form {} iso {} virtual {} · {seen} · scope {}",
                 path.display(),
                 entry.name,
                 device.input_id().vendor(),
@@ -672,6 +721,7 @@ mod tests {
                 keyboard::FORM_FACTORS[entry.form].name,
                 entry.iso,
                 entry.virtual_device,
+                entry.id.scope_id(),
             );
         }
     }
@@ -746,6 +796,65 @@ mod tests {
                 "Keyboard"
             )
         );
+    }
+
+    /// Remaps store the scope id, so its text is pinned: a keyboard has
+    /// to keep the same one across event nodes, ports (given a serial),
+    /// firmware versions, and releases of Keyloom.
+    #[test]
+    fn scope_ids_are_fixed_text_that_follows_the_identity() {
+        let magic = InputId::new(evdev::BusType::BUS_BLUETOOTH, 0x004c, 0x029a, 0x0101);
+        let unique = KeyboardId::new(
+            magic.clone(),
+            Some("a4:83:e7:0b:52:10"),
+            Some("dc:41:a9:6f:12:34"),
+            "Magic Keyboard",
+        );
+        assert_eq!(unique.scope_id(), "0005:004c:029a:uniq=a4:83:e7:0b:52:10");
+        let usb = InputId::new(evdev::BusType::BUS_USB, 0x3434, 0x0220, 0x0100);
+        assert_eq!(
+            KeyboardId::new(usb.clone(), None, Some("usb-0000:00:14.0-2/input0"), "K2").scope_id(),
+            "0003:3434:0220:phys=usb-0000:00:14.0-2/input0"
+        );
+        assert_eq!(
+            KeyboardId::new(usb, None, None, "Keychron K2 Pro").scope_id(),
+            "0003:3434:0220:name=Keychron K2 Pro"
+        );
+
+        let updated = InputId::new(evdev::BusType::BUS_BLUETOOTH, 0x004c, 0x029a, 0x0200);
+        assert_eq!(
+            KeyboardId::new(updated, Some("a4:83:e7:0b:52:10"), None, "Renamed").scope_id(),
+            unique.scope_id(),
+            "a new firmware version or name leaves the unit's id alone"
+        );
+        assert_ne!(
+            KeyboardId::new(magic, Some("a4:83:e7:0b:52:11"), None, "Magic Keyboard").scope_id(),
+            unique.scope_id(),
+            "another unit of the model has an id of its own"
+        );
+    }
+
+    /// A keyboard remembered only by its scope id still has its display
+    /// choices, which are saved by identity.
+    #[test]
+    fn scope_ids_read_back_as_the_identity_they_came_from() {
+        let input = InputId::new(evdev::BusType::BUS_USB, 0x3434, 0x0220, 1);
+        for id in [
+            KeyboardId::new(input.clone(), Some("a4:83=e7"), None, "K2"),
+            KeyboardId::new(input.clone(), None, Some("usb-0000:00:14.0-2/input0"), "K2"),
+            KeyboardId::new(input, None, None, "Name: with = signs"),
+        ] {
+            assert_eq!(KeyboardId::from_scope_id(&id.scope_id()), Some(id));
+        }
+        for other in [
+            "all",
+            "",
+            "/dev/input/event7",
+            "0003:3434:0220",
+            "0003:3434:0220:serial=1",
+        ] {
+            assert_eq!(KeyboardId::from_scope_id(other), None, "{other}");
+        }
     }
 
     /// Stand in for a reader blocked waiting for device events.

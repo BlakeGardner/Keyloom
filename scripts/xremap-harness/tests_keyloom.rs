@@ -1,12 +1,16 @@
-//! Keyloom's generated layer and application configurations, run
-//! through xremap's own event handler. This file is compiled inside a
-//! checkout of xremap by `scripts/verify-layers-with-xremap.sh`, which
-//! also dumps the documents it reads from `keyloom/` next to it.
+//! Keyloom's generated layer, application, and keyboard
+//! configurations, run through xremap's own event handler. This file is
+//! compiled inside a checkout of xremap by
+//! `scripts/verify-layers-with-xremap.sh`, which also dumps the
+//! documents it reads from `keyloom/` next to it.
 
 use crate::action::Action;
+use crate::device::InputDeviceInfo;
 use crate::event::{Event, KeyEvent, KeyValue};
 use crate::tests::{assert_actions, assert_actions_with_current_application};
 use evdev::KeyCode as Key;
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 const NAVIGATION: &str = include_str!("keyloom/navigation.yml");
@@ -15,6 +19,7 @@ const REMAPPED_KEY: &str = include_str!("keyloom/remapped-key.yml");
 const APP_SCOPED: &str = include_str!("keyloom/app-scoped.yml");
 const SIDED_MODIFIERS: &str = include_str!("keyloom/sided-modifiers.yml");
 const MEDIA_ANY_MODIFIER: &str = include_str!("keyloom/media-any-modifier.yml");
+const KEYBOARD_SCOPED: &str = include_str!("keyloom/keyboard-scoped.yml");
 
 fn press(key: Key) -> Action {
     Action::KeyEvent(KeyEvent::new(key, KeyValue::Press))
@@ -433,5 +438,65 @@ fn keyloom_any_modifier_drops_the_held_modifier_and_leaves_the_plain_key() {
             Event::key_release(Key::KEY_VOLUMEUP),
         ],
         vec![press(Key::KEY_VOLUMEUP), release(Key::KEY_VOLUMEUP)],
+    );
+}
+
+/// Key events from one of Apple's keyboards, as xremap sees them: the
+/// name the keyboard reports and its product id.
+fn typed_on(name: &str, product: u16, keys: &[(Key, KeyValue)]) -> Vec<Event> {
+    let device = Rc::new(InputDeviceInfo {
+        name: name.into(),
+        path: PathBuf::from("/dev/input/event3"),
+        vendor: 0x004c,
+        product,
+    });
+    keys.iter()
+        .map(|&(key, value)| Event::KeyEvent(device.clone(), KeyEvent::new(key, value)))
+        .collect()
+}
+
+/// A mapping and a layer job limited to the Magic Keyboard apply to it
+/// alone: the keypad model, whose name contains "Magic Keyboard", keeps
+/// A and the layer's H as they are, because the filter names the
+/// keyboard's ids rather than its name.
+#[test]
+fn keyloom_keyboard_scope_matches_its_ids_not_a_longer_name() {
+    let magic = |keys: &[(Key, KeyValue)]| typed_on("Magic Keyboard", 0x029a, keys);
+    let keypad = |keys: &[(Key, KeyValue)]| {
+        typed_on("Magic Keyboard with Numeric Keypad", 0x029c, keys)
+    };
+    let a = [(Key::KEY_A, KeyValue::Press), (Key::KEY_A, KeyValue::Release)];
+    assert_actions(
+        KEYBOARD_SCOPED,
+        magic(&a),
+        vec![press(Key::KEY_B), release(Key::KEY_B)],
+    );
+    assert_actions(
+        KEYBOARD_SCOPED,
+        keypad(&a),
+        vec![press(Key::KEY_A), release(Key::KEY_A)],
+    );
+
+    let layer_h = [
+        (Key::KEY_CAPSLOCK, KeyValue::Press),
+        (Key::KEY_H, KeyValue::Press),
+        (Key::KEY_H, KeyValue::Release),
+        (Key::KEY_CAPSLOCK, KeyValue::Release),
+    ];
+    assert_actions(
+        KEYBOARD_SCOPED,
+        magic(&layer_h),
+        vec![
+            press(Key::KEY_LEFT),
+            release(Key::KEY_LEFT),
+            delay(),
+            delay(),
+            release(Key::KEY_H),
+        ],
+    );
+    assert_actions(
+        KEYBOARD_SCOPED,
+        keypad(&layer_h),
+        vec![press(Key::KEY_H), release(Key::KEY_H)],
     );
 }

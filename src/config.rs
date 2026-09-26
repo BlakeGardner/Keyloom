@@ -11,7 +11,7 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry, cosmic_config_derive::Cosmi
 use serde::{Deserialize, Serialize};
 
 use crate::monitor::KeyboardId;
-use crate::ui::model::{AppScope, Group, Layer, Maps, Profile};
+use crate::ui::model::{self, AppScope, Group, Keyboards, Layer, Maps, Profile};
 
 /// The application id, shared with the `cosmic::Application` impl.
 pub const APP_ID: &str = "io.github.blakegardner.Keyloom";
@@ -42,6 +42,9 @@ pub struct ProfileState {
     pub layers: HashMap<String, Vec<Layer>>,
     pub apps: HashMap<String, Vec<AppScope>>,
     pub groups: HashMap<String, Vec<Group>>,
+    /// The keyboards that mappings and layer jobs are limited to, by
+    /// device scope id.
+    pub keyboards: Keyboards,
     /// The active profile id, falling back to the first profile.
     pub active: String,
     pub custom_profiles: u32,
@@ -101,6 +104,10 @@ pub struct KeyloomConfig {
     pub setup: SetupState,
     /// Absent from stores written before the deck could be zoomed.
     pub deck_zoom: DeckZoom,
+    /// The keyboards remaps are limited to, so they keep naming and
+    /// matching them while unplugged. Absent from stores written before
+    /// keyboards were remembered, whose remaps name event nodes instead.
+    pub keyboards: Keyboards,
 }
 
 impl KeyloomConfig {
@@ -149,6 +156,7 @@ impl KeyloomConfig {
             keyboard_layouts: keyboard_layouts.clone(),
             setup,
             deck_zoom,
+            keyboards: state.keyboards.clone(),
         }
     }
 
@@ -168,6 +176,13 @@ impl KeyloomConfig {
             state.apps.insert(stored.id.clone(), stored.apps);
             state.groups.insert(stored.id, stored.groups);
         }
+        // Keyboards no remap refers to anymore are forgotten.
+        let scoped = model::keyboard_scopes(state.maps.values(), state.layers.values());
+        state.keyboards = self
+            .keyboards
+            .into_iter()
+            .filter(|(id, _)| scoped.contains(id.as_str()))
+            .collect();
         state.active = if state
             .profiles
             .iter()
@@ -187,7 +202,19 @@ impl KeyloomConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::model::{AppRef, Chord, Mapping, Rule, navigation_layer};
+    use crate::ui::model::{AppRef, Chord, Mapping, Rule, SavedKeyboard, navigation_layer};
+
+    /// A Bluetooth Magic Keyboard's scope id and what is saved for it.
+    fn magic_keyboard() -> (String, SavedKeyboard) {
+        (
+            "0005:004c:029a:uniq=a4:83:e7:0b:52:10".to_owned(),
+            SavedKeyboard {
+                name: "Magic Keyboard".to_owned(),
+                vendor: 0x004c,
+                product: 0x029a,
+            },
+        )
+    }
 
     /// A scope covering one application, for the tests.
     fn terminal_scope() -> AppScope {
@@ -236,27 +263,40 @@ mod tests {
                 name: "Untitled 1".to_owned(),
             },
         ];
+        let (magic, keyboard) = magic_keyboard();
         let mut maps = HashMap::new();
         maps.insert(
             "custom-1".to_owned(),
-            vec![(
-                "CapsLock".to_owned(),
-                Mapping {
-                    tap: Some("Escape".to_owned()),
-                    device: "all".to_owned(),
-                    ..Mapping::default()
-                },
-            )],
+            vec![
+                (
+                    "CapsLock".to_owned(),
+                    Mapping {
+                        tap: Some("Escape".to_owned()),
+                        device: "all".to_owned(),
+                        ..Mapping::default()
+                    },
+                ),
+                (
+                    "MetaLeft".to_owned(),
+                    Mapping {
+                        tap: Some("Left Control".to_owned()),
+                        device: magic.clone(),
+                        ..Mapping::default()
+                    },
+                ),
+            ],
         );
         let layers = HashMap::from([("custom-1".to_owned(), vec![navigation_layer()])]);
         let apps = HashMap::from([("custom-1".to_owned(), vec![terminal_scope()])]);
         let groups = HashMap::from([("custom-1".to_owned(), vec![terminal_group()])]);
+        let keyboards = Keyboards::from([(magic, keyboard)]);
         let state = ProfileState {
             profiles: profiles.clone(),
             maps: maps.clone(),
             layers: layers.clone(),
             apps: apps.clone(),
             groups: groups.clone(),
+            keyboards: keyboards.clone(),
             active: "custom-1".to_owned(),
             custom_profiles: 1,
         };
@@ -295,8 +335,60 @@ mod tests {
         assert_eq!(restored.groups.get("custom-1"), groups.get("custom-1"));
         assert_eq!(restored.apps.get("default"), Some(&Vec::new()));
         assert_eq!(restored.groups.get("default"), Some(&Vec::new()));
+        assert_eq!(restored.keyboards, keyboards);
         assert_eq!(restored.active, "custom-1");
         assert_eq!(restored.custom_profiles, 1);
+    }
+
+    /// A keyboard is remembered for as long as some remap or layer job
+    /// in some profile is limited to it.
+    #[test]
+    fn keyboards_no_remap_refers_to_are_forgotten_on_load() {
+        let (magic, keyboard) = magic_keyboard();
+        let mut layer = navigation_layer();
+        layer.keys[0].device = "0003:3434:0220:phys=usb-1".to_owned();
+        let config = KeyloomConfig {
+            profiles: vec![StoredProfile {
+                id: "mac".to_owned(),
+                name: "Mac".to_owned(),
+                mappings: vec![(
+                    "MetaLeft".to_owned(),
+                    Mapping {
+                        tap: Some("Left Control".to_owned()),
+                        device: magic.clone(),
+                        ..Mapping::default()
+                    },
+                )],
+                layers: vec![layer],
+                ..StoredProfile::default()
+            }],
+            keyboards: Keyboards::from([
+                (magic.clone(), keyboard.clone()),
+                (
+                    "0003:3434:0220:phys=usb-1".to_owned(),
+                    SavedKeyboard {
+                        name: "Keychron K2".to_owned(),
+                        vendor: 0x3434,
+                        product: 0x0220,
+                    },
+                ),
+                (
+                    "0003:046d:c52b:uniq=gone".to_owned(),
+                    SavedKeyboard {
+                        name: "Unused".to_owned(),
+                        ..SavedKeyboard::default()
+                    },
+                ),
+            ]),
+            ..KeyloomConfig::default()
+        };
+        let state = config.into_state();
+        assert_eq!(
+            state.keyboards.keys().collect::<Vec<_>>(),
+            [&"0003:3434:0220:phys=usb-1".to_owned(), &magic],
+            "the layer job's keyboard and the mapping's stay"
+        );
+        assert_eq!(state.keyboards.get(&magic), Some(&keyboard));
     }
 
     #[test]
@@ -373,6 +465,7 @@ mod tests {
             },
             setup: SetupState::Complete,
             deck_zoom: DeckZoom::Percent(150),
+            keyboards: Keyboards::from([magic_keyboard()]),
         };
         config.write_entry(&handle).unwrap();
         assert_eq!(KeyloomConfig::load(&handle), config);
@@ -411,6 +504,10 @@ mod tests {
             loaded.deck_zoom,
             DeckZoom::Fit,
             "a store from before zooming shows the deck fitted to the window"
+        );
+        assert!(
+            loaded.keyboards.is_empty(),
+            "a store from before keyboards were remembered has none"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

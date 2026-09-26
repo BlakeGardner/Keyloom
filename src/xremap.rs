@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 
 use evdev::KeyCode;
 
-use crate::ui::model::{self, AppScope, Chord, Group, Layer, Mapping, Maps, ModifierSide};
+use crate::ui::model::{
+    self, AppScope, Chord, Group, Keyboards, Layer, Mapping, Maps, ModifierSide, SavedKeyboard,
+};
 
 /// First line of every file Keyloom generates. Files that don't start
 /// with this marker are treated as foreign and never silently replaced.
@@ -125,11 +127,13 @@ struct AppAxis {
     matchers: Vec<String>,
 }
 
-/// A keyboard as a block filter: xremap matches on the resolved name.
+/// A keyboard as a block filter: its name for the block's title, and
+/// what xremap matches it by (see [`device_filter`]).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct DeviceAxis {
     name: String,
     id: String,
+    filter: String,
 }
 
 /// Where a block applies: an application scope or every application,
@@ -203,7 +207,7 @@ impl Scope {
         if let Some(device) = &self.device {
             filters.push_str(&format!(
                 "    device:\n      only: [{}]\n",
-                quote(&device.name)
+                quote(&device.filter)
             ));
         }
         filters
@@ -211,15 +215,17 @@ impl Scope {
 }
 
 /// Resolves the scope ids stored with mappings, jobs, and groups.
-struct Places<'a, F> {
+struct Places<'a> {
     apps: &'a [AppScope],
-    device_name: F,
+    keyboards: &'a Keyboards,
 }
 
-impl<F: Fn(&str) -> String> Places<'_, F> {
+impl Places<'_> {
     /// The scope for a device id and an application scope id, or
     /// `None` when nothing can apply there: the application scope no
-    /// longer exists, or it has no applications.
+    /// longer exists or has no applications, or the keyboard is one
+    /// Keyloom does not know, such as a scope stored as an event node
+    /// no keyboard has held since.
     fn scope(&self, device: &str, app: &str) -> Option<Scope> {
         let app = if app.is_empty() {
             None
@@ -235,11 +241,37 @@ impl<F: Fn(&str) -> String> Places<'_, F> {
                 matchers,
             })
         };
-        let device = (!model::every_device(device)).then(|| DeviceAxis {
-            name: (self.device_name)(device),
-            id: device.to_owned(),
-        });
+        let device = if model::every_device(device) {
+            None
+        } else {
+            let keyboard = self.keyboards.get(device)?;
+            Some(DeviceAxis {
+                name: keyboard.name.clone(),
+                id: device.to_owned(),
+                filter: device_filter(device, keyboard, self.keyboards),
+            })
+        };
         Some(Scope::new(app, device))
+    }
+}
+
+/// What a block's `device` filter matches a keyboard by. xremap takes
+/// either the vendor and product ids (`ids:0x004c:0x029a`) or a name,
+/// and it matches a name anywhere inside a device's name: a filter for
+/// "Magic Keyboard" also catches "Magic Keyboard with Numeric Keypad".
+/// So a keyboard is matched by its ids, and by its name only when it
+/// reports none, or when another keyboard Keyloom knows reports the
+/// same ones (a keyboard's second input node without a serial, or
+/// another model borrowing them). Two keyboards of one model and name
+/// cannot be told apart either way.
+fn device_filter(id: &str, keyboard: &SavedKeyboard, keyboards: &Keyboards) -> String {
+    let shared = keyboards.iter().any(|(other, seen)| {
+        other != id && seen.vendor == keyboard.vendor && seen.product == keyboard.product
+    });
+    if keyboard.vendor == 0 || keyboard.product == 0 || shared {
+        keyboard.name.clone()
+    } else {
+        format!("ids:{:#06x}:{:#06x}", keyboard.vendor, keyboard.product)
     }
 }
 
@@ -427,11 +459,11 @@ fn arrives_as(source: &str, mapping: &Mapping) -> Option<String> {
 /// rule, and a mapping overlapping only part of it (the key remapped on
 /// one keyboard, or in one application) adds a rule for that part. A
 /// symbol of `None` means the key never arrives there.
-fn rule_sources<F: Fn(&str) -> String>(
+fn rule_sources(
     code: &str,
     job: &Scope,
     maps: &Maps,
-    places: &Places<'_, F>,
+    places: &Places<'_>,
 ) -> Vec<(Scope, Option<String>)> {
     let Some(source) = key_symbol(code) else {
         return Vec::new();
@@ -474,11 +506,11 @@ fn rule_sources<F: Fn(&str) -> String>(
 }
 
 /// The `keymap` blocks for one layer, one per scope.
-fn layer_blocks<F: Fn(&str) -> String>(
+fn layer_blocks(
     layer: &ResolvedLayer<'_>,
     maps: &Maps,
     triggers: &Triggers,
-    places: &Places<'_, F>,
+    places: &Places<'_>,
 ) -> Vec<String> {
     // Source symbol → output (`None` emits nothing), per scope.
     let mut rules: BTreeMap<Scope, BTreeMap<String, Option<String>>> = BTreeMap::new();
@@ -572,7 +604,7 @@ fn chord_symbol(chord: &Chord) -> Option<String> {
 /// sides are the same changes nothing by itself and is left out, so
 /// the key keeps passing through (repeats included); with "any
 /// modifier" it still adds the entries that drop a held modifier.
-fn group_blocks<F: Fn(&str) -> String>(groups: &[Group], places: &Places<'_, F>) -> Vec<String> {
+fn group_blocks(groups: &[Group], places: &Places<'_>) -> Vec<String> {
     let mut blocks: Vec<(u8, String)> = Vec::new();
     for group in groups.iter().filter(|group| group.enabled) {
         let Some(scope) = places.scope("all", &group.scope) else {
@@ -623,14 +655,16 @@ fn group_blocks<F: Fn(&str) -> String>(groups: &[Group], places: &Places<'_, F>)
 /// Render a profile's mappings, layers, and shortcut groups as a
 /// complete xremap document.
 ///
-/// `device_name` resolves a device scope id to the display name xremap
-/// should match on. Blocks are written most specific scope first: an
-/// application scope's block, then a keyboard's, then the general one
-/// (see [`Scope`]).
-pub fn generate(rules: Rules<'_>, device_name: impl Fn(&str) -> String) -> String {
+/// `keyboards` are the keyboards Keyloom knows, by device scope id:
+/// what a keyboard's blocks are titled and filtered by, and what else
+/// a filter must not catch (see [`device_filter`]). Anything limited to
+/// a keyboard missing from them applies nowhere. Blocks are written
+/// most specific scope first: an application scope's block, then a
+/// keyboard's, then the general one (see [`Scope`]).
+pub fn generate(rules: Rules<'_>, keyboards: &Keyboards) -> String {
     let places = Places {
         apps: rules.apps,
-        device_name,
+        keyboards,
     };
     let layers = resolve_layers(rules.layers);
     let triggers: Triggers = layers
@@ -901,20 +935,24 @@ mod tests {
         }
     }
 
-    fn no_devices(id: &str) -> String {
-        id.to_owned()
+    /// No keyboards at all: only what applies to every keyboard.
+    fn no_devices() -> Keyboards {
+        Keyboards::new()
     }
 
-    fn kb1_named(id: &str) -> String {
-        if id == "kb1" {
-            "Keychron K2 Pro".to_owned()
-        } else {
-            id.to_owned()
-        }
+    /// A keyboard known by name alone, as scope `kb1`.
+    fn kb1_named() -> Keyboards {
+        Keyboards::from([(
+            "kb1".to_owned(),
+            SavedKeyboard {
+                name: "Keychron K2 Pro".to_owned(),
+                ..SavedKeyboard::default()
+            },
+        )])
     }
 
     /// Generate from mappings and layers alone, in every application.
-    fn generate(maps: &Maps, layers: &[Layer], device_name: impl Fn(&str) -> String) -> String {
+    fn generate(maps: &Maps, layers: &[Layer], keyboards: &Keyboards) -> String {
         super::generate(
             Rules {
                 maps,
@@ -922,13 +960,13 @@ mod tests {
                 apps: &[],
                 groups: &[],
             },
-            device_name,
+            keyboards,
         )
     }
 
     /// Generate without layers.
     fn without_layers(maps: &Maps) -> String {
-        generate(maps, &[], no_devices)
+        generate(maps, &[], &no_devices())
     }
 
     /// Tap/hold, swap, disabled, device-scoped, and application-scoped
@@ -977,7 +1015,7 @@ mod tests {
                 apps: &[terminal()],
                 groups: &representative_groups(),
             },
-            kb1_named,
+            &kb1_named(),
         )
     }
 
@@ -1030,7 +1068,7 @@ mod tests {
                 apps: &[],
                 groups: &groups,
             },
-            no_devices,
+            &no_devices(),
         );
         assert!(
             yaml.contains("      Shift-KEY_VOLUMEUP: KEY_VOLUMEUP\n"),
@@ -1168,13 +1206,85 @@ mod tests {
             map("CapsLock", Some("Escape"), None, "all", false),
             map("MetaLeft", Some("Alt"), None, "kb1", false),
         ];
-        let yaml = generate(&maps, &[], kb1_named);
+        let yaml = generate(&maps, &[], &kb1_named());
         let scoped = yaml
             .find("'Keyloom mappings (Keychron K2 Pro)'")
             .expect("scoped block");
         let unscoped = yaml.find("name: 'Keyloom mappings'\n").expect("all block");
         assert!(scoped < unscoped, "the keyboard's own block comes first");
         assert!(yaml.contains("    device:\n      only: ['Keychron K2 Pro']\n"));
+    }
+
+    fn keyboard(name: &str, vendor: u16, product: u16) -> SavedKeyboard {
+        SavedKeyboard {
+            name: name.to_owned(),
+            vendor,
+            product,
+        }
+    }
+
+    /// xremap finds a name filter inside longer names, so a keyboard is
+    /// matched by its vendor and product ids instead; by its name only
+    /// when it has none, or when another keyboard reports the same ones.
+    #[test]
+    fn keyboards_are_matched_by_their_ids_unless_another_keyboard_shares_them() {
+        let maps = vec![map("CapsLock", Some("Escape"), None, "magic", false)];
+        let magic = keyboard("Magic Keyboard", 0x004c, 0x029a);
+        let alone = Keyboards::from([("magic".to_owned(), magic.clone())]);
+        let yaml = generate(&maps, &[], &alone);
+        assert!(
+            yaml.contains(
+                "  - name: 'Keyloom mappings (Magic Keyboard)'\n\
+                 \x20   device:\n\
+                 \x20     only: ['ids:0x004c:0x029a']\n"
+            ),
+            "{yaml}"
+        );
+
+        // A keypad model that longer name belongs to changes nothing.
+        let mut known = alone.clone();
+        known.insert(
+            "keypad".to_owned(),
+            keyboard("Magic Keyboard with Numeric Keypad", 0x004c, 0x029c),
+        );
+        assert_eq!(generate(&maps, &[], &known), yaml);
+
+        // Another keyboard borrowing the same ids leaves only the name.
+        known.insert("clone".to_owned(), keyboard("Clone Board", 0x004c, 0x029a));
+        assert!(
+            generate(&maps, &[], &known).contains("      only: ['Magic Keyboard']\n"),
+            "ids a second keyboard reports tell neither apart"
+        );
+
+        // A keyboard reporting no ids is matched by its name.
+        let virtual_keyboard = Keyboards::from([("magic".to_owned(), keyboard("Virtual", 0, 0))]);
+        assert!(generate(&maps, &[], &virtual_keyboard).contains("      only: ['Virtual']\n"));
+        let half = Keyboards::from([("magic".to_owned(), keyboard("Half", 0x004c, 0))]);
+        assert!(
+            generate(&maps, &[], &half).contains("      only: ['Half']\n"),
+            "xremap takes a zero id for any, so both are needed"
+        );
+    }
+
+    /// A mapping or job limited to a keyboard Keyloom does not know,
+    /// like a scope stored as an event node no keyboard holds anymore,
+    /// is matched against nothing rather than whatever uses that node.
+    #[test]
+    fn nothing_applies_on_a_keyboard_keyloom_does_not_know() {
+        let maps = vec![
+            map("CapsLock", Some("Escape"), None, "/dev/input/event7", false),
+            map("KeyA", Some("B"), None, "all", false),
+        ];
+        let layers = vec![layer(
+            "nav",
+            "Space",
+            &[("KeyH", "Arrow Left", "/dev/input/event7")],
+        )];
+        let yaml = generate(&maps, &layers, &kb1_named());
+        assert!(!yaml.contains("device:"), "{yaml}");
+        assert!(!yaml.contains("KEY_CAPSLOCK"), "{yaml}");
+        assert!(!yaml.contains("KEY_BRL_DOT1-KEY_H"), "{yaml}");
+        assert!(yaml.contains("      KEY_A: KEY_B\n"));
     }
 
     #[test]
@@ -1269,7 +1379,7 @@ mod tests {
                 apps: &[code],
                 groups: &[],
             },
-            no_devices,
+            &no_devices(),
         );
         let expected = format!(
             "{MARKER}\n\
@@ -1303,7 +1413,7 @@ mod tests {
                 apps: &[terminal()],
                 groups: &[],
             },
-            kb1_named,
+            &kb1_named(),
         );
         let both = yaml
             .find("'Keyloom mappings (COSMIC Terminal, Keychron K2 Pro)'")
@@ -1332,7 +1442,7 @@ mod tests {
                 apps: &[scope("empty", "Nothing", &[])],
                 groups: &[],
             },
-            no_devices,
+            &no_devices(),
         );
         assert_eq!(yaml, without_layers(&Vec::new()));
     }
@@ -1359,7 +1469,7 @@ mod tests {
                 apps: &[terminal()],
                 groups: &[],
             },
-            no_devices,
+            &no_devices(),
         );
         assert!(
             yaml.contains(
@@ -1390,7 +1500,7 @@ mod tests {
                 apps: &[terminal()],
                 groups: &[],
             },
-            no_devices,
+            &no_devices(),
         );
         assert!(yaml.contains("      KEY_H: []\n"), "{yaml}");
         assert!(
@@ -1413,7 +1523,7 @@ mod tests {
                 apps: &[terminal()],
                 groups: &[],
             },
-            no_devices,
+            &no_devices(),
         );
         let normal = yaml
             .find("      KEY_CAPSLOCK: KEY_CAPSLOCK\n")
@@ -1440,7 +1550,7 @@ mod tests {
                 apps: &starter.apps,
                 groups: &starter.groups,
             },
-            no_devices,
+            &no_devices(),
         );
         let expected = format!(
             "{MARKER}\n\
@@ -1489,7 +1599,7 @@ mod tests {
                 apps: &[],
                 groups: &groups,
             },
-            no_devices,
+            &no_devices(),
         );
         assert!(
             yaml.contains("      KEY_RIGHTCTRL-KEY_C: Ctrl-Shift-KEY_C\n"),
@@ -1533,7 +1643,7 @@ mod tests {
                 apps: &[],
                 groups: &groups,
             },
-            no_devices,
+            &no_devices(),
         );
         let expected = format!(
             "{MARKER}\n\
@@ -1579,7 +1689,7 @@ mod tests {
                 apps: &[],
                 groups: &groups,
             },
-            no_devices,
+            &no_devices(),
         );
         let expected = format!(
             "{MARKER}\n\
@@ -1622,7 +1732,7 @@ mod tests {
     #[test]
     fn a_layer_key_becomes_a_virtual_modifier_with_rules() {
         let layers = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "all")])];
-        let yaml = generate(&Vec::new(), &layers, no_devices);
+        let yaml = generate(&Vec::new(), &layers, &no_devices());
         let expected = format!(
             "{MARKER}\n\
              modmap:\n\
@@ -1645,7 +1755,7 @@ mod tests {
     fn a_layer_key_keeps_its_tap_action() {
         let maps = vec![map("CapsLock", Some("Escape"), None, "all", false)];
         let layers = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "all")])];
-        let yaml = generate(&maps, &layers, no_devices);
+        let yaml = generate(&maps, &layers, &no_devices());
         assert!(
             yaml.contains(
                 "      KEY_CAPSLOCK:\n        held: KEY_BRL_DOT1\n        alone: KEY_ESC\n"
@@ -1666,7 +1776,7 @@ mod tests {
             "all",
             false,
         )];
-        let yaml = generate(&maps, &layers, no_devices);
+        let yaml = generate(&maps, &layers, &no_devices());
         assert!(yaml.contains("        held: KEY_BRL_DOT1\n        alone: KEY_ESC\n"));
         assert!(!yaml.contains("KEY_LEFTCTRL"));
 
@@ -1678,7 +1788,7 @@ mod tests {
                 "all",
                 false,
             )];
-            let yaml = generate(&maps, &layers, no_devices);
+            let yaml = generate(&maps, &layers, &no_devices());
             assert!(
                 yaml.contains("      KEY_CAPSLOCK: KEY_BRL_DOT1\n"),
                 "{tap}: {yaml}"
@@ -1695,20 +1805,20 @@ mod tests {
         let layers = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "all")])];
 
         let maps = vec![map("KeyH", Some("J"), None, "all", false)];
-        let yaml = generate(&maps, &layers, no_devices);
+        let yaml = generate(&maps, &layers, &no_devices());
         assert!(yaml.contains("      KEY_BRL_DOT1-KEY_J: KEY_LEFT\n"));
         assert!(!yaml.contains("-KEY_H:"));
 
         let maps = vec![map("KeyH", Some("J"), Some("Left Control"), "all", false)];
-        let yaml = generate(&maps, &layers, no_devices);
+        let yaml = generate(&maps, &layers, &no_devices());
         assert!(yaml.contains("      KEY_BRL_DOT1-KEY_J: KEY_LEFT\n"));
 
         let maps = vec![map("KeyH", None, Some("Left Control"), "all", false)];
-        let yaml = generate(&maps, &layers, no_devices);
+        let yaml = generate(&maps, &layers, &no_devices());
         assert!(yaml.contains("      KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"));
 
         let maps = vec![map("KeyH", Some("Disabled"), None, "all", false)];
-        let yaml = generate(&maps, &layers, no_devices);
+        let yaml = generate(&maps, &layers, &no_devices());
         assert!(!yaml.contains("keymap"), "{yaml}");
         assert!(
             yaml.contains("virtual_modifiers"),
@@ -1723,7 +1833,7 @@ mod tests {
     fn scoped_mappings_refine_layer_rules_per_keyboard() {
         let maps = vec![map("KeyH", Some("J"), None, "kb1", false)];
         let layers = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "all")])];
-        let yaml = generate(&maps, &layers, kb1_named);
+        let yaml = generate(&maps, &layers, &kb1_named());
         assert!(yaml.contains(
             "  - name: 'Keyloom layer: nav, hold Caps Lock (Keychron K2 Pro)'\n\
              \x20   device:\n\
@@ -1737,8 +1847,10 @@ mod tests {
              \x20     KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"
         ));
 
+        let mut two = kb1_named();
+        two.insert("kb2".to_owned(), keyboard("Laptop keyboard", 0, 0));
         let layers = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "kb2")])];
-        let yaml = generate(&maps, &layers, kb1_named);
+        let yaml = generate(&maps, &layers, &two);
         assert!(yaml.contains("      KEY_BRL_DOT1-KEY_H: KEY_LEFT\n"));
         assert!(!yaml.contains("KEY_BRL_DOT1-KEY_J"));
     }
@@ -1749,7 +1861,7 @@ mod tests {
     fn a_scoped_mapping_of_the_layer_key_refines_its_entry() {
         let maps = vec![map("CapsLock", Some("Escape"), None, "kb1", false)];
         let layers = vec![layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "all")])];
-        let yaml = generate(&maps, &layers, kb1_named);
+        let yaml = generate(&maps, &layers, &kb1_named());
         let scoped = yaml
             .find("      KEY_CAPSLOCK:\n        held: KEY_BRL_DOT1\n        alone: KEY_ESC\n")
             .expect("tap/hold entry for the keyboard");
@@ -1778,7 +1890,7 @@ mod tests {
             ),
             layer("num", "Space", &[("KeyJ", "1", "all")]),
         ];
-        let yaml = generate(&Vec::new(), &layers, no_devices);
+        let yaml = generate(&Vec::new(), &layers, &no_devices());
         assert!(!yaml.contains("KEY_LEFTSHIFT"));
         assert!(!yaml.contains("KEY_BRL_DOT1-KEY_CAPSLOCK"));
         assert!(!yaml.contains("KEY_BRL_DOT1-KEY_SPACE"));
@@ -1805,7 +1917,7 @@ mod tests {
             0,
             layer("unknown", "NoSuchKey", &[("KeyH", "Arrow Left", "all")]),
         );
-        let yaml = generate(&Vec::new(), &layers, no_devices);
+        let yaml = generate(&Vec::new(), &layers, &no_devices());
         assert!(yaml.contains("      KEY_F1: KEY_BRL_DOT1\n"));
         assert!(yaml.contains("      KEY_F10: KEY_BRL_DOT10\n"));
         assert!(!yaml.contains("KEY_F11"), "{yaml}");
@@ -1814,12 +1926,12 @@ mod tests {
 
         let none = vec![layer("unset", "", &[("KeyH", "Arrow Left", "all")])];
         assert_eq!(
-            generate(&Vec::new(), &none, no_devices),
+            generate(&Vec::new(), &none, &no_devices()),
             without_layers(&Vec::new())
         );
     }
 
-    /// Write the layer and application documents that
+    /// Write the layer, application, and keyboard documents that
     /// `scripts/verify-layers-with-xremap.sh` runs through xremap's own
     /// event-handler tests into `$KEYLOOM_HARNESS_DIR`; the expectations
     /// live beside the script.
@@ -1886,7 +1998,7 @@ mod tests {
                     ),
                 ],
             },
-            no_devices,
+            &no_devices(),
         );
         // A shortcut keyed to the right Ctrl alone, as a Mac-style setup
         // does when the Command keys become Right Ctrl.
@@ -1902,7 +2014,7 @@ mod tests {
                     vec![rule(&["Right Ctrl"], "C", &["Ctrl", "Shift"], "C")],
                 )],
             },
-            no_devices,
+            &no_devices(),
         );
         // Volume Up works while a modifier is held, and alone passes
         // through untouched.
@@ -1918,24 +2030,42 @@ mod tests {
                     vec![rule(&[], "Volume Up", &[], "Volume Up")],
                 )],
             },
-            no_devices,
+            &no_devices(),
+        );
+        // On the Magic Keyboard alone, A types B and the navigation
+        // layer's H is Left; the keypad model, whose name contains the
+        // Magic Keyboard's, keeps both as they are.
+        let keyboard_scoped = generate(
+            &vec![map("KeyA", Some("B"), None, "magic", false)],
+            &[layer("nav", "CapsLock", &[("KeyH", "Arrow Left", "magic")])],
+            &Keyboards::from([
+                (
+                    "magic".to_owned(),
+                    keyboard("Magic Keyboard", 0x004c, 0x029a),
+                ),
+                (
+                    "keypad".to_owned(),
+                    keyboard("Magic Keyboard with Numeric Keypad", 0x004c, 0x029c),
+                ),
+            ]),
         );
         for (name, yaml) in [
             (
                 "navigation.yml",
-                generate(&navigation.maps, &navigation.layers, no_devices),
+                generate(&navigation.maps, &navigation.layers, &no_devices()),
             ),
             (
                 "two-layers.yml",
-                generate(&space_taps, &two_layers, no_devices),
+                generate(&space_taps, &two_layers, &no_devices()),
             ),
             (
                 "remapped-key.yml",
-                generate(&h_types_j, &nav_only, no_devices),
+                generate(&h_types_j, &nav_only, &no_devices()),
             ),
             ("app-scoped.yml", app_scoped),
             ("sided-modifiers.yml", sided),
             ("media-any-modifier.yml", media),
+            ("keyboard-scoped.yml", keyboard_scoped),
         ] {
             fs::write(dir.join(name), yaml).expect("harness directory is writable");
         }
@@ -2076,13 +2206,39 @@ mod tests {
                         apps: &examples.apps,
                         groups: &examples.groups,
                     },
-                    no_devices,
+                    &no_devices(),
                 ),
             ),
             ("all-sources".to_owned(), without_layers(&all_sources)),
             (
                 "all-layers".to_owned(),
-                generate(&Vec::new(), &all_layers, no_devices),
+                generate(&Vec::new(), &all_layers, &no_devices()),
+            ),
+            // A keyboard matched by its ids, one by name, and a layer
+            // job on each.
+            (
+                "keyboards".to_owned(),
+                generate(
+                    &vec![
+                        map("CapsLock", Some("Escape"), None, "magic", false),
+                        map("CapsLock", Some("Tab"), None, "kb1", false),
+                    ],
+                    &[layer(
+                        "nav",
+                        "Space",
+                        &[
+                            ("KeyH", "Arrow Left", "magic"),
+                            ("KeyJ", "Arrow Down", "kb1"),
+                        ],
+                    )],
+                    &Keyboards::from([
+                        (
+                            "magic".to_owned(),
+                            keyboard("Magic Keyboard", 0x004c, 0x029a),
+                        ),
+                        ("kb1".to_owned(), keyboard("Keychron K2 Pro", 0, 0)),
+                    ]),
+                ),
             ),
         ];
         for (i, chunk) in all_action_chunks.iter().enumerate() {
