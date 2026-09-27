@@ -1,12 +1,13 @@
 //! Which desktop this session runs on, as far as xremap cares.
 //!
 //! xremap asks the compositor which window is in front through a
-//! desktop-specific client, chosen with `--desktop` (or by trying each
-//! one in turn when the flag is absent). Keyloom reads the same
-//! environment the desktop set up for this session to name that
-//! desktop, and to know whether the remapping service should wait for a
-//! Wayland socket at all. Every value is a parameter of [`Session::from_env`]
-//! so the rules can be tested without touching the environment.
+//! desktop-specific client, which it picks itself when it starts by
+//! trying each client its build has. Keyloom reads the environment the
+//! desktop set up for this session to name that desktop, so setup can
+//! say whether the installed build has a client for it, and to tell an
+//! X11 session from a Wayland one. Every value is a parameter of
+//! [`Session::from_env`] so the rules can be tested without touching
+//! the environment.
 
 /// A desktop xremap has a client for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,20 +55,6 @@ impl Desktop {
         Self::Pantheon,
         Self::X11,
     ];
-
-    /// The value xremap's `--desktop` flag takes.
-    pub const fn flag(self) -> &'static str {
-        match self {
-            Self::Gnome => "gnome",
-            Self::Kde => "kde",
-            Self::Cosmic => "cosmic",
-            Self::Hypr => "hypr",
-            Self::Niri => "niri",
-            Self::Pantheon => "pantheon",
-            Self::Wlroots => "wlroots",
-            Self::X11 => "x11",
-        }
-    }
 
     /// The desktop's name in a sentence.
     pub const fn label(self) -> &'static str {
@@ -127,11 +114,11 @@ impl Desktop {
 /// What the session's environment says about the desktop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Session {
-    /// The desktop xremap should connect to; `None` leaves the choice
-    /// to xremap.
+    /// The desktop xremap will find here, when Keyloom recognizes it;
+    /// `None` when it does not.
     pub desktop: Option<Desktop>,
-    /// The session runs on X11 rather than Wayland, so no Wayland socket
-    /// will ever appear for a service to wait on.
+    /// The session runs on X11 rather than Wayland, where xremap's X11
+    /// client serves whatever desktop runs on it.
     pub x11: bool,
 }
 
@@ -272,18 +259,10 @@ mod tests {
     }
 
     #[test]
-    fn every_desktop_has_its_own_flag_and_label() {
+    fn every_desktop_has_its_own_label() {
         for (index, desktop) in Desktop::ALL.into_iter().enumerate() {
             assert!(!desktop.label().is_empty());
-            assert!(
-                desktop
-                    .flag()
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()),
-                "{desktop:?}: flags are plain lowercase words"
-            );
             for other in &Desktop::ALL[index + 1..] {
-                assert_ne!(desktop.flag(), other.flag());
                 assert_ne!(desktop.label(), other.label());
             }
         }

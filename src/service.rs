@@ -25,7 +25,6 @@ use cosmic::iced::futures::{FutureExt, SinkExt, Stream, StreamExt};
 use tokio::sync::OnceCell;
 use zbus::message::Sequence;
 
-use crate::session::Desktop;
 use crate::systemd::{self, Change, Manager};
 use crate::xremap;
 
@@ -348,55 +347,38 @@ pub fn unit_path() -> Option<PathBuf> {
     )
 }
 
-/// Waits for the compositor's Wayland socket before xremap starts,
-/// up to 30 seconds. The graphical session target can be reached
-/// before the socket exists, and xremap connects to the compositor
-/// for application-specific rules.
-const WAIT_FOR_WAYLAND: &str = "/bin/sh -c 'for i in $(seq 1 30); do \
-                                ls $XDG_RUNTIME_DIR/wayland-* >/dev/null 2>&1 && exit 0; \
-                                sleep 1; done; exit 1'";
-
-/// How the unit starts xremap, beyond the binary and the configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Launch {
-    /// The desktop xremap should ask which window is in front, passed
-    /// as `--desktop`. `None` leaves the choice to xremap, which is
-    /// also all that a binary older than 0.15.13 understands.
-    pub desktop: Option<Desktop>,
-    /// Wait for the compositor's Wayland socket before starting. On an
-    /// X11 session the socket never appears, so the wait would only
-    /// keep the unit from ever starting.
-    pub wait_for_wayland: bool,
-}
-
-impl Default for Launch {
-    /// A Wayland session with the desktop left to xremap: the unit as
-    /// Keyloom always installed it.
-    fn default() -> Self {
-        Self {
-            desktop: None,
-            wait_for_wayland: true,
-        }
-    }
-}
+/// The shell loop that waits for the session's display server before
+/// xremap starts, up to 30 seconds. The graphical session target can be
+/// reached before the compositor is listening, and xremap connects to
+/// it as soon as it starts: it tries each desktop client its build has
+/// and keeps the first that answers, so a compositor that is not up yet
+/// would leave it without one. Which socket to wait for follows the
+/// session type systemd was told about, so one unit serves a Wayland
+/// login and an X11 login alike: the compositor's socket in
+/// `XDG_RUNTIME_DIR` on Wayland, the X server's under `/tmp/.X11-unix`
+/// on X11, and either when the type is unknown. A display manager's or
+/// another user's X server leaves a socket in `/tmp` too, which is why a
+/// Wayland session does not settle for one.
+const WAIT_FOR_SESSION: &str = "for i in $(seq 1 30); do \
+    case \"$XDG_SESSION_TYPE\" in \
+    x11) ls /tmp/.X11-unix/X*;; \
+    wayland) ls $XDG_RUNTIME_DIR/wayland-*;; \
+    *) ls $XDG_RUNTIME_DIR/wayland-* || ls /tmp/.X11-unix/X*;; \
+    esac >/dev/null 2>&1 && exit 0; \
+    sleep 1; done; exit 1";
 
 /// The unit file Keyloom installs, modeled on a hand-written unit that
 /// has run xremap on COSMIC for a long time: run the given xremap
 /// binary with Keyloom's generated configuration, follow keyboards as
 /// they are plugged in, live with the graphical session, wait for the
-/// compositor before starting (on Wayland), and keep xremap running.
+/// session's display server before starting, and keep xremap running.
+/// Nothing in it names the desktop: xremap 0.15.13 picks its desktop
+/// client itself when it starts (older builds chose one when they were
+/// built), so the unit written on one desktop serves a login to another.
 ///
 /// Logging stays at `info`: xremap's `debug` level writes every key
 /// press to the journal.
-pub fn unit_file(binary: &Path, config: &Path, launch: Launch) -> String {
-    let wait = if launch.wait_for_wayland {
-        format!("ExecStartPre={WAIT_FOR_WAYLAND}\n")
-    } else {
-        String::new()
-    };
-    let desktop = launch.desktop.map_or_else(String::new, |desktop| {
-        format!("  --desktop {} \\\n", desktop.flag())
-    });
+pub fn unit_file(binary: &Path, config: &Path) -> String {
     format!(
         "{UNIT_MARKER}\n\
          [Unit]\n\
@@ -408,10 +390,9 @@ pub fn unit_file(binary: &Path, config: &Path, launch: Launch) -> String {
          [Service]\n\
          Restart=always\n\
          RestartSec=5\n\
-         {wait}\
+         ExecStartPre=/bin/sh -c '{WAIT_FOR_SESSION}'\n\
          Environment=RUST_LOG=info\n\
          ExecStart={} \\\n\
-         {desktop}\
          \x20 --watch \\\n\
          \x20 {}\n\
          \n\
@@ -545,6 +526,8 @@ pub async fn set(remapping: Remapping) -> Result<Snapshot, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
     use crate::testing::TempDir;
 
@@ -689,7 +672,6 @@ mod tests {
         let unit = unit_file(
             Path::new("/usr/bin/xremap"),
             Path::new("/home/me/.config/xremap/keyloom.yml"),
-            Launch::default(),
         );
         assert!(unit.starts_with(&format!("{UNIT_MARKER}\n[Unit]\n")));
         assert!(unit.contains(
@@ -700,63 +682,84 @@ mod tests {
             "/usr/bin/xremap --watch /home/me/.config/xremap/keyloom.yml",
             "continuation lines join back into one command"
         );
-        assert!(unit.contains("\nRestartSec=5\nExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do ls $XDG_RUNTIME_DIR/wayland-* >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'\nEnvironment=RUST_LOG=info\n"));
+        assert!(unit.contains("\nRestartSec=5\nExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do case \"$XDG_SESSION_TYPE\" in x11) ls /tmp/.X11-unix/X*;; wayland) ls $XDG_RUNTIME_DIR/wayland-*;; *) ls $XDG_RUNTIME_DIR/wayland-* || ls /tmp/.X11-unix/X*;; esac >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'\nEnvironment=RUST_LOG=info\n"));
+        assert!(
+            !WAIT_FOR_SESSION.contains('\''),
+            "the wait sits inside single quotes on the ExecStartPre line"
+        );
         assert!(unit.contains("\nRestart=always\n"));
         assert!(unit.contains("\nWantedBy=graphical-session.target\n"));
         assert!(unit.contains("\nPartOf=graphical-session.target\n"));
         assert!(unit.contains("\nAfter=graphical-session.target input-method.target\n"));
         assert!(
             !unit.contains("--desktop"),
-            "the desktop is left to xremap by default"
+            "xremap picks the desktop itself when it starts"
         );
         assert_eq!(
             unit,
             unit_file(
                 Path::new("/usr/bin/xremap"),
                 Path::new("/home/me/.config/xremap/keyloom.yml"),
-                Launch::default(),
             ),
             "generation is deterministic"
         );
     }
 
-    #[test]
-    fn the_unit_names_the_desktop_when_asked_to() {
-        let unit = unit_file(
-            Path::new("/home/me/.local/bin/xremap"),
-            Path::new("/home/me/.config/xremap/keyloom.yml"),
-            Launch {
-                desktop: Some(Desktop::Cosmic),
-                wait_for_wayland: true,
-            },
-        );
-        assert!(unit.contains(
-            "\nExecStart=/home/me/.local/bin/xremap \\\n  --desktop cosmic \\\n  --watch \\\n  /home/me/.config/xremap/keyloom.yml\n"
-        ));
-        assert_eq!(
-            crate::setup::exec_start_of(&unit),
-            "/home/me/.local/bin/xremap --desktop cosmic --watch /home/me/.config/xremap/keyloom.yml",
-            "the flag comes before the config, which xremap takes positionally"
-        );
-        assert!(unit.contains("\nExecStartPre="));
+    /// Runs the unit's wait as `/bin/sh` would, in a session of the
+    /// given type whose runtime directory is `runtime_dir`: whether it
+    /// let xremap start, or `None` when it was still waiting after
+    /// `within`.
+    fn wait_outcome(
+        session_type: Option<&str>,
+        runtime_dir: &Path,
+        within: Duration,
+    ) -> Option<bool> {
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", WAIT_FOR_SESSION])
+            .env_remove("XDG_SESSION_TYPE")
+            .env("XDG_RUNTIME_DIR", runtime_dir);
+        if let Some(kind) = session_type {
+            command.env("XDG_SESSION_TYPE", kind);
+        }
+        let mut child = command.spawn().expect("/bin/sh runs");
+        let started = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().expect("the child can be polled") {
+                return Some(status.success());
+            }
+            if started.elapsed() > within {
+                child.kill().expect("the child can be stopped");
+                child.wait().expect("the child can be reaped");
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]
-    fn x11_sessions_do_not_wait_for_a_wayland_socket() {
-        let unit = unit_file(
-            Path::new("/usr/bin/xremap"),
-            Path::new("/home/me/.config/xremap/keyloom.yml"),
-            Launch {
-                desktop: Some(Desktop::X11),
-                wait_for_wayland: false,
-            },
+    fn the_wait_looks_for_the_sockets_of_the_session_type() {
+        let dir = TempDir::new("service-wait");
+        let runtime = dir.path();
+
+        // No compositor yet: a Wayland session keeps waiting, whatever X
+        // sockets this machine happens to have in /tmp.
+        assert_eq!(
+            wait_outcome(Some("wayland"), runtime, Duration::from_millis(1500)),
+            None
         );
-        assert!(
-            !unit.contains("ExecStartPre="),
-            "nothing to wait for on X11"
+
+        fs::write(runtime.join("wayland-1"), "").unwrap();
+        assert_eq!(
+            wait_outcome(Some("wayland"), runtime, Duration::from_secs(10)),
+            Some(true),
+            "the compositor's socket lets xremap start"
         );
-        assert!(unit.contains("\nRestartSec=5\nEnvironment=RUST_LOG=info\nExecStart=/usr/bin/xremap \\\n  --desktop x11 \\\n"));
-        assert!(unit.starts_with(UNIT_MARKER));
+        assert_eq!(
+            wait_outcome(None, runtime, Duration::from_secs(10)),
+            Some(true),
+            "an unknown session type takes either socket"
+        );
     }
 
     #[test]
@@ -780,7 +783,6 @@ mod tests {
         let ours = unit_file(
             Path::new("/usr/bin/xremap"),
             Path::new("/home/me/keyloom.yml"),
-            Launch::default(),
         );
 
         assert_eq!(install_to(&path, &ours).unwrap(), InstallOutcome::Written);
@@ -791,7 +793,6 @@ mod tests {
         let updated = unit_file(
             Path::new("/usr/local/bin/xremap"),
             Path::new("/home/me/keyloom.yml"),
-            Launch::default(),
         );
         assert_eq!(
             install_to(&path, &updated).unwrap(),

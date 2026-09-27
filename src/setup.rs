@@ -273,7 +273,8 @@ pub struct Facts {
     pub unit: UnitCheck,
     /// Keyloom's generated configuration, which the unit must read.
     pub config: Option<PathBuf>,
-    /// The desktop this session runs on, which the unit tells xremap.
+    /// The desktop this session runs on, which says whether this xremap
+    /// can ask it which window is in front.
     pub session: Session,
 }
 
@@ -287,11 +288,6 @@ impl Facts {
     /// The installed xremap binary, if there is one.
     pub fn xremap_path(&self) -> Option<&Path> {
         self.xremap.path()
-    }
-
-    /// How the unit should start this xremap on this session.
-    pub fn launch(&self) -> service::Launch {
-        launch_for(&self.xremap, self.session)
     }
 
     /// The change the xremap step offers, if any: a download when there
@@ -488,11 +484,10 @@ pub async fn probe() -> Facts {
     let uinput = uinput_check_at(Path::new(UINPUT), rule_installed).await;
     let config = xremap::config_path();
     let session = Session::detect();
-    let launch = launch_for(&xremap, session);
     let expected = xremap
         .path()
         .zip(config.as_deref())
-        .map(|(binary, config)| service::unit_file(binary, config, launch));
+        .map(|(binary, config)| service::unit_file(binary, config));
     let unit = unit_check(unit, expected.as_deref(), config.as_deref()).await;
     Facts {
         user,
@@ -503,42 +498,6 @@ pub async fn probe() -> Facts {
         config,
         session,
     }
-}
-
-/// How to start a given xremap on a given session: name the desktop
-/// only when the binary lists it (a binary without `--list-desktops`
-/// would refuse `--desktop` altogether, and one without this desktop's
-/// client would ask nothing at all), and wait for a Wayland socket only
-/// where one will appear.
-pub fn launch_for(xremap: &XremapCheck, session: Session) -> service::Launch {
-    let supported = match xremap {
-        XremapCheck::Found {
-            desktops: Some(desktops),
-            ..
-        } => Some(desktops.as_slice()),
-        XremapCheck::Found { desktops: None, .. } | XremapCheck::Missing => None,
-    };
-    launch_with(supported, session)
-}
-
-fn launch_with(supported: Option<&[Desktop]>, session: Session) -> service::Launch {
-    let desktop = session
-        .desktop
-        .filter(|desktop| supported.is_some_and(|supported| supported.contains(desktop)));
-    service::Launch {
-        desktop,
-        wait_for_wayland: !session.x11,
-    }
-}
-
-/// The binary and the way to start it, for running xremap outside the
-/// unit (the application picker's `--list-windows`): the same binary
-/// the unit would run, told about the same desktop.
-pub async fn xremap_invocation() -> Option<(PathBuf, service::Launch)> {
-    let path = locate_xremap().await?;
-    let desktops = list_desktops(&path).await;
-    let launch = launch_with(desktops.as_deref(), Session::detect());
-    Some((path, launch))
 }
 
 /// A text file's contents, or nothing when it cannot be read: every
@@ -1089,7 +1048,7 @@ pub async fn save_service(facts: &Facts) -> Result<(), ActionError> {
             "xremap must be installed before the service can be set up".to_owned(),
         ));
     };
-    let text = service::unit_file(binary, config, facts.launch());
+    let text = service::unit_file(binary, config);
     let write_failed = |err: &dyn fmt::Display| {
         ActionError::Failed(format!("could not write the service file: {err}"))
     };
@@ -1356,68 +1315,6 @@ mod tests {
     }
 
     #[test]
-    fn the_desktop_is_named_only_when_the_binary_can_ask_it() {
-        let cosmic = Session {
-            desktop: Some(Desktop::Cosmic),
-            x11: false,
-        };
-        let full = facts().xremap;
-        assert_eq!(
-            launch_for(&full, cosmic),
-            service::Launch {
-                desktop: Some(Desktop::Cosmic),
-                wait_for_wayland: true,
-            }
-        );
-
-        let gnome_only = XremapCheck::Found {
-            path: PathBuf::from("/usr/bin/xremap"),
-            version: Some("0.15.13".to_owned()),
-            desktops: Some(vec![Desktop::Gnome]),
-            managed: false,
-        };
-        assert_eq!(
-            launch_for(&gnome_only, cosmic),
-            service::Launch::default(),
-            "a build without this desktop's client is left to its own devices"
-        );
-
-        let old = XremapCheck::Found {
-            path: PathBuf::from("/usr/bin/xremap"),
-            version: Some("0.15.12".to_owned()),
-            desktops: None,
-            managed: false,
-        };
-        assert_eq!(
-            launch_for(&old, cosmic),
-            service::Launch::default(),
-            "a binary without --list-desktops would refuse --desktop"
-        );
-        assert_eq!(
-            launch_for(&XremapCheck::Missing, cosmic),
-            service::Launch::default()
-        );
-
-        let x11 = Session {
-            desktop: Some(Desktop::X11),
-            x11: true,
-        };
-        assert_eq!(
-            launch_for(&managed("0.15.13"), x11),
-            service::Launch {
-                desktop: Some(Desktop::X11),
-                wait_for_wayland: false,
-            },
-            "no Wayland socket to wait for on X11"
-        );
-        assert_eq!(
-            launch_for(&full, Session::default()),
-            service::Launch::default(),
-            "an unrecognized desktop is left to xremap"
-        );
-    }
-
-    #[test]
     fn the_xremap_step_offers_a_download_or_an_update_for_keylooms_own_copy() {
         if install::asset().is_none() || install::managed_path().is_none() {
             // Nothing to offer on this processor, or without a home.
@@ -1561,11 +1458,7 @@ mod tests {
     #[test]
     fn units_are_classified_by_marker_and_contents() {
         let config = Path::new("/home/me/.config/xremap/keyloom.yml");
-        let ours = service::unit_file(
-            Path::new("/usr/bin/xremap"),
-            config,
-            service::Launch::default(),
-        );
+        let ours = service::unit_file(Path::new("/usr/bin/xremap"), config);
         let classify = |active, enabled, text: Option<&str>| {
             classify_unit(
                 active,
@@ -1586,27 +1479,17 @@ mod tests {
                 enabled: true
             }
         );
-        let moved = service::unit_file(
-            Path::new("/usr/local/bin/xremap"),
-            config,
-            service::Launch::default(),
-        );
+        let moved = service::unit_file(Path::new("/usr/local/bin/xremap"), config);
         assert_eq!(
             classify(false, true, Some(&moved)),
             UnitCheck::Stale { active: false }
         );
-        let named = service::unit_file(
-            Path::new("/usr/bin/xremap"),
-            config,
-            service::Launch {
-                desktop: Some(Desktop::Cosmic),
-                wait_for_wayland: true,
-            },
-        );
+        let named = ours.replacen("  --watch \\\n", "  --desktop cosmic \\\n  --watch \\\n", 1);
+        assert_ne!(named, ours);
         assert_eq!(
             classify(true, true, Some(&named)),
             UnitCheck::Stale { active: true },
-            "a unit naming a desktop the binary no longer would is stale, and vice versa"
+            "a unit from before xremap picked the desktop itself is stale until updated"
         );
 
         let theirs = "[Service]\nExecStart=/usr/bin/xremap --watch /home/me/other.yml\n";

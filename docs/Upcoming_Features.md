@@ -94,10 +94,6 @@ without a user-facing feature of its own.
 - **Turning off the login start.** Setup enables the unit, and the status
   chip only starts and stops it; nothing turns the login start off again
   (`src/service.rs`).
-- **Following a desktop change.** The unit names the desktop setup saw, so
-  logging into another desktop leaves it stale until setup's "Update
-  remapping" is used. Keyloom could refresh its own unit at launch when the
-  detected desktop or session type changed.
 - **Working with a unit the user wrote.** A foreign unit can only be replaced
   or kept; xremap merges several config files, so offering to add
   `keyloom.yml` to its `ExecStart` would keep an existing setup working.
