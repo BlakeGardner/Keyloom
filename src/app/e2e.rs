@@ -825,7 +825,7 @@ pub fn service_rows() -> Vec<Row> {
             facts(|f| f.unit = UnitCheck::Unavailable),
             "No systemd user session",
             &[
-                "/usr/bin/xremap --desktop cosmic --watch /home/blake/.config/xremap/keyloom.yml",
+                "/usr/bin/xremap --watch /home/blake/.config/xremap/keyloom.yml",
                 "Copy",
             ],
         ),

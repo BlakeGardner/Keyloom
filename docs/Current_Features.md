@@ -180,8 +180,8 @@ first-run setup installs that unit and walks through the input permissions
   confirmation, undoable; its remaps and shortcuts go with it).
 - The application picker lists the applications open right now first,
   named exactly as remapping sees them (Keyloom asks the same xremap the
-  service runs, told about the same desktop, with `--list-windows`, which
-  exits before it touches any input device),
+  service runs with `--list-windows`, which exits before it touches any
+  input device),
   then the installed applications from their desktop entries with their
   icons, with a search box, and a field to type an application id for
   anything not listed. An application belongs to at most one scope per
@@ -454,14 +454,15 @@ moving on without the fix.
   while joining the input group does, and is offered again otherwise.
 - **Remapping service** — installs Keyloom's own `xremap.service` user unit
   under `~/.config/systemd/user/`, modeled on a hand-written unit proven on
-  COSMIC: on Wayland sessions it waits for the compositor's socket (X11
-  sessions skip the wait, since none appears), runs the found binary with
-  `--watch` on `keyloom.yml`, names the detected desktop with `--desktop`
-  when the binary lists it (so xremap asks the right compositor for
-  application-specific rules; older builds, and builds without this
-  desktop's client, are left to choose for themselves), keeps xremap
-  running, and logs at info level (xremap's debug level would write every
-  key press to the journal). Setup then reloads systemd, enables the unit,
+  COSMIC: it waits for the session's display server (the compositor's
+  Wayland socket, or the X server's socket on an X11 session, going by the
+  session type systemd knows), runs the found binary with `--watch` on
+  `keyloom.yml`, and leaves xremap to pick the desktop client itself
+  (xremap 0.15.13 tries each client its build has when it starts and keeps
+  the one that answers, so the same unit serves a login to another desktop
+  or session type), keeps xremap running, and logs at info level (xremap's
+  debug level would write every key press to the journal). Setup then
+  reloads systemd, enables the unit,
   and starts it when access is already in effect (otherwise it starts after
   the restart). No password is needed. To turn it on by hand instead, the
   details save the file (and reload systemd) without enabling or starting
@@ -489,11 +490,10 @@ buttons stay in view.
 Limitations: the authentication prompt is polkit's generic one, naming
 `usermod` or `/bin/sh` rather than Keyloom; a unit the user wrote can only
 be replaced or kept, not merged with Keyloom's configuration; an xremap
-running as another user (a system service) is not noticed; logging into a
-different desktop leaves the unit naming the old one until setup's "Update
-remapping" is used; a distribution's xremap older than 0.15.13 gets
-neither the download nor `--desktop`; and no sample remap is verified end
-to end.
+running as another user (a system service) is not noticed; an xremap older
+than 0.15.13 is never replaced by the download and can only ask the desktop
+it was built for, whatever session it starts in; and no sample remap is
+verified end to end.
 
 ## Applying (xremap service)
 

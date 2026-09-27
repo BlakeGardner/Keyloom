@@ -109,14 +109,10 @@ fn installed() -> Vec<KnownApp> {
 /// (a desktop its build cannot ask), with xremap's own explanation
 /// where it gives one.
 async fn open_windows() -> Result<Vec<Window>, String> {
-    let Some((binary, launch)) = setup::xremap_invocation().await else {
+    let Some(binary) = setup::locate_xremap().await else {
         return Err("xremap is not installed".to_owned());
     };
-    let mut command = Command::new(&binary);
-    if let Some(desktop) = launch.desktop {
-        command.args(["--desktop", desktop.flag()]);
-    }
-    let output = command
+    let output = Command::new(&binary)
         .arg("--list-windows")
         .output()
         .await

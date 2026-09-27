@@ -116,7 +116,7 @@ can be written (`installable`: a binary and a config path).
 | S4 | Keyloom's unit, enabled, not running, access effective | *Not running · Turn remapping back on* · **Start remapping** |
 | S5 | Keyloom's unit, running, not enabled | *Doesn't start at login · Keep remapping on* · **Start at login** |
 | S6 | Keyloom's unit, not running, not enabled (also the state right after saving the file by hand) | *Turned off · Turn on remapping* · **Turn on remapping**; details show `systemctl --user enable --now` |
-| S7 | `Stale`, running (ours, but the binary, config, or desktop moved) | *Needs an update · Update remapping* · **Update remapping** |
+| S7 | `Stale`, running (ours, but the binary or config moved, or the template changed) | *Needs an update · Update remapping* · **Update remapping** |
 | S8 | `Stale`, not running | same as S7 |
 | S9 | `Foreign`, its command loads `keyloom.yml`, running | *Running (your own service) · Your xremap service works with Keyloom* · Continue |
 | S10 | `Foreign`, loads `keyloom.yml`, not running | *Not running (your own service) · Start your xremap service* · **Start service** |
@@ -151,7 +151,7 @@ in tests or storyboards of their own.
 
 | ID | Variation | Why it matters |
 | --- | --- | --- |
-| C1 | X11 session (`session.x11`) | the unit skips waiting for a Wayland socket; captured as XA3 |
+| C1 | X11 session (`session.x11`) | the details name the session and leave out GNOME's extension note; the unit is the same, its wait picks the X server's socket at start; captured as XA3 |
 | C2 | Light theme | contrast of status colors and the modal backdrop; screenshots only |
 | C3 | Window at its minimum size | pages taller than the window scroll; footer buttons must stay reachable, which the interface tests press at this size |
 | C4 | Long paths and names (`/home/Jo Doe/…`, a long `ExecStart`) | wrapping and quoting in details; the whole command must be shown |

@@ -2071,7 +2071,7 @@ fn service_view(facts: &Facts) -> StepView {
                     "You can run xremap on Keyloom's remaps yourself instead, for example from \
                      your desktop's autostart:",
                 ))
-                .commands(xremap_command(binary, config, facts.launch())),
+                .commands(xremap_command(binary, config)),
                 _ => Details::about(plain(
                     "Once xremap is installed, you can run it on Keyloom's remaps yourself.",
                 )),
@@ -2235,12 +2235,8 @@ fn service_view(facts: &Facts) -> StepView {
 }
 
 /// The command line the service runs, for a shell.
-fn xremap_command(binary: &Path, config: &Path, launch: service::Launch) -> String {
+fn xremap_command(binary: &Path, config: &Path) -> String {
     let mut command = shell_word(&binary.to_string_lossy());
-    if let Some(desktop) = launch.desktop {
-        command.push_str(" --desktop ");
-        command.push_str(desktop.flag());
-    }
     command.push_str(" --watch ");
     command.push_str(&shell_word(&config.to_string_lossy()));
     command
@@ -3064,12 +3060,8 @@ mod tests {
             xremap_command(
                 Path::new("/usr/bin/xremap"),
                 Path::new("/home/Jo Doe/keyloom.yml"),
-                service::Launch {
-                    desktop: Some(Desktop::Cosmic),
-                    wait_for_wayland: true,
-                },
             ),
-            "/usr/bin/xremap --desktop cosmic --watch '/home/Jo Doe/keyloom.yml'"
+            "/usr/bin/xremap --watch '/home/Jo Doe/keyloom.yml'"
         );
     }
 
