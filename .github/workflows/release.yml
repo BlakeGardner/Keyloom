@@ -56,7 +56,7 @@ jobs:
         run: cargo install --locked cargo-vendor-filterer
       - name: Build the source packages
         run: ./scripts/build-source-packages.sh dist --tag "$TAG" --ref "$TAG"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: source-packages
           path: dist
@@ -76,7 +76,7 @@ jobs:
       OBS_TOKEN: ${{ secrets.OBS_TOKEN_KEYLOOM }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: source-packages
           path: dist
@@ -111,7 +111,7 @@ jobs:
         run: |
           ./scripts/obs.py fetch "$OBS_PROJECT" keyloom packages
           gh release upload "$TAG" packages/* --clobber
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: packages
@@ -193,7 +193,7 @@ jobs:
           name=$(basename "${pkg[0]}" .pkg.tar.zst)_arch.pkg.tar.zst
           cp "${pkg[0]}" "$name"
           gh release upload "$TAG" "$name" --clobber
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: arch-package
