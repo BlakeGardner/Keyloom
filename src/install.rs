@@ -58,23 +58,42 @@ struct Release {
 
 /// Every release a released Keyloom has downloaded, newest first, so a
 /// copy from an earlier Keyloom is still recognized as Keyloom's and
-/// offered an update. A pin that never reached a Keyloom release can
-/// simply be replaced when it is bumped: nobody can have downloaded it.
-const RELEASES: &[Release] = &[Release {
-    version: "0.15.14",
-    builds: [
-        Build {
-            arch: "x86_64",
-            zip: "68ed1de5a1ee40a57d475cdefb05a64ee3b960da214d5893153a8e3361fae0c1",
-            binary: "f58f88a9d924cb1251f8b4a6b1e2dc94c67cc0786abd948ab55bd3cef7ca2e30",
-        },
-        Build {
-            arch: "aarch64",
-            zip: "7bb3cd64ead5e9d20d8a5619fbb83ab969bdb01ab2374e5c7cc31d915c33e243",
-            binary: "955ab5183b3dde42527fa84a919c7523040e62e3c097b3f91e7f8f3698637f58",
-        },
-    ],
-}];
+/// offered an update: Keyloom 0.2.0 downloaded 0.15.13, so that entry
+/// stays. Only a pin that never reached a Keyloom release can simply be
+/// replaced when it is bumped, since nobody can have downloaded it.
+const RELEASES: &[Release] = &[
+    Release {
+        version: "0.15.14",
+        builds: [
+            Build {
+                arch: "x86_64",
+                zip: "68ed1de5a1ee40a57d475cdefb05a64ee3b960da214d5893153a8e3361fae0c1",
+                binary: "f58f88a9d924cb1251f8b4a6b1e2dc94c67cc0786abd948ab55bd3cef7ca2e30",
+            },
+            Build {
+                arch: "aarch64",
+                zip: "7bb3cd64ead5e9d20d8a5619fbb83ab969bdb01ab2374e5c7cc31d915c33e243",
+                binary: "955ab5183b3dde42527fa84a919c7523040e62e3c097b3f91e7f8f3698637f58",
+            },
+        ],
+    },
+    // Downloaded by Keyloom 0.2.0.
+    Release {
+        version: "0.15.13",
+        builds: [
+            Build {
+                arch: "x86_64",
+                zip: "4b82bdc279f9c4d96292a4ecc31107905eacfd190398946f96360c1ef157c13e",
+                binary: "57acf06438cfe7d153114a892dc81ccf33f6b4130c7a6c70e344d0df2944abbc",
+            },
+            Build {
+                arch: "aarch64",
+                zip: "c8dd332046a43f643c589c2b7591c314e44157ea1113ee5640bd346a8385f8fc",
+                binary: "4fe15d6faf77b3c1fded52e0162f304915b1c98e9ea1d9feb375407836e78559",
+            },
+        ],
+    },
+];
 
 /// The one entry in a release zip.
 const ENTRY: &str = "xremap";
@@ -456,6 +475,20 @@ mod tests {
             }
             (None, None) => {}
             (arch, asset) => panic!("an asset exactly when there is a release: {arch:?} {asset:?}"),
+        }
+    }
+
+    /// The table exists for the copies earlier Keylooms left behind:
+    /// forgetting one strands its users on it, unrecognised and never
+    /// offered the update.
+    #[test]
+    fn releases_earlier_keylooms_downloaded_stay_recognised() {
+        const DOWNLOADED_BY: &[(&str, &str)] = &[("0.2.0", "0.15.13")];
+        for (keyloom, xremap) in DOWNLOADED_BY {
+            assert!(
+                RELEASES.iter().any(|release| release.version == *xremap),
+                "Keyloom {keyloom} downloaded xremap {xremap}, so its digests must stay"
+            );
         }
     }
 
