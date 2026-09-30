@@ -25,11 +25,13 @@ use sha2::{Digest, Sha256};
 use crate::xremap;
 
 /// The xremap release Keyloom downloads: its `full` build, which has a
-/// client for every desktop xremap supports and understands
-/// `--desktop`. Bump together with `XREMAP_VERSION` in the CI workflow
-/// and the layer harness script (a test checks that they agree) and add
-/// the new release's digests to [`RELEASES`].
-pub const RELEASE: &str = "0.15.13";
+/// client for every desktop xremap supports, understands `--desktop`,
+/// and checks a configuration without touching any device with
+/// `--validate-config` (since 0.15.14), which is how CI validates the
+/// generated documents. Bump together with `XREMAP_VERSION` in the CI
+/// workflow and the layer harness script (a test checks that they
+/// agree) and add the new release's digests to [`RELEASES`].
+pub const RELEASE: &str = "0.15.14";
 
 /// The processor name xremap's release assets use for this build of
 /// Keyloom; `None` where xremap publishes no binary.
@@ -54,21 +56,22 @@ struct Release {
     builds: [Build; 2],
 }
 
-/// Every release Keyloom has ever downloaded, newest first, so a copy
-/// from an earlier Keyloom is still recognized as Keyloom's and offered
-/// an update.
+/// Every release a released Keyloom has downloaded, newest first, so a
+/// copy from an earlier Keyloom is still recognized as Keyloom's and
+/// offered an update. A pin that never reached a Keyloom release can
+/// simply be replaced when it is bumped: nobody can have downloaded it.
 const RELEASES: &[Release] = &[Release {
-    version: "0.15.13",
+    version: "0.15.14",
     builds: [
         Build {
             arch: "x86_64",
-            zip: "4b82bdc279f9c4d96292a4ecc31107905eacfd190398946f96360c1ef157c13e",
-            binary: "57acf06438cfe7d153114a892dc81ccf33f6b4130c7a6c70e344d0df2944abbc",
+            zip: "68ed1de5a1ee40a57d475cdefb05a64ee3b960da214d5893153a8e3361fae0c1",
+            binary: "f58f88a9d924cb1251f8b4a6b1e2dc94c67cc0786abd948ab55bd3cef7ca2e30",
         },
         Build {
             arch: "aarch64",
-            zip: "c8dd332046a43f643c589c2b7591c314e44157ea1113ee5640bd346a8385f8fc",
-            binary: "4fe15d6faf77b3c1fded52e0162f304915b1c98e9ea1d9feb375407836e78559",
+            zip: "7bb3cd64ead5e9d20d8a5619fbb83ab969bdb01ab2374e5c7cc31d915c33e243",
+            binary: "955ab5183b3dde42527fa84a919c7523040e62e3c097b3f91e7f8f3698637f58",
         },
     ],
 }];
@@ -414,13 +417,13 @@ mod tests {
     }
 
     /// A stand-in binary: a script answering `--version` like xremap.
-    const FAKE_XREMAP: &[u8] = b"#!/bin/sh\necho xremap 0.15.13\n";
+    const FAKE_XREMAP: &[u8] = b"#!/bin/sh\necho xremap 0.15.14\n";
 
     #[test]
     fn the_asset_is_the_full_build_of_the_pinned_release_for_this_processor() {
         assert_eq!(
-            asset_url("0.15.13", "x86_64"),
-            "https://github.com/xremap/xremap/releases/download/v0.15.13/xremap-linux-x86_64-full.zip"
+            asset_url("0.15.14", "x86_64"),
+            "https://github.com/xremap/xremap/releases/download/v0.15.14/xremap-linux-x86_64-full.zip"
         );
         assert_eq!(
             RELEASES[0].version, RELEASE,
@@ -530,7 +533,7 @@ mod tests {
         );
         assert_eq!(fs::read(&dest).unwrap(), FAKE_XREMAP);
         assert_ne!(fs::metadata(&dest).unwrap().permissions().mode() & 0o111, 0);
-        assert_eq!(check_runs(&dest).unwrap(), "xremap 0.15.13");
+        assert_eq!(check_runs(&dest).unwrap(), "xremap 0.15.14");
         assert_eq!(leftovers(), 0);
 
         // A binary that answers wrongly, or not at all, changes nothing.
@@ -547,7 +550,7 @@ mod tests {
         assert_eq!(leftovers(), 0);
 
         // Replacing a binary that is not one Keyloom ships keeps it beside.
-        let newer = b"#!/bin/sh\necho xremap 0.15.14\n";
+        let newer = b"#!/bin/sh\necho xremap 0.15.15\n";
         assert_eq!(install_binary(newer, &dest), Ok(()));
         assert_eq!(fs::read(&dest).unwrap(), newer);
         assert_eq!(fs::read(bin.join("xremap.bak")).unwrap(), FAKE_XREMAP);
