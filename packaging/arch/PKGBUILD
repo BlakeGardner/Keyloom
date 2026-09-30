@@ -7,7 +7,7 @@
 # packaging/README.md.
 
 pkgname=keyloom
-pkgver=0.2.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="Visual keyboard customization for Linux"
 arch=('x86_64' 'aarch64')
@@ -28,7 +28,7 @@ optdepends=('polkit: let first-run setup ask for administrator access'
 # ring_core_* symbols); Cargo manages its own optimization either way.
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('04886a6e94e4a3f81d62f4e580f40888bd61213511dba7646fad40d57c358519')
+sha256sums=('7e65be85194701cf9608cdd61c302b9deffac5a5a01d12f64574304cbece8dfc')
 
 prepare() {
     cd "Keyloom-$pkgver"
