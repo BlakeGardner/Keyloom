@@ -1297,7 +1297,7 @@ mod tests {
 
     /// Golden document covering every generated construct at once; the
     /// same content is validated against a real xremap release by
-    /// `generated_documents_parse_with_real_xremap`. Blocks run from
+    /// `generated_documents_validate_with_the_pinned_xremap`. Blocks run from
     /// the most specific scope to the general one: the terminal on the
     /// Keychron, the terminal, the Keychron, everywhere.
     #[test]
@@ -2119,19 +2119,40 @@ mod tests {
         assert!(!dir.join("keyloom.yml.bak.1").exists());
     }
 
-    /// End-to-end oracle against a real xremap binary: the pinned CLI
-    /// loads its configuration *before* selecting devices, so pointing
-    /// it at a device name that cannot exist distinguishes "config
-    /// parsed" (fails preparing input devices) from "config rejected"
-    /// (fails loading the config).
+    /// End-to-end oracle against a real xremap binary: the pinned
+    /// release's `--validate-config` loads the documents as the service
+    /// would at start, then exits before it touches any device, so the
+    /// check needs no input access. A document with a key xremap does
+    /// not know shows that the check has teeth.
     ///
     /// Ignored during normal local tests to avoid launching the installed
     /// xremap. CI installs the pinned release and explicitly runs this test
-    /// with `--ignored`; a missing binary is a failure.
+    /// with `--ignored`; a missing binary, or one that is not the pinned
+    /// release, is a failure.
     #[test]
     #[ignore = "launches xremap; CI runs this explicitly with a pinned binary"]
-    fn generated_documents_parse_with_real_xremap() {
-        use std::process::Command;
+    fn generated_documents_validate_with_the_pinned_xremap() {
+        use std::process::{Command, Output};
+
+        // `--validate-config` returns before device selection, so no
+        // xremap this test starts can open a keyboard.
+        fn validate(path: &std::path::Path) -> Output {
+            Command::new("xremap")
+                .arg("--validate-config")
+                .arg(path)
+                .output()
+                .expect("xremap validation requires the pinned binary on PATH")
+        }
+
+        let version = Command::new("xremap")
+            .arg("--version")
+            .output()
+            .expect("xremap validation requires the pinned binary on PATH");
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            format!("xremap {}", crate::install::RELEASE),
+            "the xremap on PATH is the pinned release"
+        );
 
         // Every known physical key as a remap source.
         let sources: Vec<&str> = model::registry().map(|cap| cap.code).collect();
@@ -2250,21 +2271,37 @@ mod tests {
         for (name, yaml) in &documents {
             let path = dir.join(format!("{name}.yml"));
             fs::write(&path, yaml).unwrap();
-            let output = Command::new("xremap")
-                .arg("--device")
-                .arg("keyloom-validation-no-such-device")
-                .arg(&path)
-                .output()
-                .expect("xremap validation requires the pinned binary on PATH");
+            let output = validate(&path);
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
-                !stderr.contains("Failed to load config"),
-                "{name}: xremap rejected the generated config:\n{stderr}\n---\n{yaml}"
+                output.status.success(),
+                "{name}: xremap rejected the generated config ({}):\n{stderr}\n---\n{yaml}",
+                output.status
             );
-            assert!(
-                stderr.contains("Failed to prepare input devices"),
-                "{name}: xremap did not reach device selection:\n{stderr}"
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                "Config is valid",
+                "{name}: xremap did not say the config is valid:\n{stderr}"
             );
         }
+
+        // The oracle has teeth: a key xremap does not know is refused.
+        let path = dir.join("unknown-key.yml");
+        fs::write(
+            &path,
+            "modmap:\n  - remap:\n      KEY_A: KEY_KEYLOOM_NO_SUCH_KEY\n",
+        )
+        .unwrap();
+        let output = validate(&path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "an unknown key was accepted:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("Failed to load config"),
+            "xremap did not refuse the unknown key:\n{stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{:?}", output.stdout);
     }
 }

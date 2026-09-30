@@ -16,7 +16,7 @@
 # network access for the clone and a few minutes to build.
 set -eu
 
-version=${XREMAP_VERSION:-0.15.13}
+version=${XREMAP_VERSION:-0.15.14}
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=${XREMAP_HARNESS_DIR:-"$root/target/xremap-harness"}
 src="$work/xremap-$version"
