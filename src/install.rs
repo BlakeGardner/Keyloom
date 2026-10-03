@@ -62,6 +62,7 @@ struct Release {
 /// stays. Only a pin that never reached a Keyloom release can simply be
 /// replaced when it is bumped, since nobody can have downloaded it.
 const RELEASES: &[Release] = &[
+    // Downloaded by Keyloom 0.2.1.
     Release {
         version: "0.15.14",
         builds: [
@@ -483,7 +484,7 @@ mod tests {
     /// offered the update.
     #[test]
     fn releases_earlier_keylooms_downloaded_stay_recognised() {
-        const DOWNLOADED_BY: &[(&str, &str)] = &[("0.2.0", "0.15.13")];
+        const DOWNLOADED_BY: &[(&str, &str)] = &[("0.2.0", "0.15.13"), ("0.2.1", "0.15.14")];
         for (keyloom, xremap) in DOWNLOADED_BY {
             assert!(
                 RELEASES.iter().any(|release| release.version == *xremap),
