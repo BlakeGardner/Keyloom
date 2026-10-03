@@ -36,8 +36,8 @@ use iced_test::selector::{Candidate, Target};
 
 use super::screenshots::Shots;
 use super::staging::{
-    MIN_WINDOW, WINDOW, app, app_on, app_on_step, facts, foreign, found, fresh_system, ready,
-    service_is, systems, window,
+    MIN_WINDOW, WINDOW, app, app_on, app_on_step, facts, foreign, found, fresh_system, log_window,
+    ready, service_is, systems, window,
 };
 use super::*;
 use crate::config::DeckZoom;
@@ -65,6 +65,8 @@ pub type Recorder = Option<Box<dyn FnMut(&App, &str)>>;
 /// The application, driven through its interface.
 pub struct Driver {
     pub app: App,
+    /// The window driven: the main one, or the log's.
+    surface: fn(&App) -> Element<'_, Message>,
     /// The window's size; pages taller than it scroll.
     viewport: Size,
     /// Names the failure, where a test drives more than one state.
@@ -82,10 +84,18 @@ impl Driver {
     pub fn with_recorder(app: App, recorder: Recorder) -> Self {
         Self {
             app,
+            surface: window,
             viewport: WINDOW,
             name: String::new(),
             recorder,
         }
+    }
+
+    /// Drive the log window instead, at the size it opens at.
+    pub fn on_log_window(mut self) -> Self {
+        self.surface = log_window;
+        self.viewport = ui::log::SIZE;
+        self
     }
 
     /// Name the state being driven, for failures to point at.
@@ -114,7 +124,7 @@ impl Driver {
             default_text_size: Pixels(14.0),
             ..Settings::default()
         };
-        Simulator::with_size(settings, self.viewport, window(&self.app))
+        Simulator::with_size(settings, self.viewport, (self.surface)(&self.app))
     }
 
     /// Every text the window shows, in the order the widgets come.
@@ -322,7 +332,7 @@ impl Driver {
         // A panic while the test unwinds would abort the whole test run,
         // so rendering must not be allowed to raise one.
         let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Shots::new().capture_at(&self.app, &name, self.viewport);
+            Shots::new().capture_at(&self.app, &name, self.viewport, self.surface);
         }));
         if rendered.is_err() {
             eprintln!("failure screenshot: could not render {name}");
@@ -1751,4 +1761,127 @@ fn the_deck_fits_or_scrolls_at_every_size() {
         "the deck shrinks to fit the smallest window: {natural:?} -> {esc:?}"
     );
     small.expect_shown(&["Esc", "0", "No mappings in this profile yet."]);
+}
+
+// ---- The remapping log -------------------------------------------------
+
+#[test]
+fn the_log_opens_from_the_menu_in_one_window_of_its_own() {
+    let mut driver = Driver::new(app());
+    driver.click("⋯");
+    driver.click("Remapping log");
+    assert!(driver.app.popover.is_none());
+    let id = driver.app.log.as_ref().expect("the log window is open").id;
+
+    // Asking again brings the open window forward instead.
+    driver.click("⋯");
+    driver.click("Remapping log");
+    assert_eq!(driver.app.log.as_ref().map(|log| log.id), Some(id));
+
+    // Closing it, however it is closed, ends following the log.
+    driver.deliver(Message::LogClosed(window::Id::unique()));
+    assert!(driver.app.log.is_some(), "another window closing");
+    driver.deliver(Message::LogClosed(id));
+    assert!(driver.app.log.is_none());
+}
+
+#[test]
+fn without_systemd_the_menu_offers_no_log() {
+    let mut driver = Driver::new(app());
+    driver.deliver(service_is(service::Status::Unavailable));
+    driver.click("⋯");
+    driver.expect_shown(&["Set up remapping"]);
+    driver.expect_hidden("Remapping log");
+}
+
+#[test]
+fn a_failure_of_the_service_offers_its_log() {
+    let mut driver = Driver::new(app());
+    driver.deliver(Message::RemappingSwitched {
+        target: service::Remapping::On,
+        result: Err(service::Error::Refused("job failed".to_owned())),
+    });
+    driver.expect_shown(&["Could not resume remapping"]);
+    driver.click("Show log");
+    assert!(driver.app.log.is_some());
+
+    // A toast confirming a change has no log to offer.
+    let mut driver = Driver::new(app());
+    driver.click("⋯");
+    driver.click("Reset all mappings");
+    driver.click("Reset all mappings");
+    driver.expect_shown(&["Profile cleared"]);
+    driver.expect_hidden("Show log");
+}
+
+#[test]
+fn the_log_shows_each_run_and_copies_what_it_shows() {
+    let entries = super::staging::log_of_two_runs();
+    let mut driver = Driver::new(super::staging::app_with_log(vec![journal::Event::Entries(
+        entries,
+    )]))
+    .on_log_window();
+    driver.expect_shown(&[
+        "Remapping Log",
+        "Following live",
+        "Fri, Oct 2 · 20:58",
+        "Fri, Oct 2 · 21:30",
+        "Failed to ungrab device: No such device (os error 19)",
+        "Error: Failed to load config: unknown key `remapp` at line 4 column 5",
+        "xremap.service: Failed with result 'exit-code'.",
+        "application: google-chrome",
+    ]);
+
+    driver.click("Copy");
+    driver.expect_shown(&["Copied"]);
+    let log = driver.app.log.as_ref().expect("the log window is open");
+    assert!(log.text().contains("xremap: Error: Failed to load config"));
+    assert!(log.text().contains("xremap: application: google-chrome"));
+}
+
+#[test]
+fn the_log_follows_its_end_until_scrolled_back() {
+    let mut driver = Driver::new(super::staging::app_with_log(Vec::new())).on_log_window();
+    driver.expect_shown(&["Reading the log…"]);
+    driver.expect_hidden("Copy");
+
+    driver.deliver(Message::LogEvent(journal::Event::Following));
+    driver.expect_shown(&["Nothing logged yet"]);
+
+    driver.deliver(Message::LogEvent(journal::Event::Entries(
+        super::staging::log_of_two_runs(),
+    )));
+    driver.expect_hidden("Jump to latest");
+    driver.deliver(Message::LogScrolled(false));
+    driver.click("Jump to latest");
+    assert!(driver.app.log.as_ref().is_some_and(|log| log.at_end));
+    driver.expect_hidden("Jump to latest");
+}
+
+#[test]
+fn a_log_that_stops_says_why_and_can_be_read_again() {
+    let mut driver = Driver::new(super::staging::app_with_log(vec![
+        journal::Event::Notice("No journal files were found.".to_owned()),
+        journal::Event::Ended(journal::End::Exited(Some(1))),
+    ]))
+    .on_log_window();
+    driver.expect_shown(&[
+        "Stopped",
+        "The log stopped updating",
+        "No journal files were found.",
+    ]);
+    driver.expect_parts(&["journalctl --user -u xremap.service"]);
+
+    driver.click("Try again");
+    let log = driver.app.log.as_ref().expect("the log window is open");
+    assert_eq!(log.attempt, 1, "a new attempt follows the log anew");
+    driver.expect_shown(&["Reading the log…"]);
+    driver.expect_hidden("The log stopped updating");
+
+    let driver = Driver::new(super::staging::app_with_log(vec![journal::Event::Ended(
+        journal::End::Missing,
+    )]))
+    .on_log_window();
+    driver.expect_shown(&["The log can't be read"]);
+    driver.expect_parts(&["journalctl, which isn't installed"]);
 }

@@ -21,6 +21,19 @@ it would need a different input path or a backend integration; no approach
 has been investigated or selected, and a focused-window tester mode would
 only display received keys rather than enable remapping.
 
+## Reading the journal without journalctl
+
+The remapping log (`src/journal.rs`) runs `journalctl --follow` and reads
+its JSON output: journald has no D-Bus interface for reading, and linking
+libsystemd's reader would add a C build dependency to every package.
+systemd 260 added a Varlink interface for reading the journal,
+`io.systemd.JournalAccess`, with a per-user socket enabled by default, and
+262 gave it a follow mode. It answers with the same JSON, so switching would
+change only how entries arrive. It is not worth a second path while the
+distributions Keyloom builds for predate it (in October 2026, Ubuntu 24.04
+ships systemd 255, Debian 13 257, and Fedora 44 259); revisit once the
+oldest of them ships 262.
+
 ## Flatpak
 
 Keyloom ships as native packages only (see
@@ -65,7 +78,9 @@ it starts. An approach would have to solve:
 - What the sandbox hides. Detecting keyboards held by remapping reads
   `/proc`, which shows only the sandbox's own processes, and installed
   applications' desktop entries and icons are visible only with read
-  access to the host's system and Flatpak export directories.
+  access to the host's system and Flatpak export directories. The
+  remapping log runs journalctl, which cannot read the host's journal
+  from inside the sandbox.
 - Two ways of running xremap to keep working: the host's binary for the
   native packages and the bundled one here, where the download step and
   its updates have no place.

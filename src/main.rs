@@ -6,6 +6,7 @@ mod apps;
 mod config;
 mod icons;
 mod install;
+mod journal;
 mod keyboard;
 mod known;
 mod monitor;
