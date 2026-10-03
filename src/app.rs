@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{self, ConfigSet, CosmicConfigEntry};
 use cosmic::iced::futures::{Stream, StreamExt};
+use cosmic::iced::widget::operation::snap_to_end;
 use cosmic::iced::{Event, Size, Subscription, event, keyboard as iced_keyboard, window};
 use cosmic::prelude::*;
 
@@ -21,6 +22,7 @@ use crate::apps;
 use crate::config::{
     self, DeckZoom, KeyboardLayouts, KeyloomConfig, LayoutOverride, ProfileState, SetupState,
 };
+use crate::journal;
 use crate::keyboard;
 use crate::known;
 use crate::monitor;
@@ -97,6 +99,9 @@ pub struct Toast {
     pub id: u64,
     pub text: String,
     pub sub: String,
+    /// The toast reports a failure of the remapping service, and offers
+    /// its log.
+    pub offers_log: bool,
 }
 
 /// Snapshot for the toast's Undo action.
@@ -500,10 +505,35 @@ pub enum Message {
     ResetMappingsCancel,
     MenuAbout,
     CloseAbout,
+    /// Open the remapping log's window (or bring it to the front): from
+    /// the menu, or a toast reporting a failure.
+    OpenLog,
+    /// What following the service's log reported.
+    LogEvent(journal::Event),
+    /// The log was scrolled: whether it is at its end now.
+    LogScrolled(bool),
+    LogJumpToEnd,
+    /// Put the entries shown on the clipboard.
+    LogCopy,
+    /// A copy's acknowledgment has been shown long enough.
+    LogCopyShown(u64),
+    /// Read the log afresh after following it stopped.
+    LogRetry,
+    /// The log window's header: moving, maximizing, minimizing, and
+    /// closing the window.
+    LogDrag,
+    LogMaximize,
+    LogMinimize,
+    LogClose,
+    /// A window closed; the log's, it may be.
+    LogClosed(window::Id),
     /// Draw the deck one level larger or smaller, or fitted to the
     /// window again: from the menu, Ctrl+scroll over the deck, or Ctrl
     /// with +, −, or 0.
     Zoom(zoom::Step),
+    /// A zoom shortcut pressed in a window: the deck's zoom only when
+    /// that is the main window.
+    ZoomKey(window::Id, zoom::Step),
     /// A window's new size, in logical pixels.
     WindowResized(window::Id, Size),
     /// A press inside a popup that no control took; nothing to do, but
@@ -525,6 +555,8 @@ pub struct App {
     /// active profile's list.
     pub confirm_remove_mapping: Option<usize>,
     pub about_open: bool,
+    /// The remapping log's window, while it is open.
+    pub log: Option<ui::log::LogWindow>,
     /// First-run setup, while it is open.
     pub setup: Option<Setup>,
     /// How far setup got, as remembered between launches.
@@ -1415,8 +1447,38 @@ impl App {
             id: self.toast_seq,
             text: text.into(),
             sub: sub.into(),
+            offers_log: false,
         });
         self.toast_seq
+    }
+
+    /// [`Self::flash`] a failure of the remapping service, with the
+    /// service's log a click away.
+    fn flash_failure(&mut self, text: impl Into<String>, sub: impl Into<String>) {
+        self.flash(text, sub);
+        if let Some(toast) = &mut self.toast {
+            toast.offers_log = true;
+        }
+    }
+
+    /// Open the remapping log in its own window, or bring the open one
+    /// to the front.
+    fn open_log(&mut self) -> Task<Message> {
+        self.popover = None;
+        if let Some(log) = &self.log {
+            return window::gain_focus(log.id);
+        }
+        let (id, opened) = window::open(ui::log::settings());
+        self.log = Some(ui::log::LogWindow::new(id));
+        Task::batch([
+            opened.discard(),
+            self.set_window_title(ui::log::TITLE.to_owned(), id),
+        ])
+    }
+
+    /// Whether `id` is the log window's.
+    fn is_log_window(&self, id: window::Id) -> bool {
+        self.log.as_ref().is_some_and(|log| log.id == id)
     }
 
     /// Save the configuration model and regenerate the xremap file.
@@ -2836,6 +2898,7 @@ impl cosmic::Application for App {
             remaps_open: false,
             confirm_remove_mapping: None,
             about_open: false,
+            log: None,
             setup: None,
             setup_state,
             profiles,
@@ -3592,7 +3655,7 @@ impl cosmic::Application for App {
                     Ok(snapshot) => self.observe_service(snapshot),
                     // The watcher reports where the service stands.
                     Err(err) => {
-                        self.flash("Could not apply remaps", err.to_string());
+                        self.flash_failure("Could not apply remaps", err.to_string());
                     }
                 }
             }
@@ -3608,7 +3671,7 @@ impl cosmic::Application for App {
                     // It did not follow; the watcher reports where it
                     // actually stands.
                     Err(err) => {
-                        self.flash(
+                        self.flash_failure(
                             match target {
                                 service::Remapping::On => "Could not resume remapping",
                                 service::Remapping::Off => "Could not pause remapping",
@@ -3786,6 +3849,80 @@ impl cosmic::Application for App {
                 self.about_open = true;
             }
             Message::CloseAbout => self.about_open = false,
+            Message::OpenLog => return self.open_log(),
+            Message::LogEvent(event) => {
+                // At the end of the list, new entries keep it there.
+                if let Some(log) = &mut self.log
+                    && log.receive(event)
+                    && log.at_end
+                {
+                    return snap_to_end(ui::log::scroll_id());
+                }
+            }
+            Message::LogScrolled(at_end) => {
+                if let Some(log) = &mut self.log {
+                    log.at_end = at_end;
+                }
+            }
+            Message::LogJumpToEnd => {
+                if let Some(log) = &mut self.log {
+                    log.at_end = true;
+                    return snap_to_end(ui::log::scroll_id());
+                }
+            }
+            Message::LogCopy => {
+                if let Some(log) = &mut self.log {
+                    let copy = log.copy();
+                    return Task::batch([
+                        cosmic::iced::clipboard::write(log.text()),
+                        cosmic::task::future(async move {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            Message::LogCopyShown(copy)
+                        }),
+                    ]);
+                }
+            }
+            Message::LogCopyShown(copy) => {
+                if let Some(log) = &mut self.log {
+                    log.copy_shown(copy);
+                }
+            }
+            Message::LogRetry => {
+                if let Some(log) = &mut self.log {
+                    log.retry();
+                }
+            }
+            Message::LogDrag => {
+                if let Some(log) = &self.log {
+                    return self.core.drag(Some(log.id));
+                }
+            }
+            Message::LogMaximize => {
+                if let Some(log) = &self.log {
+                    return self.core.toggle_maximize(Some(log.id));
+                }
+            }
+            Message::LogMinimize => {
+                if let Some(log) = &self.log {
+                    return self.core.minimize(Some(log.id));
+                }
+            }
+            Message::LogClose => {
+                if let Some(log) = &self.log {
+                    return window::close(log.id);
+                }
+            }
+            // Closing the window ends following its log.
+            Message::LogClosed(id) => {
+                if self.is_log_window(id) {
+                    self.log = None;
+                }
+            }
+            Message::ZoomKey(id, step) => {
+                if !self.is_log_window(id) {
+                    return self.update(Message::Zoom(step));
+                }
+            }
             Message::Zoom(step) => {
                 // The shortcuts page has no deck; the menu stays open so
                 // a level can be reached in a few presses.
@@ -3794,7 +3931,9 @@ impl cosmic::Application for App {
                 }
             }
             Message::WindowResized(id, size) => {
-                if self.core.main_window_id().is_none_or(|main| main == id) {
+                if self.core.main_window_id().is_none_or(|main| main == id)
+                    && !self.is_log_window(id)
+                {
                     self.window = size;
                 }
             }
@@ -3871,6 +4010,11 @@ impl cosmic::Application for App {
             Subscription::run(service_stream),
             event::listen_with(runtime_events),
         ];
+        // The log is read while its window is open; another attempt is
+        // another subscription, so journalctl starts afresh.
+        if let Some(log) = &self.log {
+            subscriptions.push(Subscription::run_with(log.attempt, log_stream));
+        }
         // Drive redraws only while the sheet is actively moving.
         let sheet_progress = self.sheet_progress();
         if self.sheet_visible() && (!self.sheet_open() || sheet_progress < 1.0) {
@@ -3921,9 +4065,29 @@ impl cosmic::Application for App {
         ui::view(self)
     }
 
+    fn view_window(&self, id: window::Id) -> Element<'_, Message> {
+        match &self.log {
+            Some(log) if log.id == id => ui::log::window(self, log),
+            // A window on its way out has nothing left to draw.
+            _ => cosmic::widget::Space::new().into(),
+        }
+    }
+
+    fn on_close_requested(&self, id: window::Id) -> Option<Message> {
+        self.is_log_window(id).then_some(Message::LogClosed(id))
+    }
+
     fn on_escape(&mut self) -> Task<Message> {
         // Only window keyboard events reach this callback, so typing Escape
-        // in another application cannot dismiss Keyloom's surfaces.
+        // in another application cannot dismiss Keyloom's surfaces; nor
+        // can typing it in the log window.
+        if self
+            .core
+            .focused_window()
+            .is_some_and(|id| self.is_log_window(id))
+        {
+            return Task::none();
+        }
         // Match the dialog stacking order and dismiss only the top surface.
         if self.setup.is_some() {
             self.leave_setup();
@@ -3985,6 +4149,12 @@ fn service_stream() -> impl Stream<Item = Message> + Send {
     service::watch().map(Message::ServiceStatus)
 }
 
+/// Adapts following the service's log into this app's message stream;
+/// each attempt (the subscription's identity) follows it anew.
+fn log_stream(_attempt: &u64) -> impl Stream<Item = Message> + Send + use<> {
+    journal::follow().map(Message::LogEvent)
+}
+
 /// The runtime events the app follows on its own: a window's size,
 /// for what fitting the deck amounts to, and the zoom shortcuts, which
 /// apply only where no widget took the key press, so a focused text
@@ -4000,7 +4170,7 @@ fn runtime_events(event: Event, status: event::Status, id: window::Id) -> Option
             modifiers,
             ..
         }) if status == event::Status::Ignored && modifiers.control() => {
-            zoom::shortcut(&key, &modified_key).map(Message::Zoom)
+            zoom::shortcut(&key, &modified_key).map(|step| Message::ZoomKey(id, step))
         }
         _ => None,
     }
@@ -7930,19 +8100,19 @@ mod tests {
         let ignored = event::Status::Ignored;
         assert!(matches!(
             runtime_events(press("=", true), ignored, id),
-            Some(Message::Zoom(zoom::Step::In))
+            Some(Message::ZoomKey(from, zoom::Step::In)) if from == id
         ));
         assert!(matches!(
             runtime_events(press("+", true), ignored, id),
-            Some(Message::Zoom(zoom::Step::In))
+            Some(Message::ZoomKey(from, zoom::Step::In)) if from == id
         ));
         assert!(matches!(
             runtime_events(press("-", true), ignored, id),
-            Some(Message::Zoom(zoom::Step::Out))
+            Some(Message::ZoomKey(from, zoom::Step::Out)) if from == id
         ));
         assert!(matches!(
             runtime_events(press("0", true), ignored, id),
-            Some(Message::Zoom(zoom::Step::Reset))
+            Some(Message::ZoomKey(from, zoom::Step::Reset)) if from == id
         ));
         assert!(
             runtime_events(press("=", false), ignored, id).is_none(),
@@ -7957,5 +8127,61 @@ mod tests {
             runtime_events(resized, ignored, id),
             Some(Message::WindowResized(_, size)) if size == Size::new(800.0, 500.0)
         ));
+    }
+
+    #[test]
+    fn the_log_window_keeps_the_deck_zoom_and_size_to_the_main_window() {
+        let mut app = app();
+        let _ = app.update(Message::OpenLog);
+        let log = app.log.as_ref().expect("the log window is open").id;
+        let window = app.window;
+
+        let _ = app.update(Message::ZoomKey(log, zoom::Step::In));
+        assert_eq!(app.zoom, DeckZoom::Fit, "a shortcut in the log window");
+        let _ = app.update(Message::WindowResized(log, Size::new(500.0, 400.0)));
+        assert_eq!(app.window, window, "the log window's size");
+
+        let _ = app.update(Message::ZoomKey(window::Id::unique(), zoom::Step::In));
+        assert_ne!(app.zoom, DeckZoom::Fit, "a shortcut in the main window");
+    }
+
+    #[test]
+    fn closing_the_log_window_closes_the_log() {
+        let mut app = app();
+        assert!(app.on_close_requested(window::Id::unique()).is_none());
+
+        let _ = app.update(Message::OpenLog);
+        let log = app.log.as_ref().expect("the log window is open").id;
+        let other = window::Id::unique();
+
+        assert!(app.on_close_requested(other).is_none());
+        assert!(matches!(
+            app.on_close_requested(log),
+            Some(Message::LogClosed(id)) if id == log
+        ));
+        // A window on its way out still draws, if with nothing.
+        let _ = app.view_window(other);
+    }
+
+    #[test]
+    fn the_log_takes_in_what_following_it_reports() {
+        let mut app = app();
+        let entries = staging::log_of_two_runs();
+        let _ = app.update(Message::LogEvent(journal::Event::Entries(entries.clone())));
+        assert!(app.log.is_none(), "nothing to take it in while closed");
+
+        let _ = app.update(Message::OpenLog);
+        let _ = app.update(Message::LogEvent(journal::Event::Entries(entries)));
+        let log = app.log.as_ref().expect("the log window is open");
+        assert_eq!(log.reading, ui::log::Reading::Following);
+        assert!(log.text().contains("Failed with result 'exit-code'"));
+
+        let _ = app.update(Message::LogEvent(journal::Event::Ended(
+            journal::End::Exited(Some(1)),
+        )));
+        let _ = app.update(Message::LogRetry);
+        let log = app.log.as_ref().expect("the log window is open");
+        assert_eq!(log.reading, ui::log::Reading::Starting);
+        assert_eq!(log.attempt, 1);
     }
 }

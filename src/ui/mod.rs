@@ -3,6 +3,7 @@
 pub mod editor;
 pub mod header;
 pub mod keyboard_view;
+pub mod log;
 pub mod model;
 pub mod overlays;
 pub mod shortcuts;

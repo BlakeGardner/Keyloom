@@ -63,8 +63,15 @@ without a user-facing feature of its own.
 - **A translated interface.** Use Fluent for internationalization so
   Keyloom's interface can be translated into other languages. Specific
   translations will be planned separately.
-- **A log viewer.** Provide an in-app viewer for remapping service logs so
-  users can investigate failures without opening a terminal.
+- **Filtering the remapping log by level.** Show only warnings and
+  errors in the remapping log, or only errors. The journal gives systemd's
+  messages about the unit real levels, but xremap writes most of its lines
+  with plain prints, which the journal records at one level, so the window
+  can only recognise xremap's errors by their wording today. Filtering
+  becomes dependable once xremap writes levels the journal understands
+  (prefixing each line with its syslog level when it runs under systemd,
+  for example), a change worth contributing to xremap upstream; until a
+  release Keyloom pins carries it, levels would have to be inferred.
 - **An update check.** Notice when a newer Keyloom release exists and say
   so in the app. The apt and dnf repositories deliver updates with the
   system, but a one-off download — the Arch package, or a `.deb` or

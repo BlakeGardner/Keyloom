@@ -47,6 +47,18 @@ struct Viewport {
 
 const SCALE: f32 = 2.0;
 
+impl Viewport {
+    /// A window of `logical` size, at the screenshots' scale.
+    fn of(logical: Size) -> Self {
+        // Twice a window's whole pixels is well within `u32`.
+        let pixels = |length: f32| (length * SCALE).round() as u32;
+        Self {
+            logical,
+            pixels: Size::new(pixels(logical.width), pixels(logical.height)),
+        }
+    }
+}
+
 /// The window's default size, so pages are captured with exactly the
 /// room they get, clipping included.
 const WINDOW: Viewport = Viewport {
@@ -96,22 +108,49 @@ impl Shots {
         self.capture_as(app, name, &cosmic::Theme::dark(), &WINDOW);
     }
 
-    /// Render the window in the dark theme at any logical size, as the
-    /// interface tests picture a failure at the size they were driving.
-    pub(super) fn capture_at(&mut self, app: &App, name: &str, logical: Size) {
-        // Twice a window's whole pixels is well within `u32`.
-        let pixels = |length: f32| (length * SCALE).round() as u32;
-        let viewport = Viewport {
-            logical,
-            pixels: Size::new(pixels(logical.width), pixels(logical.height)),
-        };
-        self.capture_as(app, name, &cosmic::Theme::dark(), &viewport);
+    /// Render a window (`surface`: the main one, or the log's) in the
+    /// dark theme at any logical size, as the interface tests picture a
+    /// failure at the size they were driving.
+    pub(super) fn capture_at(
+        &mut self,
+        app: &App,
+        name: &str,
+        logical: Size,
+        surface: fn(&App) -> Element<'_, Message>,
+    ) {
+        self.render(
+            surface(app),
+            name,
+            &cosmic::Theme::dark(),
+            &Viewport::of(logical),
+        );
     }
 
-    /// Lay the window out, draw it once, and write the pixels as a PNG.
+    /// Render the log window in `theme` at the size it opens at.
+    fn capture_log(&mut self, app: &App, name: &str, theme: &cosmic::Theme) {
+        self.render(
+            staging::log_window(app),
+            name,
+            theme,
+            &Viewport::of(ui::log::SIZE),
+        );
+    }
+
+    /// Render the main window in `theme` at `viewport`'s size.
     fn capture_as(&mut self, app: &App, name: &str, theme: &cosmic::Theme, viewport: &Viewport) {
+        self.render(window(app), name, theme, viewport);
+    }
+
+    /// Lay a window out, draw it once, and write the pixels as a PNG.
+    fn render(
+        &mut self,
+        surface: Element<'_, Message>,
+        name: &str,
+        theme: &cosmic::Theme,
+        viewport: &Viewport,
+    ) {
         let mut interface = UserInterface::build(
-            window(app),
+            surface,
             viewport.logical,
             Cache::default(),
             &mut self.renderer,
@@ -498,7 +537,12 @@ fn decks() {
 fn zoom() {
     let mut shots = Shots::new();
     let mut app = staging::app();
-    shots.capture_at(&app, "zoom/Z1-fit-smallest-window", staging::MIN_WINDOW);
+    shots.capture_at(
+        &app,
+        "zoom/Z1-fit-smallest-window",
+        staging::MIN_WINDOW,
+        window,
+    );
     let _ = app.update(Message::Zoom(crate::ui::zoom::Step::In));
     shots.capture(&app, "zoom/Z2-110");
     app.zoom = crate::config::DeckZoom::Percent(200);
@@ -540,6 +584,42 @@ fn record(id: &'static str) -> Recorder {
     Some(Box::new(move |app: &App, label: &str| {
         board.frame(app, label);
     }))
+}
+
+#[test]
+#[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
+fn log_window() {
+    use crate::journal::{End, Event};
+
+    let mut shots = Shots::new();
+    let dark = cosmic::Theme::dark();
+    let two_runs = || Event::Entries(staging::log_of_two_runs());
+
+    shots.capture_log(&staging::app_with_log(Vec::new()), "log/L1-reading", &dark);
+    shots.capture_log(
+        &staging::app_with_log(vec![Event::Following]),
+        "log/L2-nothing-yet",
+        &dark,
+    );
+    let app = staging::app_with_log(vec![two_runs()]);
+    shots.capture_log(&app, "log/L3-two-runs", &dark);
+    let mut app = app;
+    let _ = app.update(Message::LogScrolled(false));
+    shots.capture_log(&app, "log/L4-scrolled-back", &dark);
+    shots.capture_log(
+        &staging::app_with_log(vec![
+            two_runs(),
+            Event::Notice("No journal files were found.".to_owned()),
+            Event::Ended(End::Exited(Some(1))),
+        ]),
+        "log/L5-stopped",
+        &dark,
+    );
+    shots.capture_log(
+        &staging::app_with_log(vec![Event::Ended(End::Missing)]),
+        "log/L6-no-journalctl",
+        &dark,
+    );
 }
 
 #[test]

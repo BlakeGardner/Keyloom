@@ -272,8 +272,12 @@ pub fn menu_popup(app: &App) -> Element<'_, Message> {
             column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
     }
 
-    let mut items: Vec<(&str, Message)> = Vec::with_capacity(3);
+    let mut items: Vec<(&str, Message)> = Vec::with_capacity(4);
     items.push(("Set up remapping", Message::MenuShowSetup));
+    // Without systemd there is no service, and no log of it to read.
+    if app.service != Some(service::Status::Unavailable) {
+        items.push(("Remapping log", Message::OpenLog));
+    }
     if app.view != View::Tester {
         items.push(("Reset all mappings", Message::MenuReset));
     }
@@ -389,6 +393,14 @@ pub fn toast<'a>(app: &'a App, toast: &'a Toast) -> Element<'a, Message> {
         ))
         .push(txt(toast.sub.clone(), 11.5, muted()))
         .push(crate::ui::hspace());
+    if toast.offers_log {
+        content = content.push(
+            widget::button::custom(txt_semibold("Show log", 11.5, oklch(0.92, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([4, 10])
+                .on_press(Message::OpenLog),
+        );
+    }
     if app.undo.is_some() && app.view != View::Tester {
         content = content.push(
             widget::button::custom(txt_semibold("Undo", 11.5, oklch(0.92, 0.01, 152.0)))

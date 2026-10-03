@@ -50,6 +50,13 @@ pub fn window(app: &App) -> Element<'_, Message> {
     popover.into()
 }
 
+/// The log window as the runtime composes it ([`App::view_window`]):
+/// it draws its own header.
+pub fn log_window(app: &App) -> Element<'_, Message> {
+    let log = app.log.as_ref().expect("the log window is open");
+    app.view_window(log.id)
+}
+
 /// What the service's watcher delivers when the unit is in `status`:
 /// a report newer than any before it.
 pub fn service_is(status: service::Status) -> Message {
@@ -239,4 +246,109 @@ pub fn app_on_step(step: Step, facts: Facts, edit: impl FnOnce(&mut Setup)) -> A
 /// The open wizard, to adjust.
 pub fn setup_of(app: &mut App) -> &mut Setup {
     app.setup.as_mut().expect("setup is open")
+}
+
+// ---- The remapping log -------------------------------------------------
+
+/// The log window open, having been told `events`.
+pub fn app_with_log(events: Vec<journal::Event>) -> App {
+    let mut app = app();
+    let _ = app.update(Message::OpenLog);
+    for event in events {
+        let _ = app.update(Message::LogEvent(event));
+    }
+    app
+}
+
+/// An entry of the log on October 2, 2026.
+fn logged(source: journal::Source, run: &str, clock: &str, text: &str) -> journal::Entry {
+    let mut parts = clock
+        .split(':')
+        .map(|part| part.parse::<i8>().expect("a clock"));
+    let mut next = || parts.next().expect("hours, minutes, and seconds");
+    let at = jiff::civil::date(2026, 10, 2).at(next(), next(), next(), 0);
+    journal::Entry {
+        at,
+        clock: clock.to_owned(),
+        text: text.to_owned(),
+        writer: match source {
+            journal::Source::Remapper => "xremap",
+            journal::Source::Systemd => "systemd",
+        }
+        .to_owned(),
+        source,
+        priority: 6,
+        run: Some(run.to_owned()),
+    }
+}
+
+/// A log of two runs, the way journalctl reports one: a run that
+/// started, watched the keyboards, and was restarted to apply a change,
+/// then a run that failed on the configuration.
+pub fn log_of_two_runs() -> Vec<journal::Entry> {
+    use journal::Source::{Remapper, Systemd};
+    const UNIT: &str = "xremap.service - Keyboard remapping for Keyloom (xremap)";
+    const RULE: &str =
+        "------------------------------------------------------------------------------";
+    let a = |source, clock, text: &str| logged(source, "a", clock, text);
+    let b = |source, clock, text: &str| logged(source, "b", clock, text);
+    let mut entries = vec![
+        a(Systemd, "20:58:15", &format!("Starting {UNIT}...")),
+        a(Systemd, "20:58:15", &format!("Started {UNIT}.")),
+        a(
+            Remapper,
+            "20:58:16",
+            "Selecting devices from the following list:",
+        ),
+        a(Remapper, "20:58:16", RULE),
+        a(Remapper, "20:58:16", "/dev/input/event0 : Power Button"),
+        a(
+            Remapper,
+            "20:58:16",
+            "/dev/input/event4 : TESmart DKS202-P24",
+        ),
+        a(Remapper, "20:58:16", "/dev/input/event6 : @HFD NEO80"),
+        a(Remapper, "20:58:16", RULE),
+        a(
+            Remapper,
+            "20:58:16",
+            "Selected keyboards automatically since --device options weren't specified:",
+        ),
+        a(Remapper, "20:58:16", "/dev/input/event6 : @HFD NEO80"),
+        a(
+            Remapper,
+            "21:07:12",
+            "application-client: COSMIC (supported: true)",
+        ),
+        a(Remapper, "21:07:40", "application: google-chrome"),
+        a(
+            Remapper,
+            "21:30:02",
+            "Failed to ungrab device: No such device (os error 19)",
+        ),
+        a(Systemd, "21:30:05", &format!("Stopping {UNIT}...")),
+        a(Systemd, "21:30:05", &format!("Stopped {UNIT}.")),
+        b(Systemd, "21:30:05", &format!("Starting {UNIT}...")),
+        b(Systemd, "21:30:06", &format!("Started {UNIT}.")),
+        b(
+            Remapper,
+            "21:30:06",
+            "Error: Failed to load config: unknown key `remapp` at line 4 column 5",
+        ),
+        b(
+            Systemd,
+            "21:30:06",
+            "xremap.service: Main process exited, code=exited, status=1/FAILURE",
+        ),
+        b(
+            Systemd,
+            "21:30:06",
+            "xremap.service: Failed with result 'exit-code'.",
+        ),
+    ];
+    // systemd says how a run ended at notice and warning priority.
+    let len = entries.len();
+    entries[len - 2].priority = 5;
+    entries[len - 1].priority = 4;
+    entries
 }

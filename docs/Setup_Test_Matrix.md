@@ -208,6 +208,23 @@ asserted in `src/ui/model.rs` and `src/app.rs` tests.
 | D7 | D1 with `fnmode=2` | F keys as the main legends, media legends small |
 | D8 | D1 in the tester with the command key held | "Left Command", the `⌘` cap, the Option and Command modifier chips |
 
+## Remapping log
+
+The log window (`src/ui/log.rs`), staged with entries as following the
+journal delivers them (`staging::log_of_two_runs`), never by running
+journalctl. Interface tests in `src/app/e2e.rs` drive the window itself
+(`Driver::on_log_window`); `screenshots::log_window` writes the states
+under `target/setup-shots/log/`.
+
+| ID | State | Shows |
+| --- | --- | --- |
+| L1 | Just opened | "Reading the log…" |
+| L2 | Followed, nothing logged | "Nothing logged yet" |
+| L3 | Two runs, the second failing on its configuration | run headings, a warning in amber, the error in red, systemd's lines muted |
+| L4 | L3, scrolled back | "Jump to latest" |
+| L5 | L3, then journalctl stopping | "The log stopped updating" with what journalctl said and "Try again" |
+| L6 | No journalctl | "The log can't be read" |
+
 ## Not covered by any kind
 
 The checks themselves (`setup::probe`) read `/proc`, `/etc/group`,

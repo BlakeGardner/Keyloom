@@ -7,9 +7,14 @@ repository = "https://github.com/BlakeGardner/Keyloom"
 
 [dependencies]
 evdev = "0.13"
+# Local times for the remapping log (src/journal.rs); libcosmic builds
+# it already.
+jiff = "0.2"
 serde = { version = "1", features = ["derive"] }
+# journalctl's JSON output (src/journal.rs); already in libcosmic's tree.
+serde_json = "1"
 sha2 = "0.11"
-tokio = { version = "1", features = ["process", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "process", "sync", "time"] }
 ureq = "3"
 # The D-Bus client libcosmic already builds on; Keyloom talks to
 # systemd's user manager with it (src/systemd.rs).

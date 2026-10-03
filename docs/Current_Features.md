@@ -46,7 +46,8 @@ first-run setup installs that unit and walks through the input permissions
 - On COSMIC the interface adopts the user's accent color from COSMIC
   Settings; on other desktops Keyloom uses its own green accent.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
-  Shortcuts), remapping status, and access to setup, reset, and About actions.
+  Shortcuts), remapping status, and access to setup, the remapping log,
+  reset, and About actions.
 - First-run setup opens on its own the first time Keyloom runs and can be
   reopened from "Set up remapping" in the menu, or from the header's status
   chip while no service is set up (see "First-run setup" below).
@@ -502,7 +503,7 @@ systemd's user manager over D-Bus, making the requests `systemctl --user`
 would, so no `systemctl` binary is involved. Like `systemctl`, a start, stop,
 or restart counts as done only once systemd reports its job finished; a job
 that fails is reported with systemd's reason and the commands that show the
-unit's logs.
+unit's logs, and the toast reporting it offers the remapping log (below).
 
 - Changes apply themselves — there is no Apply button. Every change that
   actually rewrites the generated config schedules a restart of the unit
@@ -536,3 +537,38 @@ unit's logs.
   out and offers to replace it, but never edits its `ExecStart`.
 - xremap itself, the unit, and the permissions are handled by first-run
   setup (see above), which downloads xremap when none is installed.
+
+### Remapping log
+
+"Remapping log" in the ⋯ menu, or "Show log" on a toast saying remapping
+could not be applied, paused, or resumed, opens the unit's journal in a
+window of its own, so it can stay open beside the main window. Asking
+again brings the open window forward.
+
+- The window reads the latest 1,000 entries of
+  `journalctl --user -u xremap.service`, which reach back over dozens of
+  runs, then follows the log live, letting the oldest go as new ones
+  arrive; it says when older entries are left out. It stays at the newest
+  line unless scrolled back, and "Jump to latest" returns there.
+- Entries are grouped by run of the unit (every start, including the one
+  after each applied change), each run headed by its date and time.
+  xremap's errors and warnings stand out in red and amber, and systemd's
+  messages about starting and stopping the unit are muted.
+- Copy puts the entries on the clipboard as plain text, one line each
+  with its date, time, and writer, for a bug report. Among them are the
+  lines xremap writes each time a different window comes to the front,
+  which name the applications in use.
+- When the log cannot be read, the window says so: no journalctl, or
+  journalctl stopping with what it reported, the command to try in a
+  terminal, and "Try again".
+- Without systemd the menu leaves the log out.
+
+Limitations: reading needs journalctl and a user journal the user may
+read. Where journald keeps the journal only in memory, it is not split per
+user, and reading it usually takes membership in the `systemd-journal`
+group. Nothing can be filtered out: xremap writes nearly every line
+without a level the journal records (see
+[Upcoming Features](Upcoming_Features.md)), so its errors and warnings are
+recognised by their wording. The window's text cannot be selected; Copy
+takes everything shown. Only the unit's journal is shown, not Keyloom's
+own messages.
