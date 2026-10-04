@@ -17,15 +17,17 @@ flowchart TB
     fetch["Actions: wait, then fetch the packages<br>scripts/obs.py wait-builds and fetch, public API only"]
     arch["Actions: build the Arch package<br>makepkg in an archlinux container"]
     packages[["Release: .deb, .rpm, and Arch .pkg.tar.zst files<br>named after their distribution"]]
+    recipe["Actions: open the Arch recipe pull request<br>pkgver and checksum of the new tag"]
     published --> build --> bundle
     build --> trigger --> service
     build --> arch --> packages
+    arch --> recipe
     bundle -.-> service
     service --> builds --> fetch --> packages
     classDef actions fill:#EEEDFE,stroke:#7F77DD,color:#26215C
     classDef release fill:#F1EFE8,stroke:#888780,color:#2C2C2A
     classDef obs fill:#E1F5EE,stroke:#1D9E75,color:#04342C
-    class build,trigger,fetch,arch actions
+    class build,trigger,fetch,arch,recipe actions
     class published,bundle,packages release
     class service,builds obs
 ```
@@ -92,7 +94,9 @@ build in a repository waits for this package to be built there.
 Bump `version` in `Cargo.toml`, commit, and publish a GitHub release whose
 tag is `v` followed by that version, for example `v0.1.0`. The **Release
 packages** workflow fails with a clear message on a tag of any other
-shape, and on one that does not match `Cargo.toml`.
+shape, and on one that does not match `Cargo.toml`. The whole sequence,
+from choosing the version to merging the Arch recipe pull request, is in
+[Release_Process.md](../docs/Release_Process.md).
 
 The workflow attaches `keyloom-source-packages.tar` to the release,
 triggers the OBS package, waits for OBS to finish every build (up to five
@@ -172,10 +176,22 @@ The package is x86_64 only (the runner's architecture; Arch Linux itself
 supports no other) and unsigned, like the other files on the release.
 
 The committed `pkgver` and `sha256sums` still serve everyone who builds
-by hand from the README's instructions. After each release, update
-`pkgver`, reset `pkgrel` to 1, and refresh `sha256sums` with the new tag
-tarball's checksum, then rebuild once in a clean container the way a
-user would:
+by hand from the README's instructions, so they should name the newest
+release. The checksum is of the tag's tarball, which holds the PKGBUILD
+itself, so it can only be written once the tag exists. After the `arch`
+job has built and installed the package, the `arch-recipe` job opens a
+pull request, "Update Arch package recipe for X.Y.Z", that sets
+`pkgver`, resets `pkgrel` to 1, and sets `sha256sums` to the checksum
+the package was built from; merging it finishes the release. It
+proposes nothing when the committed recipe already names that release
+or a newer one, as on a re-run of an older release. GitHub Actions must
+be allowed to create pull requests (**Settings → Actions → General →
+Workflow permissions**); otherwise the job pushes the
+`arch-recipe-X.Y.Z` branch and fails with a link to open the pull
+request by hand. CI does not run on pull requests the workflow opens.
+
+To check a change to the recipe itself, rebuild once in a clean
+container the way a user would:
 
 ```sh
 docker run --rm -v "$PWD/packaging/arch:/src:ro" archlinux:latest bash -euxc '

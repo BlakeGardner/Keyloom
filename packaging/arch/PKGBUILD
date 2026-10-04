@@ -3,8 +3,8 @@
 # GitHub tag, with every crate pinned by the tag's Cargo.lock (libcosmic
 # comes from its pinned git revision). This file lives in the repository
 # until AUR registration reopens; it is what would be published there.
-# After each release, update pkgver and sha256sums to the new tag. See
-# packaging/README.md.
+# After each release, the release workflow proposes the new pkgver and
+# sha256sums as a pull request. See packaging/README.md.
 
 pkgname=keyloom
 pkgver=0.2.1
