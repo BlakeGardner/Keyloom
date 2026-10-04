@@ -233,7 +233,11 @@ a:hover {
 
 /* ---- Hero ------------------------------------------------------------ */
 
+/* A query container so the expanded recording can measure the page's full
+   width in cqw: unlike 100vw, that leaves out a classic scrollbar. */
+
 .hero {
+  container-type: inline-size;
   background: radial-gradient(70% 45% at 50% 0%, var(--hero-glow), transparent 70%);
 }
 
@@ -298,14 +302,24 @@ a:hover {
 }
 
 .shot {
+  /* The widest the recording (1464 x 942) can be while it, its 1px
+     borders, and 16px of room above and below still fit the window's
+     height. */
+  --shot-fit: calc((100svh - 2 * 16px - 2px) * 1464 / 942);
+  --shot-radius: clamp(8px, 0.8vw, 12px);
   position: relative;
   width: 100%;
   margin: clamp(40px, 4.4vw, 64px) 0 0;
+  scroll-margin-block: 16px;
   border: 1px solid var(--wash-12);
-  border-radius: clamp(8px, 0.8vw, 12px);
+  border-radius: var(--shot-radius);
   overflow: hidden;
   background: var(--bg);
   box-shadow: var(--shadow-popover);
+  transition:
+    width 0.35s ease,
+    margin 0.35s ease,
+    border-radius 0.35s ease;
 }
 
 .shot img,
@@ -315,13 +329,49 @@ a:hover {
   height: auto;
 }
 
-/* The recording loops on its own; this pauses it (and starts it again for
-   anyone whose system asks for reduced motion, where it starts paused). */
+/* Clicking the recording widens it as far as the window allows, to the
+   edges or until it is as tall as the window, and never narrower than the
+   page column; clicking again (or Escape) puts it back. The negative
+   margins pull it out of the column without moving anything beside it.
+   Its corners and side borders give way only as it meets the window's
+   edges. */
 
-.shot-toggle {
+.js .shot video {
+  cursor: zoom-in;
+}
+
+.shot.is-expanded {
+  --shot-width: max(100%, min(100cqw, var(--shot-fit)));
+  --shot-room: max(0px, (100cqw - var(--shot-fit)) / 2);
+  width: var(--shot-width);
+  margin-inline: calc((100% - var(--shot-width)) / 2);
+  border-inline-width: min(1px, var(--shot-room));
+  border-radius: min(var(--shot-radius), var(--shot-room));
+}
+
+.shot.is-expanded video {
+  cursor: zoom-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shot {
+    transition: none;
+  }
+}
+
+/* The recording loops on its own; Pause stops it (and Play starts it for
+   anyone whose system asks for reduced motion, where it starts paused).
+   Expand does what clicking the recording does, for keyboards too. */
+
+.shot-controls {
   position: absolute;
   right: 12px;
   bottom: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.shot-toggle {
   min-height: 32px;
   padding: 0 12px;
   border: 1px solid var(--wash-12);
