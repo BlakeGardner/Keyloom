@@ -130,14 +130,18 @@ jobs:
     # one-off binary, the way it carries one-off .deb and .rpm files.
     # makepkg runs in an Arch container with the recipe from this commit,
     # its pkgver and checksum pointed at the release's tag, so the
-    # committed PKGBUILD never needs to be bumped before a release. Needs
-    # the source job only for its tag checks; no artifact of it is used.
+    # committed PKGBUILD never needs to be bumped before a release; the
+    # arch-recipe job proposes that bump afterwards. Needs the source job
+    # only for its tag checks; no artifact of it is used.
     needs: source
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container: archlinux:latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+      sha256: ${{ steps.build.outputs.sha256 }}
     env:
       GH_TOKEN: ${{ github.token }}
       # gh would otherwise ask git for the repository, and git does not
@@ -164,6 +168,7 @@ jobs:
       # makepkg refuses to run as root, hence the builder user, allowed
       # sudo pacman so --syncdeps can install the PKGBUILD's dependencies.
       - name: Build the package
+        id: build
         if: steps.release.outputs.skip != 'true'
         run: |
           version=${TAG#v}
@@ -179,6 +184,8 @@ jobs:
           cd /build
           sudo -u builder makepkg --syncdeps --noconfirm
           namcap keyloom-*.pkg.tar.zst || true
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
       # The glob starting with a digit passes over the -debug package some
       # makepkg configurations split off.
       - name: Install it, as a smoke test
@@ -199,3 +206,58 @@ jobs:
           name: arch-package
           path: /build/keyloom-[0-9]*-x86_64.pkg.tar.zst
           if-no-files-found: ignore
+
+  arch-recipe:
+    name: Arch recipe update
+    # The committed PKGBUILD is what people building from source download
+    # from the default branch (see the README), so it should name the
+    # newest release. Its checksum is of the tag's tarball, which holds the
+    # PKGBUILD itself, so it can only be written once the tag exists: this
+    # proposes it as a pull request, with the version and checksum the
+    # arch job just built and installed. A re-run for a release no newer
+    # than the committed recipe proposes nothing. Opening the pull request
+    # needs "Allow GitHub Actions to create and approve pull requests" in
+    # the repository's Actions settings.
+    needs: arch
+    if: needs.arch.outputs.sha256 != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.arch.outputs.version }}
+      SHA256: ${{ needs.arch.outputs.sha256 }}
+      BASE: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Propose the recipe update
+        run: |
+          recipe=packaging/arch/PKGBUILD
+          branch="arch-recipe-$VERSION"
+          committed=$(sed -n 's/^pkgver=//p' "$recipe")
+          newest=$(printf '%s\n' "$committed" "$VERSION" | sort -V | tail -n1)
+          if [ "$committed" = "$VERSION" ] || [ "$newest" != "$VERSION" ]; then
+            echo "::notice::The recipe on $BASE already builds $committed; nothing to propose for $VERSION."
+            exit 0
+          fi
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            echo "::notice::A pull request from $branch is already open."
+            exit 0
+          fi
+          sed -i "s/^pkgver=.*/pkgver=$VERSION/; s/^pkgrel=.*/pkgrel=1/; s/^sha256sums=.*/sha256sums=('$SHA256')/" "$recipe"
+          git switch -c "$branch"
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898237+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "Update Arch package recipe for $VERSION" "$recipe"
+          git push --force origin "$branch"
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="Points \`$recipe\` at $TAG: \`pkgver=$VERSION\`, \`pkgrel=1\`, and the SHA-256 of the tag's tarball, which [the release run]($run) built and installed the Arch package from. The release workflow opened this, so CI does not run on it."
+          if ! gh pr create --base "$BASE" --head "$branch" \
+              --title "Update Arch package recipe for $VERSION" --body "$body"; then
+            echo "::error::Could not open the pull request; $branch is pushed. Allow GitHub Actions to create pull requests under Settings > Actions > General, or open $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$BASE...$branch by hand."
+            exit 1
+          fi
