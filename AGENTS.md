@@ -110,3 +110,13 @@ documentation diff and run `git diff --check`; Rust checks are not needed.
 - In the final response, summarize the change, documentation updates (or
   why none were needed), and validation results, including any checks that
   could not run.
+
+## Releases
+
+Releases follow [docs/Release_Process.md](docs/Release_Process.md): work
+lands on `main` through pull requests, then a release pull request bumps
+the version in `Cargo.toml` and carries the release notes, and
+publishing a GitHub release from the merged commit tags it and starts
+packaging. When asked to prepare a release, follow that document through
+the release pull request. Publishing the release and pushing tags are
+the maintainer's steps unless they ask for them.
