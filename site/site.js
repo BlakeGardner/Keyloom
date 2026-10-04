@@ -1,12 +1,17 @@
-// Keyloom website: the hero recording's pause button, and the install
-// section's distribution and version tabs with their copy buttons. Without
-// scripting, the recording still loops and every install block shows in
-// order.
+// Keyloom website: the hero recording's pause and expand buttons, and the
+// install section's distribution and version tabs with their copy buttons.
+// Without scripting, the recording still loops at the page's width and
+// every install block shows in order.
 (function () {
   "use strict";
 
   var video = document.querySelector(".shot video");
   if (video) {
+    var shot = video.closest(".shot");
+    var still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var controls = document.createElement("div");
+    controls.className = "shot-controls";
+
     var toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "shot-toggle";
@@ -22,12 +27,53 @@
     });
     video.addEventListener("play", label);
     video.addEventListener("pause", label);
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (still) {
       video.removeAttribute("autoplay");
       video.pause();
     }
     label();
-    video.parentNode.appendChild(toggle);
+
+    var size = document.createElement("button");
+    size.type = "button";
+    size.className = "shot-toggle";
+    var expanded = function () {
+      return shot.classList.contains("is-expanded");
+    };
+    // Once the recording is wide, scroll just enough to bring all of it
+    // into view (or its top, in a window too short even for the column).
+    var settle = function () {
+      if (expanded()) {
+        shot.scrollIntoView({ block: "nearest" });
+      }
+    };
+    var resize = function (wide) {
+      shot.classList.toggle("is-expanded", wide);
+      size.textContent = wide ? "Shrink" : "Expand";
+      if (wide && still) {
+        settle();
+      }
+    };
+    size.addEventListener("click", function () {
+      resize(!expanded());
+    });
+    video.addEventListener("click", function () {
+      resize(!expanded());
+    });
+    shot.addEventListener("transitionend", function (event) {
+      if (event.target === shot && event.propertyName === "width") {
+        settle();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && expanded()) {
+        resize(false);
+      }
+    });
+    resize(false);
+
+    controls.appendChild(toggle);
+    controls.appendChild(size);
+    shot.appendChild(controls);
   }
 
   var installer = document.querySelector("[data-installer]");
