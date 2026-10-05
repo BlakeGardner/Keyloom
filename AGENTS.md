@@ -8,6 +8,17 @@ skill (when available) and follow its guidance.
 
 ## Guiding principles
 
+[docs/Guiding_Principles.md](docs/Guiding_Principles.md) is the full
+statement of these principles and of how Keyloom describes itself. In
+short:
+
+- **Simplicity.** Users should be able to do everything through an
+  easy-to-use interface. Make common tasks obvious and easy, with sensible
+  defaults and clear language. Use progressive disclosure: reveal advanced
+  options when users seek them out or the task requires them, keeping
+  everyday workflows approachable while preserving depth and control for
+  users who want it. Avoid adding controls, settings, or steps without a
+  clear user need.
 - **Feel at home on COSMIC and work across desktops.** Use libcosmic's
   conventions and integration capabilities to provide a first-party-quality
   experience on COSMIC. Changes and features must also work across all major
@@ -20,12 +31,6 @@ skill (when available) and follow its guidance.
   consistency, responsiveness, accessibility, and thoughtful feedback as part
   of feature quality. Follow established libcosmic patterns and use purposeful
   details that help users understand and enjoy the application.
-- **Provide power through simplicity.** Make common tasks obvious and easy,
-  with sensible defaults and clear language. Use progressive disclosure:
-  reveal advanced options when users seek them out or the task requires them,
-  keeping everyday workflows approachable while preserving depth and control
-  for users who want it. Avoid adding controls, settings, or steps without a
-  clear user need.
 
 ## Keep product documentation current
 
@@ -35,6 +40,13 @@ materially changes a real user-facing capability, workflow, supported setup,
 data or persistence behavior, backend integration, important limitation, or
 roadmap commitment.
 
+- `docs/Guiding_Principles.md`: the principles and the messaging (tagline,
+  description). The README, `site/index.html`, and the app's own
+  descriptions (About dialog, setup welcome page) use its wording; when the
+  messaging changes, change this document first and keep them in step.
+  User-facing copy never mentions COSMIC, libcosmic, or anything else
+  about how Keyloom is built: the people Keyloom is for don't need to
+  know which desktop it was built for.
 - `docs/Current_Features.md`: describe implemented capabilities and relevant
   limitations at the product level. Keep it accurate, but do not catalog every
   control behavior or presentation detail.

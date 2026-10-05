@@ -17,7 +17,12 @@
   <img src="docs/media/basic-remaps.gif" alt="Choosing Play/Pause for F8 in the key editor, and the key taking on its new job right away">
 </p>
 
-## Different keys in different apps
+## Simple things first. Power when you want it.
+
+Remap a key in two clicks. When you need more, the same keyboard handles
+layers, per-application keys, and shortcuts.
+
+### Different keys in different apps
 
 A key can do one thing in one application and stay normal everywhere
 else. Here Caps Lock becomes Escape in Visual Studio Code.
@@ -26,7 +31,7 @@ else. Here Caps Lock becomes Escape in Visual Studio Code.
   <img src="docs/media/application-remaps.gif" alt="Scoping the keyboard to Visual Studio Code and mapping Caps Lock to Escape there, leaving it alone everywhere else">
 </p>
 
-## Test your keyboard
+### Test your keyboard
 
 Keys light up as you press them, and you see what each one sends.
 Keyloom works out your keyboard's size and layout for you.
@@ -35,7 +40,7 @@ Keyloom works out your keyboard's size and layout for you.
   <img src="docs/media/keyboard-tester.gif" alt="Keys lighting up on the tester as they are pressed, with each key's name, code, and source keyboard beside it">
 </p>
 
-## And more
+### And more
 
 - **Tap and hold**: Escape when tapped, Control when held.
 - **Layers**: hold Caps Lock and H/J/K/L become arrow keys, while every
