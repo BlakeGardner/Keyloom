@@ -6,7 +6,7 @@
 <title>Keyloom · Your keyboard, the way you want it</title>
 <meta name="description" content="Keyloom is a visual keyboard customization app for Linux. Click a key, choose what it should do, and it takes effect right away.">
 <link rel="canonical" href="https://keyloom.net/">
-<meta name="theme-color" content="#080b09">
+<meta name="theme-color" content="#110f1e">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Keyloom">
 <meta property="og:title" content="Keyloom · Your keyboard, the way you want it">
@@ -17,6 +17,23 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Keyloom's main window showing a tenkeyless keyboard with a few remapped keys.">
 <meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Keyloom",
+  "url": "https://keyloom.net/",
+  "image": "https://keyloom.net/og-image.png",
+  "description": "Keyloom is a visual keyboard customization app for Linux. Click a key, choose what it should do, and it takes effect right away.",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "Linux",
+  "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+  "isAccessibleForFree": true,
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+  "downloadUrl": "https://github.com/BlakeGardner/Keyloom/releases",
+  "sameAs": ["https://github.com/BlakeGardner/Keyloom"]
+}
+</script>
 <link rel="icon" href="keyloom-mark.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -47,7 +64,7 @@
 <div class="wrap">
 <p class="eyebrow">Keyboard customization for Linux</p>
 <h1 id="hero-title">Your keyboard, the way you want it.</h1>
-<p class="lead">Keyloom is a visual keyboard customization app for Linux. Click a key, choose what it should do, and it takes effect right away.</p>
+<p class="lead">Click a key, choose what it should do, and it takes effect right away.</p>
 <div class="actions">
 <a class="button button-primary" href="#install">Install Keyloom</a>
 </div>
@@ -93,7 +110,7 @@
 </div>
 <ul class="cards">
 
-<li class="card">
+<li class="card card--wide card--tint">
 <figure aria-hidden="true">
 <div class="stack">
 <div class="cap cap--mapped"><small>Caps</small><strong>Esc</strong></div>
@@ -134,7 +151,7 @@
 <p>Hold Caps Lock and H, J, K, L become arrow keys, while every other key keeps working normally.</p>
 </li>
 
-<li class="card">
+<li class="card card--wide">
 <figure aria-hidden="true">
 <div class="chord">
 <span class="pill-key">Super</span><span class="op">+</span><span class="pill-key">C</span>
@@ -146,7 +163,7 @@
 <p>Turn one chord into another, so Super+C sends the terminal's Ctrl+Shift+C and Ctrl+C keeps interrupting.</p>
 </li>
 
-<li class="card">
+<li class="card card--half">
 <figure aria-hidden="true">
 <span class="chip"><span class="dot"></span>Laptop</span>
 <span class="chip chip--quiet">Gaming</span>
@@ -156,7 +173,7 @@
 <p>Separate setups for work, gaming, or Mac-style controls. One click pauses remapping when you want your original keys back.</p>
 </li>
 
-<li class="card">
+<li class="card card--half card--tint">
 <figure aria-hidden="true">
 <div class="stack">
 <div class="row">
@@ -164,7 +181,7 @@
 <div class="cap cap--held cap--fkey cap--lit">F8</div>
 <div class="cap cap--fkey">F9</div>
 </div>
-<span class="readout">F8 · KEY_F8 · sends Play/Pause</span>
+<span class="readout"><span>F8</span><span>KEY_F8</span><span>sends Play/Pause</span></span>
 </div>
 </figure>
 <h3>Test your keyboard</h3>
@@ -178,7 +195,6 @@
 <section id="install" class="section" aria-labelledby="install-title">
 <div class="wrap">
 <div class="section-header">
-<p class="eyebrow">Install</p>
 <h2 id="install-title">Get Keyloom</h2>
 <p>Add the repository for your distribution once, and Keyloom updates with the rest of your system. Pick your distribution to see the commands.</p>
 </div>
