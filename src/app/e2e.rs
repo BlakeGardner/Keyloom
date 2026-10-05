@@ -970,7 +970,7 @@ fn welcome_page_starts_setup_or_puts_it_off() {
     let mut driver = Driver::new(app_on(SetupPage::Welcome, None)).named("W1-checking");
     driver.expect_shown(&[
         "FIRST-RUN SETUP",
-        "Make your keyboard your own",
+        "Your keyboard, the way you want it",
         "Set up later",
         "Start setup",
     ]);

@@ -1348,7 +1348,7 @@ pub fn about_dialog() -> Element<'static, Message> {
             ))
             .push(
                 txt(
-                    "Make your keyboard your own. Remap keys, create shortcuts, and switch profiles with a visual keyboard editor for Linux.",
+                    "Your keyboard, the way you want it. Keyloom is a visual keyboard customization app for Linux. Click a key, choose what it should do, and it takes effect right away.",
                     14.0,
                     muted(),
                 )
@@ -1360,7 +1360,7 @@ pub fn about_dialog() -> Element<'static, Message> {
                 // places its link spans as if it were left-aligned.
                 container(
                     rich_text([
-                        span("Built with Rust and libcosmic. Powered by "),
+                        span("Built on "),
                         span("xremap")
                             .link("https://github.com/xremap/xremap")
                             .color(accent())
@@ -2446,7 +2446,11 @@ fn welcome_page(setup: &Setup, height: f32) -> Element<'_, Message> {
     let content = widget::column::with_capacity(3)
         .spacing(16)
         .push(eyebrow("First-run setup"))
-        .push(txt_semibold("Make your keyboard your own", 24.0, fg()))
+        .push(txt_semibold(
+            "Your keyboard, the way you want it",
+            24.0,
+            fg(),
+        ))
         .push(
             txt(
                 "Keyloom will help you get remapping working on this system. It takes a few \
