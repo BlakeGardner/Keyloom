@@ -57,6 +57,32 @@ pub fn log_window(app: &App) -> Element<'_, Message> {
     app.view_window(log.id)
 }
 
+/// The window list's window as the runtime composes it
+/// ([`App::view_window`]): it draws its own header.
+pub fn window_list_window(app: &App) -> Element<'_, Message> {
+    let view = app.window_list.as_ref().expect("the window list is open");
+    app.view_window(view.id)
+}
+
+/// What xremap lists for a desktop with a terminal, two browser
+/// windows, a window without an id, and Keyloom open.
+pub fn listed_windows() -> crate::apps::WindowList {
+    let window = |app_id: &str, title: &str| crate::apps::Window {
+        app_id: app_id.to_owned(),
+        title: title.to_owned(),
+    };
+    crate::apps::WindowList {
+        binary: Some(PathBuf::from("/usr/bin/xremap")),
+        windows: Ok(vec![
+            window("com.system76.CosmicTerm", "~ — fish"),
+            window("firefox", "Keyloom · GitHub — Firefox"),
+            window("firefox", "Second window"),
+            window("", "untitled"),
+            window(crate::config::APP_ID, "Keyloom"),
+        ]),
+    }
+}
+
 /// What the service's watcher delivers when the unit is in `status`:
 /// a report newer than any before it.
 pub fn service_is(status: service::Status) -> Message {
