@@ -65,8 +65,8 @@ the rest of your system.
 <summary><b>Debian 13</b></summary>
 
 ```sh
-echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
-curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
+echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
 sudo apt update
 sudo apt install keyloom
 ```
@@ -77,8 +77,8 @@ sudo apt install keyloom
 <summary><b>Debian testing</b></summary>
 
 ```sh
-echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
-curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
+echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
 sudo apt update
 sudo apt install keyloom
 ```
@@ -91,8 +91,8 @@ sudo apt install keyloom
 <summary><b>Ubuntu 24.04 or Pop!_OS 24.04</b></summary>
 
 ```sh
-echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
-curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
+echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
 sudo apt update
 sudo apt install keyloom
 ```
@@ -103,8 +103,8 @@ sudo apt install keyloom
 <summary><b>Ubuntu 25.10</b></summary>
 
 ```sh
-echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_25.10/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
-curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_25.10/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_25.10/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
+echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_25.10/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
 sudo apt update
 sudo apt install keyloom
 ```
@@ -115,8 +115,8 @@ sudo apt install keyloom
 <summary><b>Ubuntu 26.04</b></summary>
 
 ```sh
-echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_26.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
-curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_26.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg > /dev/null
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_26.04/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
+echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_26.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
 sudo apt update
 sudo apt install keyloom
 ```
