@@ -19,7 +19,7 @@ ureq = "3"
 # The D-Bus client libcosmic already builds on; Keyloom talks to
 # systemd's user manager with it (src/systemd.rs).
 zbus = { version = "5", default-features = false, features = ["tokio"] }
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
