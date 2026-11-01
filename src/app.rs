@@ -504,6 +504,8 @@ pub enum Message {
     ResetMappingsConfirm,
     ResetMappingsCancel,
     MenuAbout,
+    /// Show or hide the menu's troubleshooting tools.
+    MenuTroubleshooting,
     CloseAbout,
     /// Open the remapping log's window (or bring it to the front): from
     /// the menu, or a toast reporting a failure.
@@ -527,6 +529,22 @@ pub enum Message {
     LogClose,
     /// A window closed; the log's, it may be.
     LogClosed(window::Id),
+    /// Open the window list's window (or bring it to the front).
+    OpenWindowList,
+    /// What xremap listed this time.
+    WindowListUpdated(apps::WindowList),
+    /// Put the listed windows on the clipboard.
+    WindowListCopy,
+    /// A copy's acknowledgment has been shown long enough.
+    WindowListCopyShown(u64),
+    /// The window list's header: moving, maximizing, minimizing, and
+    /// closing the window.
+    WindowListDrag,
+    WindowListMaximize,
+    WindowListMinimize,
+    WindowListClose,
+    /// A window closed; the window list's, it may be.
+    WindowListClosed(window::Id),
     /// Draw the deck one level larger or smaller, or fitted to the
     /// window again: from the menu, Ctrl+scroll over the deck, or Ctrl
     /// with +, −, or 0.
@@ -555,8 +573,13 @@ pub struct App {
     /// active profile's list.
     pub confirm_remove_mapping: Option<usize>,
     pub about_open: bool,
+    /// The menu shows its troubleshooting tools (the remapping log and
+    /// the window list), kept out of sight until asked for.
+    pub menu_troubleshooting: bool,
     /// The remapping log's window, while it is open.
     pub log: Option<ui::log::LogWindow>,
+    /// The window list's window, while it is open.
+    pub window_list: Option<ui::windows::WindowListView>,
     /// First-run setup, while it is open.
     pub setup: Option<Setup>,
     /// How far setup got, as remembered between launches.
@@ -1479,6 +1502,32 @@ impl App {
     /// Whether `id` is the log window's.
     fn is_log_window(&self, id: window::Id) -> bool {
         self.log.as_ref().is_some_and(|log| log.id == id)
+    }
+
+    /// Open the window list in its own window, or bring the open one to
+    /// the front.
+    fn open_window_list(&mut self) -> Task<Message> {
+        self.popover = None;
+        if let Some(list) = &self.window_list {
+            return window::gain_focus(list.id);
+        }
+        let (id, opened) = window::open(ui::windows::settings());
+        self.window_list = Some(ui::windows::WindowListView::new(id));
+        Task::batch([
+            opened.discard(),
+            self.set_window_title(ui::windows::TITLE.to_owned(), id),
+        ])
+    }
+
+    /// Whether `id` is the window list's window.
+    fn is_window_list_window(&self, id: window::Id) -> bool {
+        self.window_list.as_ref().is_some_and(|list| list.id == id)
+    }
+
+    /// Whether `id` is a window beside the main one: the log's or the
+    /// window list's.
+    fn is_side_window(&self, id: window::Id) -> bool {
+        self.is_log_window(id) || self.is_window_list_window(id)
     }
 
     /// Save the configuration model and regenerate the xremap file.
@@ -2898,7 +2947,9 @@ impl cosmic::Application for App {
             remaps_open: false,
             confirm_remove_mapping: None,
             about_open: false,
+            menu_troubleshooting: false,
             log: None,
+            window_list: None,
             setup: None,
             setup_state,
             profiles,
@@ -3031,6 +3082,12 @@ impl cosmic::Application for App {
                     Some(popover)
                 };
                 self.rename = None;
+                // The menu opens with its troubleshooting tools tucked
+                // away.
+                self.menu_troubleshooting = false;
+            }
+            Message::MenuTroubleshooting => {
+                self.menu_troubleshooting = !self.menu_troubleshooting;
             }
             Message::CloseOverlays => {
                 self.popover = None;
@@ -3918,8 +3975,57 @@ impl cosmic::Application for App {
                     self.log = None;
                 }
             }
+            Message::OpenWindowList => return self.open_window_list(),
+            Message::WindowListUpdated(list) => {
+                if let Some(view) = &mut self.window_list {
+                    view.list = Some(list);
+                }
+            }
+            Message::WindowListCopy => {
+                if let Some(view) = &mut self.window_list {
+                    let copy = view.copy();
+                    return Task::batch([
+                        cosmic::iced::clipboard::write(view.text()),
+                        cosmic::task::future(async move {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            Message::WindowListCopyShown(copy)
+                        }),
+                    ]);
+                }
+            }
+            Message::WindowListCopyShown(copy) => {
+                if let Some(view) = &mut self.window_list {
+                    view.copy_shown(copy);
+                }
+            }
+            Message::WindowListDrag => {
+                if let Some(view) = &self.window_list {
+                    return self.core.drag(Some(view.id));
+                }
+            }
+            Message::WindowListMaximize => {
+                if let Some(view) = &self.window_list {
+                    return self.core.toggle_maximize(Some(view.id));
+                }
+            }
+            Message::WindowListMinimize => {
+                if let Some(view) = &self.window_list {
+                    return self.core.minimize(Some(view.id));
+                }
+            }
+            Message::WindowListClose => {
+                if let Some(view) = &self.window_list {
+                    return window::close(view.id);
+                }
+            }
+            // Closing the window stops asking xremap.
+            Message::WindowListClosed(id) => {
+                if self.is_window_list_window(id) {
+                    self.window_list = None;
+                }
+            }
             Message::ZoomKey(id, step) => {
-                if !self.is_log_window(id) {
+                if !self.is_side_window(id) {
                     return self.update(Message::Zoom(step));
                 }
             }
@@ -3932,7 +4038,7 @@ impl cosmic::Application for App {
             }
             Message::WindowResized(id, size) => {
                 if self.core.main_window_id().is_none_or(|main| main == id)
-                    && !self.is_log_window(id)
+                    && !self.is_side_window(id)
                 {
                     self.window = size;
                 }
@@ -4015,6 +4121,10 @@ impl cosmic::Application for App {
         if let Some(log) = &self.log {
             subscriptions.push(Subscription::run_with(log.attempt, log_stream));
         }
+        // xremap is asked for the open windows while their list is open.
+        if self.window_list.is_some() {
+            subscriptions.push(Subscription::run(window_list_stream));
+        }
         // Drive redraws only while the sheet is actively moving.
         let sheet_progress = self.sheet_progress();
         if self.sheet_visible() && (!self.sheet_open() || sheet_progress < 1.0) {
@@ -4068,23 +4178,31 @@ impl cosmic::Application for App {
     fn view_window(&self, id: window::Id) -> Element<'_, Message> {
         match &self.log {
             Some(log) if log.id == id => ui::log::window(self, log),
-            // A window on its way out has nothing left to draw.
-            _ => cosmic::widget::Space::new().into(),
+            _ => match &self.window_list {
+                Some(view) if view.id == id => ui::windows::window(self, view),
+                // A window on its way out has nothing left to draw.
+                _ => cosmic::widget::Space::new().into(),
+            },
         }
     }
 
     fn on_close_requested(&self, id: window::Id) -> Option<Message> {
-        self.is_log_window(id).then_some(Message::LogClosed(id))
+        if self.is_log_window(id) {
+            Some(Message::LogClosed(id))
+        } else {
+            self.is_window_list_window(id)
+                .then_some(Message::WindowListClosed(id))
+        }
     }
 
     fn on_escape(&mut self) -> Task<Message> {
         // Only window keyboard events reach this callback, so typing Escape
         // in another application cannot dismiss Keyloom's surfaces; nor
-        // can typing it in the log window.
+        // can typing it in the log window or the window list.
         if self
             .core
             .focused_window()
-            .is_some_and(|id| self.is_log_window(id))
+            .is_some_and(|id| self.is_side_window(id))
         {
             return Task::none();
         }
@@ -4153,6 +4271,12 @@ fn service_stream() -> impl Stream<Item = Message> + Send {
 /// each attempt (the subscription's identity) follows it anew.
 fn log_stream(_attempt: &u64) -> impl Stream<Item = Message> + Send + use<> {
     journal::follow().map(Message::LogEvent)
+}
+
+/// Adapts asking xremap for the open windows, every few seconds, into
+/// this app's message stream.
+fn window_list_stream() -> impl Stream<Item = Message> + Send {
+    apps::watch_windows().map(Message::WindowListUpdated)
 }
 
 /// The runtime events the app follows on its own: a window's size,

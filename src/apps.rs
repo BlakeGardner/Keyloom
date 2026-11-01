@@ -7,11 +7,14 @@
 //! picker sees exactly what remapping will match on. It asks the
 //! compositor the way the running remapper does and returns before
 //! xremap selects any input device, so it never takes a keyboard away
-//! from the remapper that is running.
+//! from the remapper that is running. The window list shows the same
+//! answer unprocessed, asked again every few seconds while it is open.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use cosmic::desktop::{self, fde};
+use cosmic::iced::futures::{Stream, stream};
 use tokio::process::Command;
 
 use crate::config::APP_ID;
@@ -54,14 +57,27 @@ pub struct Window {
     pub title: String,
 }
 
+/// One answer from `xremap --list-windows`, every row as printed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowList {
+    /// The xremap asked, when one was found.
+    pub binary: Option<PathBuf>,
+    /// The windows in the order xremap listed them, or why there are
+    /// none to show.
+    pub windows: Result<Vec<Window>, String>,
+}
+
+/// How often the window list asks again.
+pub const REFRESH: Duration = Duration::from_secs(5);
+
 /// Everything the picker offers: installed applications, marked open
 /// where a window of theirs is up, plus open windows of applications
 /// without a desktop entry.
 pub async fn catalog() -> Catalog {
     let installed = installed();
-    match open_windows().await {
+    match list_windows().await.windows {
         Ok(windows) => Catalog {
-            apps: merge(installed, &windows),
+            apps: merge(installed, &applications(&windows)),
             windows_error: None,
         },
         Err(error) => Catalog {
@@ -101,18 +117,35 @@ fn installed() -> Vec<KnownApp> {
         .collect()
 }
 
-/// The windows open right now, as xremap reports them.
+/// The window list now, then again every [`REFRESH`], for as long as
+/// the stream is followed.
+pub fn watch_windows() -> impl Stream<Item = WindowList> {
+    stream::unfold(true, |first| async move {
+        if !first {
+            tokio::time::sleep(REFRESH).await;
+        }
+        Some((list_windows().await, false))
+    })
+}
+
+/// Every window open right now, as xremap reports it.
+pub async fn list_windows() -> WindowList {
+    let binary = setup::locate_xremap().await;
+    let windows = match &binary {
+        Some(binary) => windows_from(binary).await,
+        None => Err("xremap is not installed".to_owned()),
+    };
+    WindowList { binary, windows }
+}
+
+/// Run `binary --list-windows` and read its table.
 ///
 /// # Errors
 ///
-/// When xremap is not installed, could not be run, or reports nothing
-/// (a desktop its build cannot ask), with xremap's own explanation
-/// where it gives one.
-async fn open_windows() -> Result<Vec<Window>, String> {
-    let Some(binary) = setup::locate_xremap().await else {
-        return Err("xremap is not installed".to_owned());
-    };
-    let output = Command::new(&binary)
+/// When xremap could not be run or reports nothing (a desktop its
+/// build cannot ask), with xremap's own explanation where it gives one.
+async fn windows_from(binary: &Path) -> Result<Vec<Window>, String> {
+    let output = Command::new(binary)
         .arg("--list-windows")
         .output()
         .await
@@ -137,8 +170,9 @@ async fn open_windows() -> Result<Vec<Window>, String> {
 
 /// Read the table `xremap --list-windows` prints: a header line naming
 /// the `APP_CLASS`, `TITLE`, and `WIN_ID` columns, then one row per
-/// window with each column padded to its widest value. `None` without
-/// the header, which is what an unsupported desktop yields.
+/// window with each column padded to its widest value. Every row is
+/// kept, in order. `None` without the header, which is what an
+/// unsupported desktop yields.
 pub(crate) fn parse_window_list(stdout: &str) -> Option<Vec<Window>> {
     let mut lines = stdout.lines();
     let header = lines.next()?;
@@ -155,22 +189,32 @@ pub(crate) fn parse_window_list(stdout: &str) -> Option<Vec<Window>> {
             .trim_end()
             .to_owned()
     };
-    let mut windows: Vec<Window> = Vec::new();
-    for line in lines {
-        let chars: Vec<char> = line.chars().collect();
-        let app_id = column(&chars, 0, title_at);
-        if app_id.is_empty() || app_id == APP_ID {
+    Some(
+        lines
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let chars: Vec<char> = line.chars().collect();
+                Window {
+                    app_id: column(&chars, 0, title_at),
+                    title: column(&chars, title_at, winid_at),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// One window for each application the picker can offer: the first of
+/// each id, leaving out Keyloom's own and those without an id.
+fn applications(windows: &[Window]) -> Vec<Window> {
+    let mut apps: Vec<Window> = Vec::new();
+    for window in windows {
+        let id = window.app_id.as_str();
+        if id.is_empty() || id == APP_ID || apps.iter().any(|app| app.app_id == id) {
             continue;
         }
-        if windows.iter().any(|window| window.app_id == app_id) {
-            continue;
-        }
-        windows.push(Window {
-            app_id,
-            title: column(&chars, title_at, winid_at),
-        });
+        apps.push(window.clone());
     }
-    Some(windows)
+    apps
 }
 
 /// Mark the installed applications that have a window open, and add
@@ -259,6 +303,13 @@ mod tests {
         out
     }
 
+    fn window(app_id: &str, title: &str) -> Window {
+        Window {
+            app_id: app_id.to_owned(),
+            title: title.to_owned(),
+        }
+    }
+
     #[test]
     fn the_window_table_is_read_by_column() {
         let table = table(&[
@@ -272,14 +323,19 @@ mod tests {
         assert_eq!(
             windows,
             vec![
-                Window {
-                    app_id: "com.system76.CosmicTerm".to_owned(),
-                    title: "~ — fish".to_owned(),
-                },
-                Window {
-                    app_id: "firefox".to_owned(),
-                    title: "Keyloom · GitHub — Firefox".to_owned(),
-                },
+                window("com.system76.CosmicTerm", "~ — fish"),
+                window("firefox", "Keyloom · GitHub — Firefox"),
+                window("firefox", "Second window"),
+                window("", "untitled"),
+                window(APP_ID, "Keyloom"),
+            ],
+            "every row, as printed"
+        );
+        assert_eq!(
+            applications(&windows),
+            vec![
+                window("com.system76.CosmicTerm", "~ — fish"),
+                window("firefox", "Keyloom · GitHub — Firefox"),
             ],
             "one entry per application, none for Keyloom or nameless windows"
         );
@@ -295,18 +351,9 @@ mod tests {
             known("com.spotify.Client", "Spotify", &[]),
         ];
         let windows = vec![
-            Window {
-                app_id: "steam_app_730".to_owned(),
-                title: "Counter-Strike 2".to_owned(),
-            },
-            Window {
-                app_id: "Code".to_owned(),
-                title: "main.rs".to_owned(),
-            },
-            Window {
-                app_id: "FIREFOX".to_owned(),
-                title: "Tab".to_owned(),
-            },
+            window("steam_app_730", "Counter-Strike 2"),
+            window("Code", "main.rs"),
+            window("FIREFOX", "Tab"),
         ];
         let apps = merge(installed, &windows);
         let names: Vec<&str> = apps.iter().map(|app| app.app.name.as_str()).collect();

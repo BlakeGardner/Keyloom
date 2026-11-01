@@ -11,10 +11,9 @@ use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
 use crate::app::{App, Message};
-use crate::config;
 use crate::journal::{self, End, Entry, Event, Severity, Source};
 use crate::ui::keyboard_view::rule;
-use crate::ui::theme::{ghost_button, muted, oklch, success, surface, white};
+use crate::ui::theme::{ghost_button, muted, oklch, success, white};
 use crate::ui::{hspace, txt, txt_semibold};
 
 /// The window's title.
@@ -34,22 +33,9 @@ const KEEP: usize = journal::BACKLOG;
 /// Most of journalctl's notices kept: the latest say what matters.
 const NOTICES: usize = 3;
 
-/// How the window is made: like the main window, it draws its own
-/// header and corners (libcosmic's client-side decorations), so it
-/// looks the same on every desktop, and it carries the application's
-/// id so the desktop counts it as Keyloom's.
+/// How the window is made ([`crate::ui::side_window_settings`]).
 pub fn settings() -> window::Settings {
-    let mut settings = window::Settings {
-        size: SIZE,
-        min_size: Some(MIN_SIZE),
-        decorations: false,
-        transparent: true,
-        resizable: true,
-        resize_border: 8,
-        ..window::Settings::default()
-    };
-    settings.platform_specific.application_id = config::APP_ID.to_owned();
-    settings
+    crate::ui::side_window_settings(SIZE, MIN_SIZE)
 }
 
 /// The scrolling list of entries, for keeping it at the latest one.
@@ -205,53 +191,13 @@ pub fn window<'a>(app: &'a App, log: &'a LogWindow) -> Element<'a, Message> {
         header = header.on_minimize(Message::LogMinimize);
     }
 
-    let content = container(
+    crate::ui::side_window(
+        header,
         widget::column::with_capacity(3)
             .push(toolbar(log))
             .push_maybe(banner(log))
             .push(entries(log)),
     )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .class(ctheme::Container::custom(|theme| {
-        // Rounded where it meets the frame's corners, beneath the header.
-        let [.., bottom_right, bottom_left] = corners(theme).map(|radius| (radius - 1.0).max(0.0));
-        container::Style {
-            background: Some(surface().into()),
-            border: Border {
-                radius: [0.0, 0.0, bottom_right, bottom_left].into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        }
-    }));
-
-    // The frame libcosmic gives its main window: a hairline border with
-    // the theme's corners, around the header and the content.
-    container(widget::column::with_capacity(2).push(header).push(content))
-        .padding(1)
-        .class(ctheme::Container::custom(|theme| {
-            let cosmic = theme.cosmic();
-            container::Style {
-                background: Some(Color::from(cosmic.background(theme.transparent).base).into()),
-                border: Border {
-                    color: cosmic.bg_divider().into(),
-                    width: 1.0,
-                    radius: corners(theme).into(),
-                },
-                ..container::Style::default()
-            }
-        }))
-        .into()
-}
-
-/// The window's corner radii, as libcosmic rounds its main window: the
-/// theme's small radius, widened to sit around the content's.
-fn corners(theme: &cosmic::Theme) -> [f32; 4] {
-    theme
-        .cosmic()
-        .radius_s()
-        .map(|radius| if radius < 4.0 { radius } else { radius + 4.0 })
 }
 
 /// The toolbar's height, the same with its buttons or without, so the

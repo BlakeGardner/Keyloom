@@ -36,8 +36,8 @@ use iced_test::selector::{Candidate, Target};
 
 use super::screenshots::Shots;
 use super::staging::{
-    MIN_WINDOW, WINDOW, app, app_on, app_on_step, facts, foreign, found, fresh_system, log_window,
-    ready, service_is, systems, window,
+    MIN_WINDOW, WINDOW, app, app_on, app_on_step, facts, foreign, found, fresh_system,
+    listed_windows, log_window, ready, service_is, systems, window, window_list_window,
 };
 use super::*;
 use crate::config::DeckZoom;
@@ -95,6 +95,13 @@ impl Driver {
     pub fn on_log_window(mut self) -> Self {
         self.surface = log_window;
         self.viewport = ui::log::SIZE;
+        self
+    }
+
+    /// Drive the window list instead, at the size it opens at.
+    pub fn on_window_list(mut self) -> Self {
+        self.surface = window_list_window;
+        self.viewport = ui::windows::SIZE;
         self
     }
 
@@ -1769,12 +1776,14 @@ fn the_deck_fits_or_scrolls_at_every_size() {
 fn the_log_opens_from_the_menu_in_one_window_of_its_own() {
     let mut driver = Driver::new(app());
     driver.click("⋯");
+    driver.click("Troubleshooting");
     driver.click("Remapping log");
     assert!(driver.app.popover.is_none());
     let id = driver.app.log.as_ref().expect("the log window is open").id;
 
     // Asking again brings the open window forward instead.
     driver.click("⋯");
+    driver.click("Troubleshooting");
     driver.click("Remapping log");
     assert_eq!(driver.app.log.as_ref().map(|log| log.id), Some(id));
 
@@ -1786,11 +1795,33 @@ fn the_log_opens_from_the_menu_in_one_window_of_its_own() {
 }
 
 #[test]
+fn the_menu_keeps_its_troubleshooting_tools_out_of_sight() {
+    let mut driver = Driver::new(app());
+    driver.click("⋯");
+    driver.expect_shown(&["Set up remapping", "About Keyloom", "Troubleshooting"]);
+    driver.expect_hidden("Remapping log");
+    driver.expect_hidden("Window list");
+    driver.expect_hidden("Reset all mappings");
+
+    driver.click("Troubleshooting");
+    driver.expect_shown(&["Remapping log", "Window list", "Reset all mappings"]);
+    driver.click("Troubleshooting");
+    driver.expect_hidden("Remapping log");
+
+    // Opened again, the menu starts with them tucked away.
+    driver.click("Troubleshooting");
+    driver.click("⋯");
+    driver.click("⋯");
+    driver.expect_hidden("Window list");
+}
+
+#[test]
 fn without_systemd_the_menu_offers_no_log() {
     let mut driver = Driver::new(app());
     driver.deliver(service_is(service::Status::Unavailable));
     driver.click("⋯");
-    driver.expect_shown(&["Set up remapping"]);
+    driver.click("Troubleshooting");
+    driver.expect_shown(&["Set up remapping", "Window list"]);
     driver.expect_hidden("Remapping log");
 }
 
@@ -1808,6 +1839,7 @@ fn a_failure_of_the_service_offers_its_log() {
     // A toast confirming a change has no log to offer.
     let mut driver = Driver::new(app());
     driver.click("⋯");
+    driver.click("Troubleshooting");
     driver.click("Reset all mappings");
     driver.click("Reset all mappings");
     driver.expect_shown(&["Profile cleared"]);
@@ -1884,4 +1916,94 @@ fn a_log_that_stops_says_why_and_can_be_read_again() {
     .on_log_window();
     driver.expect_shown(&["The log can't be read"]);
     driver.expect_parts(&["journalctl, which isn't installed"]);
+}
+
+// ---- The window list ---------------------------------------------------
+
+#[test]
+fn the_window_list_opens_from_the_menu_in_one_window_of_its_own() {
+    let mut driver = Driver::new(app());
+    // Offered without systemd too: it asks xremap, not the service.
+    driver.deliver(service_is(service::Status::Unavailable));
+    driver.click("⋯");
+    driver.click("Troubleshooting");
+    driver.click("Window list");
+    assert!(driver.app.popover.is_none());
+    let id = driver
+        .app
+        .window_list
+        .as_ref()
+        .expect("the window list is open")
+        .id;
+
+    // Asking again brings the open window forward instead.
+    driver.click("⋯");
+    driver.click("Troubleshooting");
+    driver.click("Window list");
+    assert_eq!(
+        driver.app.window_list.as_ref().map(|view| view.id),
+        Some(id)
+    );
+    assert!(matches!(
+        driver.app.on_close_requested(id),
+        Some(Message::WindowListClosed(closed)) if closed == id
+    ));
+
+    // Closing it, however it is closed, stops asking xremap.
+    driver.deliver(Message::WindowListClosed(window::Id::unique()));
+    assert!(driver.app.window_list.is_some(), "another window closing");
+    driver.deliver(Message::WindowListClosed(id));
+    assert!(driver.app.window_list.is_none());
+}
+
+#[test]
+fn the_window_list_shows_every_window_as_xremap_lists_it() {
+    let mut app = app();
+    let _ = app.update(Message::OpenWindowList);
+    let mut driver = Driver::new(app).on_window_list();
+    driver.expect_shown(&["Window List", "Asking for the open windows…"]);
+    driver.expect_hidden("Copy");
+
+    driver.deliver(Message::WindowListUpdated(listed_windows()));
+    driver.expect_shown(&[
+        "Updating every 5 seconds",
+        "/usr/bin/xremap --list-windows",
+        "com.system76.CosmicTerm",
+        "Keyloom · GitHub — Firefox",
+        "Second window",
+        "untitled",
+        "none",
+        crate::config::APP_ID,
+    ]);
+
+    driver.expect_hidden("Window id");
+
+    driver.click("Copy");
+    driver.expect_shown(&["Copied"]);
+    let view = driver
+        .app
+        .window_list
+        .as_ref()
+        .expect("the window list is open");
+    assert!(view.text().contains("firefox\tSecond window\n"));
+}
+
+#[test]
+fn a_window_list_xremap_cannot_give_says_why() {
+    let mut app = app();
+    let _ = app.update(Message::OpenWindowList);
+    let mut driver = Driver::new(app).on_window_list();
+    driver.deliver(Message::WindowListUpdated(listed_windows()));
+    driver.deliver(Message::WindowListUpdated(crate::apps::WindowList {
+        binary: Some(PathBuf::from("/usr/bin/xremap")),
+        windows: Err("GNOME is not supported.".to_owned()),
+    }));
+    driver.expect_shown(&[
+        "Not listed",
+        "The open windows can't be listed",
+        "GNOME is not supported.",
+        "Keyloom asks again every 5 seconds.",
+    ]);
+    driver.expect_hidden("com.system76.CosmicTerm");
+    driver.expect_hidden("Copy");
 }

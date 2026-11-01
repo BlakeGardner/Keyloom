@@ -272,20 +272,64 @@ pub fn menu_popup(app: &App) -> Element<'_, Message> {
             column.push(container(crate::ui::keyboard_view::rule(white(0.09))).padding([6, 4]));
     }
 
-    let mut items: Vec<(&str, Message)> = Vec::with_capacity(4);
-    items.push(("Set up remapping", Message::MenuShowSetup));
+    column = column.push(popup_row(
+        "Set up remapping".to_owned(),
+        None,
+        false,
+        Message::MenuShowSetup,
+    ));
+    column = column.push(popup_row(
+        "About Keyloom".to_owned(),
+        None,
+        false,
+        Message::MenuAbout,
+    ));
+    column = column.push(troubleshooting(app));
+    popover_panel(column).width(Length::Fixed(272.0)).into()
+}
+
+/// The menu's troubleshooting tools, behind a quiet disclosure row at
+/// its foot so everyday use never meets them: the remapping log, the
+/// window list, and resetting all mappings.
+fn troubleshooting(app: &App) -> Element<'_, Message> {
+    let open = app.menu_troubleshooting;
+    let disclosure = widget::button::custom(
+        widget::row::with_capacity(3)
+            .align_y(Alignment::Center)
+            .push(txt("Troubleshooting", 12.5, muted()))
+            .push(crate::ui::hspace())
+            .push(txt(if open { "▾" } else { "▸" }, 11.0, muted())),
+    )
+    .class(menu_row(false))
+    .padding([8, 10])
+    .width(Length::Fill)
+    .on_press(Message::MenuTroubleshooting);
+    if !open {
+        return disclosure.into();
+    }
+
+    let mut tools: Vec<(&str, Message)> = Vec::with_capacity(3);
     // Without systemd there is no service, and no log of it to read.
     if app.service != Some(service::Status::Unavailable) {
-        items.push(("Remapping log", Message::OpenLog));
+        tools.push(("Remapping log", Message::OpenLog));
     }
+    tools.push(("Window list", Message::OpenWindowList));
+    // The tester has no mappings to reset.
     if app.view != View::Tester {
-        items.push(("Reset all mappings", Message::MenuReset));
+        tools.push(("Reset all mappings", Message::MenuReset));
     }
-    items.push(("About Keyloom", Message::MenuAbout));
-    for (name, message) in items {
-        column = column.push(popup_row(name.to_owned(), None, false, message));
-    }
-    popover_panel(column).width(Length::Fixed(272.0)).into()
+    tools
+        .into_iter()
+        .fold(
+            widget::column::with_capacity(4).spacing(2).push(disclosure),
+            |column, (name, message)| {
+                column.push(
+                    container(popup_row(name.to_owned(), None, false, message))
+                        .padding([0, 0, 0, 12]),
+                )
+            },
+        )
+        .into()
 }
 
 /// A menu row for a level to step through: its name, then `−`, the

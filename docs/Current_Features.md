@@ -46,8 +46,10 @@ first-run setup installs that unit and walks through the input permissions
 - On COSMIC the interface adopts the user's accent color from COSMIC
   Settings; on other desktops Keyloom uses its own green accent.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
-  Shortcuts), remapping status, and access to setup, the remapping log,
-  reset, and About actions.
+  Shortcuts), remapping status, and access to setup and About. The
+  remapping log, the window list, and resetting all mappings sit under a
+  collapsed "Troubleshooting" entry at the foot of the ⋯ menu, out of
+  everyday sight.
 - First-run setup opens on its own the first time Keyloom runs and can be
   reopened from "Set up remapping" in the menu, or from the header's status
   chip while no service is set up (see "First-run setup" below).
@@ -188,7 +190,8 @@ first-run setup installs that unit and walks through the input permissions
   anything not listed. An application belongs to at most one scope per
   profile. Installed entries also match their desktop entry's
   `StartupWMClass`, which names the windows of applications running through
-  XWayland.
+  XWayland. When an application is missing from the list, the window list
+  (below) shows the raw ids the desktop reports.
 - "Normal key here" in the key editor keeps the key as it is in the shown
   scope, standing in for the remap it would inherit: the way to say "Caps
   Lock is Escape everywhere except in this editor". It also keeps a layer
@@ -224,10 +227,10 @@ first-run setup installs that unit and walks through the input permissions
   application scope covering the common terminals sends their Ctrl+Shift
   copy and paste instead, so Ctrl+C keeps interrupting. It shows a chord
   rule, an application scope, and which of the two wins.
-- "Reset all mappings" asks for confirmation before clearing the active
-  profile's mappings, layers, application scopes, and shortcut groups.
-  Confirmed resets cannot be undone. Cancel, Escape, or clicking outside the
-  dialog keeps them.
+- "Reset all mappings", under "Troubleshooting" in the ⋯ menu, asks for
+  confirmation before clearing the active profile's mappings, layers,
+  application scopes, and shortcut groups. Confirmed resets cannot be
+  undone. Cancel, Escape, or clicking outside the dialog keeps them.
 
 ## Devices
 
@@ -540,10 +543,10 @@ unit's logs, and the toast reporting it offers the remapping log (below).
 
 ### Remapping log
 
-"Remapping log" in the ⋯ menu, or "Show log" on a toast saying remapping
-could not be applied, paused, or resumed, opens the unit's journal in a
-window of its own, so it can stay open beside the main window. Asking
-again brings the open window forward.
+"Remapping log" under "Troubleshooting" in the ⋯ menu, or "Show log" on a
+toast saying remapping could not be applied, paused, or resumed, opens the
+unit's journal in a window of its own, so it can stay open beside the main
+window. Asking again brings the open window forward.
 
 - The window reads the latest 1,000 entries of
   `journalctl --user -u xremap.service`, which reach back over dozens of
@@ -572,3 +575,29 @@ without a level the journal records (see
 recognised by their wording. The window's text cannot be selected; Copy
 takes everything shown. Only the unit's journal is shown, not Keyloom's
 own messages.
+
+### Window list
+
+"Window list" under "Troubleshooting" in the ⋯ menu opens, in a window of
+its own, every window open on the desktop exactly as
+`xremap --list-windows` reports it: the application id that
+application-specific remaps match on and the title, one row per window. It
+is for finding out why an application is missing from the application
+picker or a remap for it does not apply.
+
+- Keyloom runs the same xremap binary the service uses, named above the
+  list, and asks again every 5 seconds while the window is open, so a
+  newly opened application appears without reopening anything. Running
+  it with `--list-windows` never touches an input device.
+- Nothing is merged or left out: Keyloom's own windows, every window of an
+  application, and windows that report no application id are all listed.
+- Every id and title can be selected (drag, double-click, or
+  triple-click) and copied with Ctrl+C or the right-click menu. Copy puts
+  every row on the clipboard as tab-separated application id and title.
+- When xremap is missing or cannot ask the desktop, the window shows
+  xremap's own explanation and keeps trying.
+- Offered with or without systemd, since it asks xremap directly.
+
+Limitations: it shows only what the installed xremap build can ask this
+desktop; on a desktop xremap has no client for, the window shows why
+instead.

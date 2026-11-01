@@ -9,12 +9,15 @@ pub mod overlays;
 pub mod shortcuts;
 pub mod tester;
 pub mod theme;
+pub mod windows;
 pub mod zoom;
 
 use cosmic::iced::core::text::LineHeight;
 use cosmic::iced::font::Weight;
 use cosmic::iced::widget::stack;
-use cosmic::iced::{Alignment, Background, Border, Color, Font, Length, Shadow, Vector};
+use cosmic::iced::{
+    Alignment, Background, Border, Color, Font, Length, Shadow, Size, Vector, window,
+};
 use cosmic::widget::{self, container};
 use cosmic::{Element, theme as ctheme};
 
@@ -46,6 +49,77 @@ pub fn txt_semibold<'a>(content: impl Into<String>, size: f32, color: Color) -> 
 /// [`txt`] in the monospace face used for key codes.
 pub fn mono<'a>(content: impl Into<String>, size: f32, color: Color) -> Txt<'a> {
     txt(content, size, color).font(Font::MONOSPACE)
+}
+
+/// How a window beside the main one (the log, the window list) is
+/// made: like the main window, it draws its own header and corners
+/// (libcosmic's client-side decorations), so it looks the same on
+/// every desktop, and it carries the application's id so the desktop
+/// counts it as Keyloom's.
+pub fn side_window_settings(size: Size, min_size: Size) -> window::Settings {
+    let mut settings = window::Settings {
+        size,
+        min_size: Some(min_size),
+        decorations: false,
+        transparent: true,
+        resizable: true,
+        resize_border: 8,
+        ..window::Settings::default()
+    };
+    settings.platform_specific.application_id = crate::config::APP_ID.to_owned();
+    settings
+}
+
+/// A window beside the main one: its header over its content, in the
+/// frame libcosmic gives its main window.
+pub fn side_window<'a>(
+    header: widget::HeaderBar<'a, Message>,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let content = container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .class(ctheme::Container::custom(|theme| {
+            // Rounded where it meets the frame's corners, beneath the
+            // header.
+            let [.., bottom_right, bottom_left] =
+                side_window_corners(theme).map(|radius| (radius - 1.0).max(0.0));
+            container::Style {
+                background: Some(surface().into()),
+                border: Border {
+                    radius: [0.0, 0.0, bottom_right, bottom_left].into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            }
+        }));
+
+    // The frame libcosmic gives its main window: a hairline border with
+    // the theme's corners, around the header and the content.
+    container(widget::column::with_capacity(2).push(header).push(content))
+        .padding(1)
+        .class(ctheme::Container::custom(|theme| {
+            let cosmic = theme.cosmic();
+            container::Style {
+                background: Some(Color::from(cosmic.background(theme.transparent).base).into()),
+                border: Border {
+                    color: cosmic.bg_divider().into(),
+                    width: 1.0,
+                    radius: side_window_corners(theme).into(),
+                },
+                ..container::Style::default()
+            }
+        }))
+        .into()
+}
+
+/// A side window's corner radii, as libcosmic rounds its main window:
+/// the theme's small radius, widened to sit around the content's.
+fn side_window_corners(theme: &cosmic::Theme) -> [f32; 4] {
+    theme
+        .cosmic()
+        .radius_s()
+        .map(|radius| if radius < 4.0 { radius } else { radius + 4.0 })
 }
 
 /// A horizontal filler, like `flex: 1`.
