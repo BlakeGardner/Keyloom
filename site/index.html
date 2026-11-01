@@ -209,8 +209,8 @@
 <h4 class="version-title">Ubuntu 24.04 or Pop!_OS 24.04</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
-<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
 <span class="line">sudo apt update</span>
 <span class="line">sudo apt install keyloom</span></code></pre>
 </div>
@@ -220,8 +220,8 @@
 <h4 class="version-title">Ubuntu 25.10</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_25.10/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
-<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_25.10/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_25.10/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_25.10/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
 <span class="line">sudo apt update</span>
 <span class="line">sudo apt install keyloom</span></code></pre>
 </div>
@@ -231,8 +231,8 @@
 <h4 class="version-title">Ubuntu 26.04</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_26.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
-<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_26.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/xUbuntu_26.04/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/xUbuntu_26.04/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
 <span class="line">sudo apt update</span>
 <span class="line">sudo apt install keyloom</span></code></pre>
 </div>
@@ -246,8 +246,8 @@
 <h4 class="version-title">Debian 13</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
-<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
 <span class="line">sudo apt update</span>
 <span class="line">sudo apt install keyloom</span></code></pre>
 </div>
@@ -257,8 +257,8 @@
 <h4 class="version-title">Debian testing</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
-<pre><code><span class="line">echo 'deb http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
-<span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
 <span class="line">sudo apt update</span>
 <span class="line">sudo apt install keyloom</span></code></pre>
 </div>
