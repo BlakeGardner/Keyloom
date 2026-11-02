@@ -41,6 +41,7 @@
   --pill-app-fg: oklch(0.93 0.05 170);
   --hero-glow: oklch(0.36 0.11 330 / 0.5);
   --lit-ring: oklch(0.82 0.14 60 / 0.3);
+  --app-ring: oklch(0.75 0.12 170 / 0.35);
   --tint-card-top: oklch(0.3 0.06 330);
   --tint-card-border: oklch(0.42 0.08 330);
   --scrim: oklch(0.1 0.03 290 / 0.6);
@@ -52,7 +53,8 @@
   --wash-10: rgba(255, 255, 255, 0.1);
   --wash-12: rgba(255, 255, 255, 0.12);
   --shadow-popover: 0 24px 50px oklch(0.08 0.03 290 / 0.7);
-  --cap-shadow: 0 2px 0 oklch(0.08 0.03 290 / 0.4);
+  --cap-shadow-color: oklch(0.08 0.03 290 / 0.4);
+  --cap-shadow: 0 2px 0 var(--cap-shadow-color);
 
   --r-panel: 13px;
   --r-popover: 12px;
@@ -74,7 +76,8 @@
   --gap-m: 24px;
   --gap-l: 32px;
 
-  /* Controls ease between states; nothing on the page moves on its own. */
+  /* Controls ease between states. The page's own motion (the hero coming
+     in, the tiles' loops, the key field) is in the Motion section. */
   --dur: 0.18s;
   --ease: ease-out;
   --control-transition:
@@ -121,12 +124,13 @@
   --pill-app-fg: #c8f3e3;
   --hero-glow: rgba(91, 35, 88, 0.5);
   --lit-ring: rgba(255, 173, 95, 0.3);
+  --app-ring: rgba(70, 200, 160, 0.35);
   --tint-card-top: #3e223c;
   --tint-card-border: #653c62;
   --scrim: rgba(3, 2, 12, 0.6);
   --scrim-strong: rgba(3, 2, 12, 0.8);
   --shadow-popover: 0 24px 50px rgba(2, 1, 7, 0.7);
-  --cap-shadow: 0 2px 0 rgba(2, 1, 7, 0.4);
+  --cap-shadow-color: rgba(2, 1, 7, 0.4);
   }
 }
 
@@ -239,6 +243,15 @@ a:hover {
 .brand img {
   width: 30px;
   height: 30px;
+  transition: transform 0.12s var(--ease);
+}
+
+.brand:hover img {
+  transform: translateY(1px);
+}
+
+.brand:active img {
+  transform: translateY(2px) scale(0.95);
 }
 
 .nav-links {
@@ -265,14 +278,28 @@ a:hover {
 /* ---- Hero ------------------------------------------------------------ */
 
 /* A query container so the expanded recording can measure the page's full
-   width in cqw: unlike 100vw, that leaves out a classic scrollbar. */
+   width in cqw: unlike 100vw, that leaves out a classic scrollbar. The glow
+   is a layer of its own, under the key field (see Motion), under the
+   content. */
 
 .hero {
   container-type: inline-size;
+  position: relative;
+  isolation: isolate;
+}
+
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: radial-gradient(70% 45% at 50% 0%, var(--hero-glow), transparent 70%);
+  pointer-events: none;
 }
 
 .hero .wrap {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -640,23 +667,6 @@ a:hover {
   background: linear-gradient(var(--cap-mapped-top), var(--cap-mapped-bottom));
 }
 
-.cap--held {
-  border-color: var(--cap-held-top);
-  background: linear-gradient(var(--cap-held-top), var(--cap-held-bottom));
-  color: var(--cap-held-fg);
-  font-weight: 600;
-}
-
-.cap--held small {
-  font-size: 8px;
-  line-height: 10px;
-  color: var(--cap-held-fg);
-}
-
-.cap--lit {
-  box-shadow: 0 0 0 3px var(--lit-ring), var(--cap-shadow);
-}
-
 .cap--wide {
   width: 56px;
   height: 56px;
@@ -771,10 +781,6 @@ a:hover {
   white-space: nowrap;
 }
 
-.chip--quiet {
-  color: var(--muted);
-}
-
 .dot {
   width: 7px;
   height: 7px;
@@ -797,6 +803,18 @@ a:hover {
   margin-left: 8px;
   padding-left: 8px;
   border-left: 1px solid var(--wash-12);
+}
+
+/* The readouts for the other keys lie over the first one and show in turn
+   (see Demos). */
+
+.readouts {
+  position: relative;
+}
+
+.readouts .readout + .readout {
+  position: absolute;
+  inset: 0;
 }
 
 /* ---- Install --------------------------------------------------------- */
@@ -866,6 +884,13 @@ a:hover {
 
 .copy.is-done {
   color: var(--accent);
+}
+
+.copy.is-done::before {
+  content: "\2713";
+  display: inline-block;
+  margin-right: 6px;
+  animation: pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
 }
 
 .distro {
@@ -1040,10 +1065,551 @@ a:hover {
   color: var(--fg-bright);
 }
 
+/* ---- Demos ----------------------------------------------------------- */
+
+/* Each feature tile's illustration is a short loop that plays while the
+   tile is on screen: a key is tapped and then held, a layer switches on,
+   the profile changes, keys light up as they are pressed. The loops run
+   on one number, --lit, which says how far a part is into its "on" state
+   (pressed, held, active), and a second, --press, for a tap that is
+   over at once. The keyframes only move those numbers; the colours, rings
+   and presses follow from them, and a part's resting look is its loop's
+   first frame, so a browser that never runs the loops (no scripting, or a
+   system that asks for reduced motion) shows the still illustration.
+   Browsers without @property still run the loops; they just switch state
+   instead of fading between states. */
+
+@property --lit {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+@property --press {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+.demo *,
+.demo *::before,
+.demo *::after {
+  animation-play-state: paused !important;
+}
+
+.card.is-playing .demo *,
+.card.is-playing .demo *::before,
+.card.is-playing .demo *::after {
+  animation-play-state: running !important;
+}
+
+/* A lamp cap lights up like a held key as --lit grows: an apricot face
+   fades in over its own, the text darkens, a ring glows, and it sinks by
+   two pixels; --press sinks it without lighting it. The face sits between
+   the cap's background and its label. */
+
+.cap--lamp {
+  position: relative;
+  isolation: isolate;
+  border-color: var(--cap-plain-border);
+  border-color: color-mix(in oklab, var(--cap-plain-border), var(--cap-held-top) calc(var(--lit) * 100%));
+  color: color-mix(in oklab, var(--cap-plain-fg), var(--cap-held-fg) calc(var(--lit) * 100%));
+  transform: translateY(min(2px, (var(--lit) + var(--press)) * 2px));
+  box-shadow:
+    0 0 0 calc(var(--lit) * 3px) var(--lit-ring),
+    0 max(0px, 2px - (var(--lit) + var(--press)) * 2px) 0 var(--cap-shadow-color);
+}
+
+.cap--lamp::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: calc(var(--r-cap) - 1px);
+  background: linear-gradient(var(--cap-held-top), var(--cap-held-bottom));
+  opacity: var(--lit);
+}
+
+.cap--lamp small,
+.cap--lamp .hint {
+  color: color-mix(in oklab, var(--muted), var(--cap-held-fg) calc(var(--lit) * 100%));
+}
+
+.cap--lamp strong {
+  color: color-mix(in oklab, var(--accent), var(--cap-held-fg) calc(var(--lit) * 100%));
+}
+
+.cap--lamp.cap--sm small {
+  font-size: 8px;
+  line-height: 10px;
+}
+
+/* Pills press and glow as --lit grows; a legend's label brightens with
+   its row. */
+
+.demo .pill-key {
+  transform: translateY(calc(var(--lit) * 1px));
+  box-shadow: 0 0 0 calc(var(--lit) * 2px) var(--lit-ring);
+}
+
+.demo .legend div span:first-child {
+  color: color-mix(in oklab, var(--dim), var(--fg-bright) calc(var(--lit) * 100%));
+}
+
+/* Different keys in different apps (5s): the editor's Caps is pressed and
+   its application lights; then the focus moves to the other Caps, which
+   is pressed in turn. The second stack runs the same loop half a turn
+   behind. */
+
+.demo-scope .stack {
+  opacity: calc(0.45 + var(--lit) * 0.55);
+  animation-name: scope-stack;
+  animation-duration: 5s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.demo-scope .stack:first-child {
+  --lit: 1;
+}
+
+.demo-scope .stack + .stack,
+.demo-scope .stack + .stack .cap {
+  animation-delay: -2.5s;
+}
+
+.demo-scope .pill-app {
+  box-shadow: 0 0 0 calc(var(--lit) * 3px) var(--app-ring);
+}
+
+.demo-scope .cap {
+  transform: translateY(calc(var(--press) * 2px));
+  box-shadow: 0 calc(2px - var(--press) * 2px) 0 var(--cap-shadow-color);
+  animation-name: scope-press;
+  animation-duration: 5s;
+  animation-iteration-count: infinite;
+}
+
+@keyframes scope-stack {
+  0%, 42% { --lit: 1; }
+  47%, 92% { --lit: 0; }
+  97%, 100% { --lit: 1; }
+}
+
+@keyframes scope-press {
+  0%, 10% { --press: 0; }
+  12% { --press: 1; }
+  15%, 100% { --press: 0; }
+}
+
+/* Tap and hold (5s): a quick tap, and the Tap row lights; then the key
+   goes down and stays down, lit as a held key, and the Hold row lights. */
+
+.demo-taphold .cap {
+  animation-name: taphold-press, taphold-hold;
+  animation-duration: 5s, 5s;
+  animation-iteration-count: infinite, infinite;
+}
+
+.demo-taphold .legend div {
+  animation-duration: 5s;
+  animation-iteration-count: infinite;
+}
+
+.demo-taphold .legend div:first-child {
+  animation-name: taphold-tap-row;
+}
+
+.demo-taphold .legend div + div {
+  animation-name: taphold-hold-row;
+}
+
+@keyframes taphold-press {
+  0%, 10% { --press: 0; }
+  12% { --press: 1; }
+  15%, 52% { --press: 0; }
+  55%, 80% { --press: 1; }
+  84%, 100% { --press: 0; }
+}
+
+@keyframes taphold-hold {
+  0%, 52% { --lit: 0; }
+  55%, 80% { --lit: 1; }
+  84%, 100% { --lit: 0; }
+}
+
+@keyframes taphold-tap-row {
+  0%, 10% { --lit: 0; }
+  13%, 38% { --lit: 1; }
+  42%, 100% { --lit: 0; }
+}
+
+@keyframes taphold-hold-row {
+  0%, 52% { --lit: 0; }
+  55%, 80% { --lit: 1; }
+  84%, 100% { --lit: 0; }
+}
+
+/* Layers (6s): resting with Caps held and H, J, K, L showing their arrows.
+   Caps is released and the keys go back to plain letters; then Caps goes
+   down again and the arrows come back, H first. Each key runs 80ms behind
+   the one before it. A key that is not in the layer is the same cap
+   without its colour. */
+
+.demo-layers .cap--lamp {
+  --lit: 1;
+  animation-name: layers-mod;
+  animation-duration: 6s;
+  animation-iteration-count: infinite;
+}
+
+.demo-layers .cap--mapped {
+  --lit: 1;
+  filter: saturate(var(--lit)) brightness(calc(1.12 - var(--lit) * 0.12));
+  animation-name: layers-key;
+  animation-duration: 6s;
+  animation-iteration-count: infinite;
+  animation-delay: calc(var(--i, 0) * -80ms);
+}
+
+.demo-layers .row .cap:nth-child(1) { --i: 3; }
+.demo-layers .row .cap:nth-child(2) { --i: 2; }
+.demo-layers .row .cap:nth-child(3) { --i: 1; }
+
+.demo-layers .cap--mapped small {
+  color: color-mix(in oklab, var(--cap-plain-fg), var(--muted) calc(var(--lit) * 100%));
+  transform: translateY(calc((1 - var(--lit)) * 9px)) scale(calc(1.55 - var(--lit) * 0.55));
+}
+
+.demo-layers .cap--mapped strong {
+  opacity: var(--lit);
+  transform: scale(calc(0.5 + var(--lit) * 0.5));
+}
+
+@keyframes layers-mod {
+  0%, 44% { --lit: 1; }
+  47%, 74% { --lit: 0; }
+  77%, 100% { --lit: 1; }
+}
+
+@keyframes layers-key {
+  0%, 47% { --lit: 1; }
+  50%, 78% { --lit: 0; }
+  81%, 100% { --lit: 1; }
+}
+
+/* Shortcuts (5s): Super, then C, go down together; the arrow nudges; then
+   Ctrl, Shift and C go down in turn. */
+
+.demo-chord .pill-key {
+  animation-duration: 5s;
+  animation-iteration-count: infinite;
+  animation-delay: var(--d, 0s);
+}
+
+.demo-chord .chord > :nth-child(1) { animation-name: chord-from; }
+.demo-chord .chord > :nth-child(3) { --d: -4.8s; animation-name: chord-from; }
+.demo-chord .chord > :nth-child(5) { animation-name: chord-to; }
+.demo-chord .chord > :nth-child(7) { --d: -4.8s; animation-name: chord-to; }
+.demo-chord .chord > :nth-child(9) { --d: -4.6s; animation-name: chord-to; }
+
+.demo-chord .arrow {
+  animation: chord-arrow 5s ease-out infinite;
+}
+
+@keyframes chord-from {
+  0%, 8% { --lit: 0; }
+  11%, 30% { --lit: 1; }
+  34%, 100% { --lit: 0; }
+}
+
+@keyframes chord-to {
+  0%, 42% { --lit: 0; }
+  45%, 68% { --lit: 1; }
+  72%, 100% { --lit: 0; }
+}
+
+@keyframes chord-arrow {
+  0%, 34% { transform: none; }
+  38% { transform: translateX(5px); }
+  44%, 100% { transform: none; }
+}
+
+/* Profiles (6s): the dot moves from one profile to the next, and the
+   chosen one is written in the brighter text. */
+
+.demo-profiles .chip {
+  color: var(--muted);
+  color: color-mix(in oklab, var(--muted), var(--fg) calc(var(--lit) * 100%));
+  animation-name: profile-chip;
+  animation-duration: 6s;
+  animation-iteration-count: infinite;
+  animation-delay: var(--d, 0s);
+}
+
+.demo-profiles .chip:nth-child(1) { --lit: 1; }
+.demo-profiles .chip:nth-child(2) { --d: -4s; }
+.demo-profiles .chip:nth-child(3) { --d: -2s; }
+
+.demo-profiles .dot {
+  width: calc(var(--lit) * 7px);
+  margin-inline-end: calc(var(--lit) * 8px - 8px);
+  opacity: var(--lit);
+}
+
+@keyframes profile-chip {
+  0%, 30% { --lit: 1; }
+  34%, 96% { --lit: 0; }
+  100% { --lit: 1; }
+}
+
+/* Test your keyboard (6s): F8, then F7, then F9 light up as they are
+   pressed, and the readout follows. */
+
+.demo-test .row .cap,
+.demo-test .readout {
+  animation-name: test-key;
+  animation-duration: 6s;
+  animation-iteration-count: infinite;
+  animation-delay: var(--d, 0s);
+}
+
+.demo-test .readout {
+  opacity: var(--lit);
+}
+
+.demo-test .row .cap:nth-child(1),
+.demo-test .readouts .readout:nth-child(2) {
+  --d: -4s;
+}
+
+.demo-test .row .cap:nth-child(2),
+.demo-test .readouts .readout:nth-child(1) {
+  --lit: 1;
+}
+
+.demo-test .row .cap:nth-child(3),
+.demo-test .readouts .readout:nth-child(3) {
+  --d: -2s;
+}
+
+@keyframes test-key {
+  0%, 18% { --lit: 1; }
+  22%, 96% { --lit: 0; }
+  100% { --lit: 1; }
+}
+
+/* ---- Key field ------------------------------------------------------- */
+
+/* Loose keys lie across the top of the hero, as if spilled from a keyboard
+   (site.js lays them out). The ones under the headline and lead are kept
+   faint so the words stay easy to read; the ones beside them show more.
+   A key sinks and lights as the pointer passes over it or a finger touches
+   it, and as the headline types itself a key with each letter is pressed;
+   now and then one is pressed on its own. --p is how far down a key is.
+   When the page starts or stops scrolling the keys lag behind or overshoot
+   and bounce back: --dy and --dr are that moment's offset and tilt, set
+   every frame, so they ride on translate and rotate, which the transition
+   below leaves alone. The field fades out above the recording. */
+
+.keyfield {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 100%;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(#000 55%, transparent);
+  mask-image: linear-gradient(#000 55%, transparent);
+}
+
+.key {
+  --p: 0;
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--cap-plain-border);
+  border-radius: var(--r-cap);
+  background: var(--cap-plain-bottom);
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 600;
+  opacity: calc(0.42 + var(--p) * 0.58);
+  translate: 0 var(--dy, 0px);
+  rotate: var(--dr, 0deg);
+  transform: rotate(var(--r, 0deg)) translateY(calc(var(--p) * 3px)) scale(calc(1 - var(--p) * 0.08));
+  box-shadow:
+    0 0 0 calc(var(--p) * 3px) var(--lit-ring),
+    0 2px 0 var(--cap-shadow-color);
+  transition:
+    transform 0.3s var(--ease),
+    opacity 0.3s var(--ease),
+    background-color 0.3s var(--ease),
+    border-color 0.3s var(--ease),
+    color 0.3s var(--ease),
+    box-shadow 0.3s var(--ease);
+}
+
+@supports (color: color-mix(in oklab, red, blue)) {
+  .key {
+    border-color: color-mix(in oklab, var(--cap-plain-border), var(--cap-held-top) calc(var(--p) * 100%));
+    background: color-mix(in oklab, var(--cap-plain-bottom), var(--cap-held-top) calc(var(--p) * 100%));
+    color: color-mix(in oklab, var(--dim), var(--cap-held-fg) calc(var(--p) * 100%));
+  }
+}
+
+.key--under {
+  opacity: calc(0.2 + var(--p) * 0.8);
+}
+
+/* A pressed key goes down at once and comes back up at the field's pace. */
+
+.key.is-tap {
+  --p: 1 !important;
+  transition-duration: 0.08s;
+}
+
 /* ---- Motion ---------------------------------------------------------- */
 
-/* Controls press down by a pixel. Under reduced motion every control
-   changes state at once and the recording's resize stops animating. */
+/* The hero comes in from the top down: the eyebrow, then the headline,
+   the lead, the button and the recording, each 90ms after the last. The
+   headline types itself (site.js), one key at a time, under a caret that
+   blinks on for a moment once it is done. The glow behind them breathes. */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.js .hero .wrap > * {
+  animation: rise 0.6s cubic-bezier(0.2, 0.6, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+
+.hero .wrap > :nth-child(2) { --i: 1; }
+.hero .wrap > :nth-child(3) { --i: 2; }
+.hero .wrap > :nth-child(4) { --i: 3; }
+.hero .wrap > :nth-child(5) { --i: 4; }
+
+.hero h1 .word {
+  white-space: nowrap;
+}
+
+.hero h1 .ch {
+  position: relative;
+}
+
+.js .hero h1.is-typing .ch:not(.is-on) {
+  visibility: hidden;
+}
+
+.hero h1 .ch.is-caret::after {
+  content: "";
+  position: absolute;
+  top: 0.08em;
+  left: 100%;
+  width: 0.07em;
+  height: 0.84em;
+  margin-left: 0.06em;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: caret 1s step-end infinite;
+}
+
+@keyframes caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@keyframes breathe {
+  from { opacity: 0.72; }
+  to { opacity: 1; }
+}
+
+.js .hero::before {
+  animation: breathe 7s ease-in-out infinite alternate;
+}
+
+/* Below the hero, each part comes in as it scrolls into view (site.js
+   adds is-in), the parts of a row one after another. */
+
+.js [data-reveal] {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.6s var(--ease),
+    transform 0.6s cubic-bezier(0.2, 0.6, 0.2, 1);
+  transition-delay: calc(var(--i, 0) * 80ms);
+}
+
+.js [data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+
+.steps-list .step:nth-child(2) { --i: 1; }
+.steps-list .step:nth-child(3) { --i: 2; }
+.cards .card:nth-child(2) { --i: 1; }
+.cards .card:nth-child(3) { --i: 2; }
+.cards .card:nth-child(4) { --i: 3; }
+.cards .card:nth-child(5) { --i: 4; }
+.cards .card:nth-child(6) { --i: 5; }
+
+/* The three steps' numbers are pressed in turn once the steps are in. */
+
+@keyframes key-tap {
+  0%, 100% {
+    transform: none;
+  }
+
+  30% {
+    transform: translateY(2px);
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--bg);
+    box-shadow: 0 0 0 3px var(--lit-ring);
+  }
+}
+
+.js .step.is-in .step-number {
+  animation: key-tap 0.55s ease-out both;
+  animation-delay: calc(var(--i, 0) * 150ms + 350ms);
+}
+
+/* An install block's commands come in one line after another when it is
+   chosen, and the copy button's tick pops. */
+
+@keyframes line-in {
+  from { opacity: 0; }
+}
+
+.js .version.is-active .line {
+  animation: line-in 0.45s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+.terminal .line:nth-child(2) { --i: 1; }
+.terminal .line:nth-child(3) { --i: 2; }
+.terminal .line:nth-child(4) { --i: 3; }
+
+@keyframes pop {
+  from { transform: scale(0); }
+}
+
+/* Controls press down by a pixel. */
 
 .button:active,
 .shot-toggle:active,
@@ -1053,7 +1619,36 @@ a:hover {
   transform: translateY(1px);
 }
 
+/* Under reduced motion nothing on the page moves on its own: every part
+   is in place at once, the headline is plain text, the illustrations keep
+   their still look, the key field stays away, and every control changes
+   state at once. */
+
 @media (prefers-reduced-motion: reduce) {
+  .js .hero .wrap > *,
+  .js .hero::before,
+  .js .step.is-in .step-number,
+  .js .version.is-active .line,
+  .copy.is-done::before {
+    animation: none;
+  }
+
+  .js [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .demo *,
+  .demo *::before,
+  .demo *::after {
+    animation: none !important;
+  }
+
+  .keyfield {
+    display: none;
+  }
+
   .shot,
   .shot-toggle,
   .button,
@@ -1061,7 +1656,21 @@ a:hover {
   .pill,
   .copy,
   .nav-links a,
-  .footer-links a {
+  .footer-links a,
+  .brand img {
     transition: none;
+  }
+}
+
+/* On paper everything is in place. */
+
+@media print {
+  .js [data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
+
+  .keyfield {
+    display: none;
   }
 }

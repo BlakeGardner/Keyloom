@@ -82,17 +82,17 @@
 <div class="wrap">
 <h2 id="steps-title" class="visually-hidden">How it works</h2>
 <ol class="steps-list">
-<li class="step">
+<li class="step" data-reveal>
 <span class="step-number" aria-hidden="true">1</span>
 <h3>Click a key</h3>
 <p>Keyloom shows your keyboard as it really is. It works out the size and layout for you.</p>
 </li>
-<li class="step">
+<li class="step" data-reveal>
 <span class="step-number" aria-hidden="true">2</span>
 <h3>Choose what it should do</h3>
 <p>Pick from a searchable list: any key, media and brightness controls, or a second job for when the key is held.</p>
 </li>
-<li class="step">
+<li class="step" data-reveal>
 <span class="step-number" aria-hidden="true">3</span>
 <h3>That's it</h3>
 <p>Your changes save and apply on their own. There is no Apply button.</p>
@@ -103,15 +103,15 @@
 
 <section id="features" class="section" aria-labelledby="features-title">
 <div class="wrap">
-<div class="section-header">
+<div class="section-header" data-reveal>
 <p class="eyebrow">What it does</p>
 <h2 id="features-title">Simple things first. Power when you want it.</h2>
 <p>Remap a key in two clicks. When you need more, the same keyboard handles layers, per-application keys, and shortcuts.</p>
 </div>
 <ul class="cards">
 
-<li class="card card--wide card--tint">
-<figure aria-hidden="true">
+<li class="card card--wide card--tint" data-reveal>
+<figure class="demo demo-scope" aria-hidden="true">
 <div class="stack">
 <div class="cap cap--mapped"><small>Caps</small><strong>Esc</strong></div>
 <span class="pill-app">Visual Studio Code</span>
@@ -125,9 +125,9 @@
 <p>A key can do one thing in one application and stay normal everywhere else. Caps Lock becomes Escape in your editor, and nothing else changes.</p>
 </li>
 
-<li class="card">
-<figure aria-hidden="true">
-<div class="cap cap--mapped cap--wide"><small>Caps</small><strong>Esc</strong><span class="hint">hold Ctrl</span></div>
+<li class="card" data-reveal>
+<figure class="demo demo-taphold" aria-hidden="true">
+<div class="cap cap--mapped cap--lamp cap--wide"><small>Caps</small><strong>Esc</strong><span class="hint">hold Ctrl</span></div>
 <div class="legend">
 <div><span>Tap</span><span class="pill-key">Esc</span></div>
 <div><span>Hold</span><span class="pill-key">Ctrl</span></div>
@@ -137,9 +137,9 @@
 <p>Escape when tapped, Control when held. One key, two jobs, and no chording gymnastics.</p>
 </li>
 
-<li class="card">
-<figure aria-hidden="true">
-<div class="cap cap--held cap--sm">Caps<small>held</small></div>
+<li class="card" data-reveal>
+<figure class="demo demo-layers" aria-hidden="true">
+<div class="cap cap--lamp cap--sm">Caps<small>held</small></div>
 <div class="row">
 <div class="cap cap--mapped cap--sm"><small>H</small><strong>←</strong></div>
 <div class="cap cap--mapped cap--sm"><small>J</small><strong>↓</strong></div>
@@ -151,8 +151,8 @@
 <p>Hold Caps Lock and H, J, K, L become arrow keys, while every other key keeps working normally.</p>
 </li>
 
-<li class="card card--wide">
-<figure aria-hidden="true">
+<li class="card card--wide" data-reveal>
+<figure class="demo demo-chord" aria-hidden="true">
 <div class="chord">
 <span class="pill-key">Super</span><span class="op">+</span><span class="pill-key">C</span>
 <span class="arrow">→</span>
@@ -163,25 +163,29 @@
 <p>Turn one chord into another, so Super+C sends the terminal's Ctrl+Shift+C and Ctrl+C keeps interrupting.</p>
 </li>
 
-<li class="card card--half">
-<figure aria-hidden="true">
+<li class="card card--half" data-reveal>
+<figure class="demo demo-profiles" aria-hidden="true">
 <span class="chip"><span class="dot"></span>Laptop</span>
-<span class="chip chip--quiet">Gaming</span>
-<span class="chip chip--quiet">Mac-style</span>
+<span class="chip"><span class="dot"></span>Gaming</span>
+<span class="chip"><span class="dot"></span>Mac-style</span>
 </figure>
 <h3>Profiles</h3>
 <p>Separate setups for work, gaming, or Mac-style controls. One click pauses remapping when you want your original keys back.</p>
 </li>
 
-<li class="card card--half card--tint">
-<figure aria-hidden="true">
+<li class="card card--half card--tint" data-reveal>
+<figure class="demo demo-test" aria-hidden="true">
 <div class="stack">
 <div class="row">
-<div class="cap cap--fkey">F7</div>
-<div class="cap cap--held cap--fkey cap--lit">F8</div>
-<div class="cap cap--fkey">F9</div>
+<div class="cap cap--lamp cap--fkey">F7</div>
+<div class="cap cap--lamp cap--fkey">F8</div>
+<div class="cap cap--lamp cap--fkey">F9</div>
 </div>
+<div class="readouts">
 <span class="readout"><span>F8</span><span>KEY_F8</span><span>sends Play/Pause</span></span>
+<span class="readout"><span>F7</span><span>KEY_F7</span><span>sends F7</span></span>
+<span class="readout"><span>F9</span><span>KEY_F9</span><span>sends F9</span></span>
+</div>
 </div>
 </figure>
 <h3>Test your keyboard</h3>
@@ -194,12 +198,12 @@
 
 <section id="install" class="section" aria-labelledby="install-title">
 <div class="wrap">
-<div class="section-header">
+<div class="section-header" data-reveal>
 <h2 id="install-title">Get Keyloom</h2>
 <p>Add the repository for your distribution once, and Keyloom updates with the rest of your system. Pick your distribution to see the commands.</p>
 </div>
 
-<div class="installer" data-installer>
+<div class="installer" data-installer data-reveal>
 <div class="tabs" role="group" aria-label="Distribution" data-distro-tabs></div>
 <div class="tabs" role="group" aria-label="Version" data-version-tabs></div>
 
@@ -330,7 +334,7 @@
 </section>
 </div>
 
-<p class="download">Prefer a one-off download? Every <a href="https://github.com/BlakeGardner/Keyloom/releases">release</a> has a .deb and an .rpm for 64-bit Intel/AMD and ARM, and an Arch package for 64-bit Intel/AMD.</p>
+<p class="download" data-reveal>Prefer a one-off download? Every <a href="https://github.com/BlakeGardner/Keyloom/releases">release</a> has a .deb and an .rpm for 64-bit Intel/AMD and ARM, and an Arch package for 64-bit Intel/AMD.</p>
 </div>
 </section>
 
