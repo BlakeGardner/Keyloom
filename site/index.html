@@ -242,8 +242,8 @@
 
 <section class="distro" data-distro="debian" data-name="Debian">
 <h3 class="distro-title">Debian</h3>
-<section class="version" data-version="debian-13" data-name="Debian 13">
-<h4 class="version-title">Debian 13</h4>
+<section class="version" data-version="debian-13" data-name="Debian 13 (trixie)">
+<h4 class="version-title">Debian 13 (trixie)</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
 <pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
@@ -253,12 +253,23 @@
 </div>
 <p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
 </section>
-<section class="version" data-version="debian-testing" data-name="Debian testing">
-<h4 class="version-title">Debian testing</h4>
+<section class="version" data-version="debian-testing" data-name="Debian testing (forky)">
+<h4 class="version-title">Debian testing (forky)</h4>
 <div class="terminal">
 <div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
 <pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
 <span class="line">echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
+<span class="line">sudo apt update</span>
+<span class="line">sudo apt install keyloom</span></code></pre>
+</div>
+<p class="note">This adds the Keyloom repository once. From then on, Keyloom updates with the rest of your system.</p>
+</section>
+<section class="version" data-version="debian-unstable" data-name="Debian unstable (sid)">
+<h4 class="version-title">Debian unstable (sid)</h4>
+<div class="terminal">
+<div class="terminal-bar"><span>Run in a terminal</span><button type="button" class="copy" data-copy>Copy</button></div>
+<pre><code><span class="line">curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Unstable/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg &gt; /dev/null</span>
+<span class="line">echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Unstable/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list</span>
 <span class="line">sudo apt update</span>
 <span class="line">sudo apt install keyloom</span></code></pre>
 </div>

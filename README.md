@@ -62,7 +62,7 @@ the rest of your system.
 ### Debian
 
 <details>
-<summary><b>Debian 13</b></summary>
+<summary><b>Debian 13 (trixie)</b></summary>
 
 ```sh
 curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
@@ -74,11 +74,23 @@ sudo apt install keyloom
 </details>
 
 <details>
-<summary><b>Debian testing</b></summary>
+<summary><b>Debian testing (forky)</b></summary>
 
 ```sh
 curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Testing/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
 echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
+sudo apt update
+sudo apt install keyloom
+```
+
+</details>
+
+<details>
+<summary><b>Debian unstable (sid)</b></summary>
+
+```sh
+curl -fsSL https://download.opensuse.org/repositories/home:BlakeGardner:Keyloom/Debian_Unstable/Release.key | gpg --dearmor | sudo tee /etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg > /dev/null
+echo 'deb [signed-by=/etc/apt/keyrings/home_BlakeGardner_Keyloom.gpg] http://download.opensuse.org/repositories/home:/BlakeGardner:/Keyloom/Debian_Unstable/ /' | sudo tee /etc/apt/sources.list.d/home:BlakeGardner:Keyloom.list
 sudo apt update
 sudo apt install keyloom
 ```
