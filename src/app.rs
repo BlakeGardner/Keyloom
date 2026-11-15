@@ -4087,7 +4087,7 @@ impl cosmic::Application for App {
                     command.arg(url);
                     Message::UrlOpened {
                         url,
-                        opened: cosmic::process::spawn(command).await.is_some(),
+                        opened: cosmic_launch::process::spawn(command).await.is_some(),
                     }
                 });
             }

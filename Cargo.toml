@@ -29,13 +29,20 @@ features = [
     "dbus-config",
     "desktop",
     "multi-window",
-    "process",
     "tokio",
     "wayland",
     "wgpu",
     "winit",
     "xdg-portal",
 ]
+
+# The detached spawn that opens links (src/app.rs). libcosmic builds this
+# crate for its desktop helpers but no longer re-exports it; the lockfile
+# keeps both at one commit.
+[dependencies.cosmic-launch]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = ["tokio"]
 
 [dev-dependencies]
 # iced's headless test harness, from the iced bundled with libcosmic so
