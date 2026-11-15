@@ -17,6 +17,7 @@ ignore = [
     "RUSTSEC-2026-0192", # ttf-parser
     "RUSTSEC-2026-0206", # rustybuzz
     "RUSTSEC-2026-0374", # basic-toml
+    "RUSTSEC-2026-0441", # pin-utils (wasmtimer, under iced_futures)
     # zbus 5's helper crates, merged into zbus 6. Keyloom's own zbus can
     # only move to 6 together with libcosmic, ashpd, and accesskit.
     "RUSTSEC-2026-0370", # zvariant
