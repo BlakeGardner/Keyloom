@@ -47,9 +47,9 @@ first-run setup installs that unit and walks through the input permissions
   Settings; on other desktops Keyloom uses its own green accent.
 - Header with brand, profile switcher, view tabs (Keyboard / Tester /
   Shortcuts), remapping status, and access to setup and About. The
-  remapping log, the window list, and resetting all mappings sit under a
-  collapsed "Troubleshooting" entry at the foot of the ⋯ menu, out of
-  everyday sight.
+  remapping log, the window list, resetting all mappings, and removing
+  the remapping setup sit under a collapsed "Troubleshooting" entry at
+  the foot of the ⋯ menu, out of everyday sight.
 - First-run setup opens on its own the first time Keyloom runs and can be
   reopened from "Set up remapping" in the menu, or from the header's status
   chip while no service is set up (see "First-run setup" below).
@@ -491,8 +491,40 @@ Finish, or Escape close the wizard; a click outside it is ignored so a stray
 click cannot skip setup. A page taller than the window scrolls while its
 buttons stay in view.
 
+### Undoing setup
+
+"Remove remapping setup", under "Troubleshooting" in the ⋯ menu, takes out
+again what setup put on the system. It first looks for what is Keyloom's
+and lists it; nothing changes until "Remove setup" is pressed:
+
+- **Remapping service** — Keyloom's own user unit is stopped, no longer
+  started at login, and its file deleted.
+- **xremap** — the copy Keyloom downloaded into `~/.local/bin` is deleted.
+- **Virtual keyboard** — the udev rule and the `uinput` module setting are
+  deleted and `/dev/uinput` goes back to its default access. This is the
+  part that asks for an administrator password, once.
+
+Keyloom keeps no record of what it installed, so each piece is recognised
+by what it is: the unit by Keyloom's marker, the download by its digest,
+and the rule and module setting by being exactly what setup writes, where
+setup writes them. Each is checked again as it is deleted. A distribution's
+xremap, a unit the user wrote, and an administrator's own rules are left
+alone, and a system with nothing of Keyloom's says so.
+
+Leaving the `input` group is a separate, unticked choice, since the
+membership may predate Keyloom or serve another program; it takes effect
+after a restart. Profiles and mappings are kept, and setup can be run again
+from the menu. "Show details" gives the same removal as commands to copy
+and run by hand. A dismissed or refused password prompt changes nothing;
+without `pkexec`, the user's own files are still removed and the commands
+for the rest are shown.
+
 Limitations: the authentication prompt is polkit's generic one, naming
-`usermod` or `/bin/sh` rather than Keyloom; a unit the user wrote can only
+`usermod` or `/bin/sh` rather than Keyloom; removing setup leaves the
+`uinput` module loaded until the next boot, keeps a backup made when a
+unit of the user's was replaced (`xremap.service.bak`) without restoring
+it, and cannot tell whether Keyloom or the user added the `input` group
+membership; a unit the user wrote can only
 be replaced or kept, not merged with Keyloom's configuration; an xremap
 running as another user (a system service) is not noticed; an xremap older
 than 0.15.13 is never replaced by the download and can only ask the desktop

@@ -492,6 +492,15 @@ pub async fn enable() -> Result<(), Error> {
     manager().await?.enable(UNIT).await
 }
 
+/// Stop starting the unit with the graphical session.
+///
+/// # Errors
+///
+/// When systemd cannot be reached, or refuses (no unit file to disable).
+pub async fn disable() -> Result<(), Error> {
+    manager().await?.disable(UNIT).await
+}
+
 /// Restart the unit so xremap picks up the generated configuration.
 /// Reports the state the restart left the unit in.
 ///

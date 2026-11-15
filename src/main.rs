@@ -10,6 +10,7 @@ mod journal;
 mod keyboard;
 mod known;
 mod monitor;
+mod removal;
 mod service;
 mod session;
 mod setup;
