@@ -35,7 +35,7 @@ use crate::ui::model::{
     Profile, Rule, SavedKeyboard, key_by_evdev, key_name,
 };
 use crate::ui::zoom;
-use crate::xremap;
+use crate::xremap::{self, Replace, WriteOutcome};
 
 /// The window's size at launch, in logical pixels: room for the 100%
 /// deck at its natural size, like a purpose-built tool.
@@ -570,6 +570,13 @@ pub enum Message {
     MenuReset,
     ResetMappingsConfirm,
     ResetMappingsCancel,
+    /// Write the pending change over a generated file that was changed
+    /// outside Keyloom, copying that file aside first when asked.
+    ConfigEditsReplace {
+        keep_copy: bool,
+    },
+    /// Leave that file alone and take the change back.
+    ConfigEditsKeep,
     MenuAbout,
     /// Show or hide the menu's troubleshooting tools.
     MenuTroubleshooting,
@@ -667,6 +674,20 @@ pub struct App {
     pub confirm_delete: Option<String>,
     /// Active profile id awaiting confirmation before all its mappings are reset.
     pub confirm_reset_mappings: Option<String>,
+    /// Whether an unsaved change is waiting for the user to decide what happens
+    /// to a generated file that was changed outside Keyloom (edited by
+    /// hand, or not written by Keyloom at all).
+    pub confirm_replace_edits: bool,
+    /// The profile state as last saved, which is what the generated
+    /// file was last asked to hold: a change the user calls off goes
+    /// back to it.
+    saved: ProfileState,
+    /// The document generated from [`Self::saved`].
+    saved_yaml: String,
+    /// Stands in for a generated file that was changed outside
+    /// Keyloom, which tests never read.
+    #[cfg(test)]
+    config_changed_outside: bool,
     pub undo: Option<Undo>,
     // Keyboard view state.
     pub device: String,
@@ -1641,20 +1662,14 @@ impl App {
         self.is_log_window(id) || self.is_window_list_window(id)
     }
 
-    /// Save the configuration model and regenerate the xremap file.
+    /// Regenerate the xremap file and save the configuration model.
     /// Called after every change to profiles or their mappings; a
-    /// changed file schedules the debounced apply.
+    /// changed file schedules the debounced apply. A file changed
+    /// outside Keyloom is not replaced: the change waits, unsaved, for
+    /// the user to say what happens to the file.
     fn persist(&mut self) {
         self.remember_keyboards();
-        // Tests exercise the update loop; never touch the real
-        // ~/.config from them. The apply is still scheduled so the
-        // debounce logic stays observable (its tasks never run).
-        if cfg!(test) {
-            self.schedule_apply();
-            return;
-        }
-        self.save_store();
-        self.write_xremap(true);
+        self.write_xremap(Replace::Own, true);
     }
 
     /// Save the configuration model: profiles, the keyboards their
@@ -1757,31 +1772,85 @@ impl App {
 
     /// Rewrite the generated file to match the model without restarting
     /// the remapper, which reads it the next time it starts. A config
-    /// Keyloom did not write is left alone.
-    fn refresh_xremap(&self) {
-        // Never touch the real ~/.config from tests.
-        if cfg!(test) {
-            return;
-        }
+    /// Keyloom did not write, or one edited by hand since, is left
+    /// alone.
+    fn refresh_xremap(&mut self) {
         let yaml = xremap::generate(self.rules(), &self.known_keyboards());
-        if let Err(err) = xremap::write(&yaml, false) {
+        // Never touch the real ~/.config from tests.
+        if !cfg!(test)
+            && let Err(err) = xremap::write(&yaml, Replace::Own)
+        {
             eprintln!("keyloom: failed to update the xremap config: {err}");
+        }
+        // A change still waiting on the user is not saved yet.
+        if !self.confirm_replace_edits {
+            self.saved = self.profile_state();
+            self.saved_yaml = yaml;
         }
     }
 
     /// Regenerate the xremap YAML from the active profile's mappings
     /// and write it to the user's config directory.
     ///
-    /// A pre-existing config Keyloom did not generate is backed up and
-    /// replaced only when `overwrite_foreign` is set (a user edit);
-    /// startup leaves foreign files alone.
-    fn write_xremap(&mut self, overwrite_foreign: bool) {
+    /// A file Keyloom did not write, or one edited by hand since it
+    /// did, is replaced only on the user's say-so (see [`Replace`]):
+    /// their change (`change`) stops to ask before it is saved.
+    fn write_xremap(&mut self, replace: Replace, change: bool) {
         let yaml = xremap::generate(self.rules(), &self.known_keyboards());
-        match xremap::write(&yaml, overwrite_foreign) {
+        let outcome = self.write_config(&yaml, replace);
+        self.config_written(outcome, yaml, change);
+    }
+
+    /// Write the generated document to the user's config directory.
+    #[cfg(not(test))]
+    #[expect(
+        clippy::unused_self,
+        reason = "tests answer from the application instead of the file"
+    )]
+    fn write_config(&self, yaml: &str, replace: Replace) -> std::io::Result<WriteOutcome> {
+        xremap::write(yaml, replace)
+    }
+
+    /// Tests exercise the update loop and never touch the real
+    /// ~/.config: every write counts as made, so the debounce logic
+    /// stays observable (its tasks never run), unless the file is said
+    /// to have been changed outside Keyloom.
+    #[cfg(test)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for a write that can fail"
+    )]
+    fn write_config(&self, _yaml: &str, replace: Replace) -> std::io::Result<WriteOutcome> {
+        Ok(if self.config_changed_outside && replace == Replace::Own {
+            WriteOutcome::SkippedEdited(PathBuf::new())
+        } else {
+            WriteOutcome::Written(PathBuf::new())
+        })
+    }
+
+    /// Take in how writing the generated document `yaml` went; `change`
+    /// is whether a change the user made was being written. Such a
+    /// change is saved unless the file was left alone because it was
+    /// changed outside Keyloom, which opens the question of what
+    /// happens to the file. Nothing is asked for a change that leaves
+    /// the document as it was (a rename, say).
+    fn config_written(
+        &mut self,
+        outcome: std::io::Result<WriteOutcome>,
+        yaml: String,
+        change: bool,
+    ) {
+        let mut skipped = false;
+        match outcome {
             // Only a real content change warrants a service restart.
-            Ok(xremap::WriteOutcome::Written(_)) => self.schedule_apply(),
-            Ok(xremap::WriteOutcome::Unchanged(_)) => {}
-            Ok(xremap::WriteOutcome::SkippedForeign(path)) => {
+            Ok(WriteOutcome::Written(_)) => self.schedule_apply(),
+            Ok(WriteOutcome::WrittenWithCopy(copy)) => {
+                self.flash("Kept a copy of keyloom.yml", copy.display().to_string());
+                self.schedule_apply();
+            }
+            Ok(WriteOutcome::Unchanged(_)) => {}
+            Ok(WriteOutcome::SkippedForeign(path) | WriteOutcome::SkippedEdited(path)) => {
+                skipped = true;
                 eprintln!(
                     "keyloom: leaving existing xremap config untouched: {}",
                     path.display()
@@ -1791,6 +1860,60 @@ impl App {
                 self.flash("Could not save remaps", err.to_string());
             }
         }
+        if !change {
+            return;
+        }
+        if skipped && yaml != self.saved_yaml {
+            self.confirm_replace_edits = true;
+            return;
+        }
+        self.saved = self.profile_state();
+        self.saved_yaml = yaml;
+        self.save_store();
+    }
+
+    /// Take back a change that was never saved: the profiles go back
+    /// to how they were last saved, and what was open on something the
+    /// change made is closed.
+    fn discard_change(&mut self) {
+        let ProfileState {
+            profiles,
+            maps,
+            layers,
+            apps,
+            groups,
+            keyboards,
+            active,
+            custom_profiles,
+        } = self.saved.clone();
+        self.profiles = profiles;
+        self.profile_maps = maps;
+        self.profile_layers = layers;
+        self.profile_apps = apps;
+        self.profile_groups = groups;
+        self.saved_keyboards = keyboards;
+        self.profile = active;
+        self.custom_profiles = usize::try_from(custom_profiles).unwrap_or(usize::MAX);
+
+        self.undo = None;
+        self.rename = None;
+        self.rename_layer = None;
+        self.rename_app = None;
+        self.picker = None;
+        self.capture = false;
+        self.edit_rule = None;
+        self.recording = None;
+        self.sheet_opened = None;
+        self.sheet_closing = None;
+        if self.active_layer().is_none() {
+            self.layer = None;
+            self.choosing_layer_key = false;
+        }
+        if self.active_app_scope().is_none() {
+            self.app_scope = None;
+        }
+        // Something else may have saved the change in the meantime.
+        self.save_store();
     }
 
     /// Note that the on-disk config changed: the service should be
@@ -2861,7 +2984,11 @@ impl App {
         self.pressed.insert((device.clone(), scancode));
         // evdev is global: never dismiss UI from this stream. Escape is
         // handled once by the focused window's on_escape callback instead.
-        if self.about_open || self.confirm_reset_mappings.is_some() || self.removal.is_some() {
+        if self.about_open
+            || self.confirm_reset_mappings.is_some()
+            || self.confirm_replace_edits
+            || self.removal.is_some()
+        {
             return;
         }
 
@@ -3074,6 +3201,11 @@ impl cosmic::Application for App {
             rename: None,
             confirm_delete: None,
             confirm_reset_mappings: None,
+            confirm_replace_edits: false,
+            saved: ProfileState::default(),
+            saved_yaml: String::new(),
+            #[cfg(test)]
+            config_changed_outside: false,
             undo: None,
             device: "all".to_owned(),
             form: keyboard::FORM_FULL,
@@ -3126,8 +3258,10 @@ impl cosmic::Application for App {
         app.set_header_title(String::new());
         // Bring the generated file in line with the loaded state, but
         // never displace a hand-written config just for launching.
+        app.saved = app.profile_state();
+        app.saved_yaml = xremap::generate(app.rules(), &app.known_keyboards());
         if !cfg!(test) {
-            app.write_xremap(false);
+            app.write_xremap(Replace::Own, false);
         }
         // Never restart the remapper just because the app opened; the
         // next real change applies any startup rewrite along with it.
@@ -4081,6 +4215,17 @@ impl cosmic::Application for App {
                 }
             }
             Message::ResetMappingsCancel => self.confirm_reset_mappings = None,
+            Message::ConfigEditsReplace { keep_copy } => {
+                if std::mem::take(&mut self.confirm_replace_edits) {
+                    self.write_xremap(Replace::Any { keep_copy }, true);
+                }
+            }
+            Message::ConfigEditsKeep => {
+                if std::mem::take(&mut self.confirm_replace_edits) {
+                    self.discard_change();
+                    self.flash("Change not made", "keyloom.yml was left as it is");
+                }
+            }
             Message::MenuAbout => {
                 self.popover = None;
                 self.about_open = true;
@@ -4324,6 +4469,11 @@ impl cosmic::Application for App {
         if self.about_open {
             return Some(ui::overlays::about_dialog());
         }
+        // Above the dialogs a change can come from, which may still be
+        // open behind it.
+        if self.confirm_replace_edits {
+            return Some(ui::overlays::replace_edits_dialog());
+        }
         if self.confirm_delete.is_some() {
             return Some(ui::overlays::delete_profile_dialog(self));
         }
@@ -4398,6 +4548,8 @@ impl cosmic::Application for App {
             }
         } else if self.about_open {
             self.about_open = false;
+        } else if self.confirm_replace_edits {
+            return self.update(Message::ConfigEditsKeep);
         } else if self.confirm_delete.is_some() {
             self.confirm_delete = None;
         } else if self.confirm_delete_layer.is_some() {
@@ -4777,6 +4929,105 @@ mod tests {
         );
         let _ = app.update(Message::RemoveMappingConfirm);
         assert_eq!(app.apply_seq, 2, "each change supersedes the last");
+    }
+
+    #[test]
+    fn file_changed_outside_keyloom_is_replaced_only_on_request() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        let before = app.profile_state();
+        let apply_seq = app.apply_seq;
+        app.config_changed_outside = true;
+
+        // A change asks, above whatever else is open, and applies
+        // nothing until answered.
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        assert!(app.confirm_replace_edits);
+        assert!(app.dialog().is_some());
+        assert!(app.mapping("KeyA").is_some());
+        assert_eq!(app.apply_seq, apply_seq);
+
+        // Escape leaves the file alone and takes the change back.
+        let _ = app.on_escape();
+        assert!(!app.confirm_replace_edits);
+        assert_eq!(app.apply_seq, apply_seq);
+        assert!(app.mapping("KeyA").is_none());
+        assert!(app.profile_state() == before);
+        assert!(app.undo.is_none(), "there is nothing left to undo");
+        assert_eq!(
+            app.toast.as_ref().map(|toast| toast.text.as_str()),
+            Some("Change not made")
+        );
+
+        // An answer nobody asked for does nothing.
+        let _ = app.update(Message::ConfigEditsReplace { keep_copy: true });
+        assert_eq!(app.apply_seq, apply_seq);
+
+        // Replacing keeps and applies the change.
+        let _ = app.update(Message::SelectKey("KeyA"));
+        let _ = app.update(Message::PickAction("Escape".to_owned()));
+        assert!(app.confirm_replace_edits);
+        let _ = app.update(Message::ConfigEditsReplace { keep_copy: false });
+        assert!(!app.confirm_replace_edits);
+        assert!(app.mapping("KeyA").is_some());
+        assert_eq!(app.apply_seq, apply_seq + 1);
+        assert!(app.profile_state() == app.saved);
+    }
+
+    #[test]
+    fn a_switched_profile_is_switched_back_when_the_file_is_kept() {
+        let mut app = app();
+        let _ = app.update(Message::SelectProfile("laptop".to_owned()));
+        app.config_changed_outside = true;
+        let _ = app.update(Message::SelectProfile("mac".to_owned()));
+        assert!(app.confirm_replace_edits);
+        let _ = app.update(Message::ConfigEditsKeep);
+        assert_eq!(app.profile, "laptop");
+    }
+
+    #[test]
+    fn file_changed_outside_keyloom_is_only_asked_about_for_a_change() {
+        let path = PathBuf::from("/home/me/.config/xremap/keyloom.yml");
+        let mut app = app();
+        let yaml = app.saved_yaml.clone();
+
+        // Launch says nothing about either kind of file.
+        for outcome in [
+            WriteOutcome::SkippedEdited(path.clone()),
+            WriteOutcome::SkippedForeign(path.clone()),
+        ] {
+            app.config_written(Ok(outcome), "changed".to_owned(), false);
+            assert!(!app.confirm_replace_edits);
+            assert!(app.toast.is_none());
+        }
+
+        // Nor is anything asked for a change that leaves the document
+        // as it was.
+        app.config_written(Ok(WriteOutcome::SkippedForeign(path.clone())), yaml, true);
+        assert!(!app.confirm_replace_edits);
+
+        // A file Keyloom never wrote is asked about like an edited one.
+        app.config_written(
+            Ok(WriteOutcome::SkippedForeign(path.clone())),
+            "changed".to_owned(),
+            true,
+        );
+        assert!(app.confirm_replace_edits);
+        app.confirm_replace_edits = false;
+
+        // A kept copy is named once the file is written.
+        let apply_seq = app.apply_seq;
+        let copy = path.with_file_name("keyloom.yml.bak");
+        app.config_written(
+            Ok(WriteOutcome::WrittenWithCopy(copy.clone())),
+            "changed".to_owned(),
+            true,
+        );
+        assert_eq!(app.apply_seq, apply_seq + 1);
+        let toast = app.toast.as_ref().expect("the copy is announced");
+        assert_eq!(toast.text, "Kept a copy of keyloom.yml");
+        assert_eq!(toast.sub, copy.display().to_string());
     }
 
     #[test]

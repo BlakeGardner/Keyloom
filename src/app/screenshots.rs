@@ -742,3 +742,11 @@ fn storyboard_sb5_reopened_after_completion() {
 fn storyboard_sb6_download_out_of_date() {
     e2e::storyboards::download_out_of_date(record("SB6-download-out-of-date"));
 }
+
+#[test]
+#[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
+fn replace_edits_dialog() {
+    let mut app = staging::app();
+    app.confirm_replace_edits = true;
+    Shots::new().capture(&app, "dialogs/replace-edits");
+}

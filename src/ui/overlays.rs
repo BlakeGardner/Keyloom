@@ -1313,6 +1313,46 @@ pub fn reset_mappings_dialog(app: &App) -> Element<'_, Message> {
     modal(card, Some(Message::ResetMappingsCancel))
 }
 
+/// The warning before a change replaces a generated xremap file that
+/// was changed outside Keyloom: edited by hand, or not written by
+/// Keyloom at all. Dismissing it leaves the file alone and takes the
+/// change back.
+pub fn replace_edits_dialog() -> Element<'static, Message> {
+    let buttons = widget::row::with_capacity(4)
+        .spacing(10)
+        .push(crate::ui::hspace())
+        .push(
+            widget::button::custom(txt_semibold("Cancel", 12.5, oklch(0.85, 0.01, 152.0)))
+                .class(ghost_button())
+                .padding([9, 16])
+                .on_press(Message::ConfigEditsKeep),
+        )
+        .push(
+            widget::button::custom(txt_semibold("Replace", 12.5, oklch(0.85, 0.06, 16.0)))
+                .class(quiet(false))
+                .padding([9, 18])
+                .on_press(Message::ConfigEditsReplace { keep_copy: false }),
+        )
+        .push(primary(
+            "Keep a copy and replace",
+            Some(Message::ConfigEditsReplace { keep_copy: true }),
+        ));
+    let card = dialog_card(
+        widget::column::with_capacity(4)
+            .spacing(16)
+            .push(eyebrow("Remap file"))
+            .push(txt_semibold("Replace keyloom.yml?", 24.0, fg()))
+            .push(txt(
+                "keyloom.yml has changes that Keyloom didn't make. Making this change rewrites the file from your remaps here, so they will be lost. Keyloom can keep a copy of the file beside it first.",
+                15.0,
+                muted(),
+            ))
+            .push(buttons)
+            .into(),
+    );
+    modal(card, Some(Message::ConfigEditsKeep))
+}
+
 /// The delete-profile confirmation dialog.
 pub fn delete_profile_dialog(app: &App) -> Element<'_, Message> {
     let profile = app
