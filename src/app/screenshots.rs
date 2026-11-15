@@ -370,6 +370,91 @@ fn transient_states() {
 
 #[test]
 #[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
+fn removal() {
+    use staging::{app_removing, everything_installed};
+
+    let mut shots = Shots::new();
+    let member_only = || removal::Plan {
+        group_member: Some("blake".to_owned()),
+        ..removal::Plan::default()
+    };
+    let states: Vec<(&str, App)> = vec![
+        ("R0-checking", app_removing(None, |_| {})),
+        (
+            "R1-everything",
+            app_removing(Some(everything_installed()), |_| {}),
+        ),
+        (
+            "R1b-approval",
+            app_removing(Some(everything_installed()), |r| r.busy = true),
+        ),
+        (
+            "R2-leave-group-details",
+            app_removing(Some(everything_installed()), |r| {
+                r.leave_group = true;
+                r.details = true;
+            }),
+        ),
+        ("R3-group-only", app_removing(Some(member_only()), |_| {})),
+        (
+            "R4-unit-only",
+            app_removing(
+                Some(removal::Plan {
+                    unit: Some(PathBuf::from(staging::UNIT_PATH)),
+                    ..removal::Plan::default()
+                }),
+                |_| {},
+            ),
+        ),
+        (
+            "R5-nothing",
+            app_removing(Some(removal::Plan::default()), |_| {}),
+        ),
+        (
+            "R6-cancelled",
+            app_removing(Some(everything_installed()), |r| {
+                r.error = Some(ActionError::Cancelled);
+            }),
+        ),
+        (
+            "R7-no-polkit",
+            app_removing(
+                Some(removal::Plan {
+                    unit: None,
+                    xremap: None,
+                    ..everything_installed()
+                }),
+                |r| {
+                    r.error = Some(ActionError::NoPolkit);
+                    r.details = true;
+                },
+            ),
+        ),
+    ];
+    for (id, app) in &states {
+        shots.capture(app, &format!("removal/{id}"));
+    }
+    let crowded = app_removing(Some(everything_installed()), |r| {
+        r.details = true;
+        r.leave_group = true;
+        r.error = Some(ActionError::NoPolkit);
+    });
+    shots.capture_as(
+        &crowded,
+        "removal/R8-min-window",
+        &cosmic::Theme::dark(),
+        &MIN_WINDOW,
+    );
+    shots.capture_as(
+        &app_removing(Some(everything_installed()), |r| r.leave_group = true),
+        "removal/R9-light",
+        &cosmic::Theme::light(),
+        &WINDOW,
+    );
+}
+
+#[test]
+#[ignore = "writes PNGs under target/setup-shots; run with --ignored"]
 fn cross_cutting_variations() {
     let mut shots = Shots::new();
     let light = cosmic::Theme::light();

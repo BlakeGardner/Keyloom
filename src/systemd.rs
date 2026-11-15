@@ -361,6 +361,27 @@ impl Manager {
         self.reload().await
     }
 
+    /// Stop starting a unit at login, as `systemctl --user disable`
+    /// does, including the reload that follows. Disabling a unit that
+    /// is not enabled succeeds without doing anything.
+    ///
+    /// # Errors
+    ///
+    /// When systemd cannot be asked, or refuses (no such unit file).
+    pub async fn disable(&self, name: &str) -> Result<(), Error> {
+        // Not only for this session (`runtime`), as `systemctl` defaults.
+        self.bus
+            .call_method(
+                Some(SYSTEMD),
+                MANAGER_PATH,
+                Some(MANAGER_INTERFACE),
+                "DisableUnitFiles",
+                &(&[name][..], false),
+            )
+            .await?;
+        self.reload().await
+    }
+
     /// Have systemd read its unit files again, as
     /// `systemctl --user daemon-reload` does. systemd replies once the
     /// reload is complete.

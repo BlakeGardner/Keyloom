@@ -26,6 +26,7 @@ use crate::journal;
 use crate::keyboard;
 use crate::known;
 use crate::monitor;
+use crate::removal;
 use crate::service;
 use crate::setup;
 use crate::ui;
@@ -241,6 +242,53 @@ pub struct Setup {
     /// Copies made so far, so only the latest one's acknowledgment
     /// ends it.
     copies: u64,
+}
+
+/// The dialog for undoing first-run setup while it is open: what
+/// [`crate::removal`] found to take out, and the choices about it.
+#[derive(Clone, Debug)]
+pub struct Removal {
+    /// What the last look found; `None` until the first one lands.
+    pub plan: Option<removal::Plan>,
+    /// The removal is running.
+    pub busy: bool,
+    /// Also take the user out of the `input` group; off until asked
+    /// for, since other programs may rely on the membership.
+    pub leave_group: bool,
+    /// Whether the files and the commands for doing it by hand are
+    /// shown; off until asked for.
+    pub details: bool,
+    /// Why the last attempt did not finish.
+    pub error: Option<setup::ActionError>,
+    /// The commands were just copied, which the Copy button
+    /// acknowledges for a moment.
+    pub copied: bool,
+    /// Copies made so far, so only the latest one's acknowledgment
+    /// ends it.
+    copies: u64,
+}
+
+impl Removal {
+    pub(crate) fn new() -> Self {
+        Self {
+            plan: None,
+            busy: false,
+            leave_group: false,
+            details: false,
+            error: None,
+            copied: false,
+            copies: 0,
+        }
+    }
+
+    /// Whether removing now would change anything.
+    pub fn can_remove(&self) -> bool {
+        !self.busy
+            && self
+                .plan
+                .as_ref()
+                .is_some_and(|plan| plan.has_work(self.leave_group))
+    }
 }
 
 impl Setup {
@@ -500,6 +548,25 @@ pub enum Message {
     SetupLater,
     /// Close setup from its last page.
     SetupFinish,
+    /// Open the dialog for undoing first-run setup, from the menu's
+    /// troubleshooting tools.
+    MenuRemoveSetup,
+    /// What there is to remove.
+    RemovalProbed(removal::Plan),
+    /// Choose whether leaving the `input` group is part of it.
+    RemovalToggleGroup,
+    /// Show or hide the files and the commands for doing it by hand.
+    RemovalToggleDetails,
+    /// Copy the commands for doing it by hand.
+    RemovalCopy(String),
+    /// The acknowledgment of the given copy has been shown long enough.
+    RemovalCopyShown(u64),
+    /// Remove what the dialog lists.
+    RemovalConfirm,
+    /// The removal finished.
+    RemovalDone(Result<(), setup::ActionError>),
+    /// Close the dialog without removing anything more.
+    RemovalClose,
     MenuReset,
     ResetMappingsConfirm,
     ResetMappingsCancel,
@@ -582,6 +649,8 @@ pub struct App {
     pub window_list: Option<ui::windows::WindowListView>,
     /// First-run setup, while it is open.
     pub setup: Option<Setup>,
+    /// The dialog for undoing first-run setup, while open.
+    pub removal: Option<Removal>,
     /// How far setup got, as remembered between launches.
     setup_state: SetupState,
     // Profiles and their in-memory preview state.
@@ -1130,6 +1199,48 @@ impl App {
             self.set_setup_state(SetupState::Complete);
         } else if self.setup_state != SetupState::Complete {
             self.set_setup_state(SetupState::Deferred);
+        }
+    }
+
+    /// Take in how undoing setup went. Done, the dialog closes and a
+    /// toast says so; setup no longer counts as complete, and waits in
+    /// the menu rather than opening on its own. Otherwise the dialog
+    /// stays, says why, and looks again for what is left.
+    fn removal_done(&mut self, result: Result<(), setup::ActionError>) -> Task<Message> {
+        let Some(removal) = &mut self.removal else {
+            return Task::none();
+        };
+        removal.busy = false;
+        match result {
+            Ok(()) => {
+                let left_group = removal.leave_group
+                    && removal
+                        .plan
+                        .as_ref()
+                        .is_some_and(|plan| plan.group_member.is_some());
+                self.removal = None;
+                if self.setup_state == SetupState::Complete {
+                    self.set_setup_state(SetupState::Deferred);
+                }
+                self.flash(
+                    "Remapping setup removed",
+                    if left_group {
+                        "Restart your computer to finish leaving the input group."
+                    } else {
+                        "Your profiles are kept. Set up remapping again from the menu."
+                    },
+                );
+                Task::none()
+            }
+            Err(err) => {
+                // A dismissed prompt needs no explaining; anything else
+                // comes with the commands for doing it by hand.
+                if err != setup::ActionError::Cancelled {
+                    removal.details = true;
+                }
+                removal.error = Some(err);
+                removal_probe_task()
+            }
         }
     }
 
@@ -2750,7 +2861,7 @@ impl App {
         self.pressed.insert((device.clone(), scancode));
         // evdev is global: never dismiss UI from this stream. Escape is
         // handled once by the focused window's on_escape callback instead.
-        if self.about_open || self.confirm_reset_mappings.is_some() {
+        if self.about_open || self.confirm_reset_mappings.is_some() || self.removal.is_some() {
             return;
         }
 
@@ -2951,6 +3062,7 @@ impl cosmic::Application for App {
             log: None,
             window_list: None,
             setup: None,
+            removal: None,
             setup_state,
             profiles,
             profile,
@@ -3877,6 +3989,74 @@ impl cosmic::Application for App {
                 return setup_probe_task();
             }
             Message::SetupLater | Message::SetupFinish => self.leave_setup(),
+            Message::MenuRemoveSetup => {
+                self.popover = None;
+                self.rename = None;
+                self.remaps_open = false;
+                self.confirm_remove_mapping = None;
+                self.clear_sheet();
+                self.removal = Some(Removal::new());
+                return removal_probe_task();
+            }
+            Message::RemovalProbed(plan) => {
+                if let Some(removal) = &mut self.removal {
+                    removal.plan = Some(plan);
+                }
+            }
+            Message::RemovalToggleGroup => {
+                if let Some(removal) = &mut self.removal
+                    && !removal.busy
+                {
+                    removal.leave_group = !removal.leave_group;
+                }
+            }
+            Message::RemovalToggleDetails => {
+                if let Some(removal) = &mut self.removal {
+                    removal.details = !removal.details;
+                }
+            }
+            Message::RemovalCopy(text) => {
+                if let Some(removal) = &mut self.removal {
+                    removal.copies += 1;
+                    removal.copied = true;
+                    let copy = removal.copies;
+                    return Task::batch([
+                        cosmic::iced::clipboard::write(text),
+                        cosmic::task::future(async move {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            Message::RemovalCopyShown(copy)
+                        }),
+                    ]);
+                }
+            }
+            Message::RemovalCopyShown(copy) => {
+                if let Some(removal) = &mut self.removal
+                    && removal.copies == copy
+                {
+                    removal.copied = false;
+                }
+            }
+            Message::RemovalConfirm => {
+                if let Some(removal) = &mut self.removal
+                    && removal.can_remove()
+                    && let Some(plan) = removal.plan.clone()
+                {
+                    let leave_group = removal.leave_group;
+                    removal.busy = true;
+                    removal.error = None;
+                    return cosmic::task::future(async move {
+                        Message::RemovalDone(removal::run(&plan, leave_group).await)
+                    });
+                }
+            }
+            Message::RemovalDone(result) => return self.removal_done(result),
+            Message::RemovalClose => {
+                // A removal under way has an authentication prompt or a
+                // stopping service behind it; it is seen through.
+                if self.removal.as_ref().is_some_and(|removal| !removal.busy) {
+                    self.removal = None;
+                }
+            }
             Message::MenuReset => {
                 self.popover = None;
                 if self.view != View::Tester {
@@ -4138,6 +4318,9 @@ impl cosmic::Application for App {
         if let Some(setup) = &self.setup {
             return Some(ui::overlays::setup_dialog(setup));
         }
+        if let Some(removal) = &self.removal {
+            return Some(ui::overlays::removal_dialog(removal));
+        }
         if self.about_open {
             return Some(ui::overlays::about_dialog());
         }
@@ -4209,6 +4392,10 @@ impl cosmic::Application for App {
         // Match the dialog stacking order and dismiss only the top surface.
         if self.setup.is_some() {
             self.leave_setup();
+        } else if let Some(removal) = &self.removal {
+            if !removal.busy {
+                self.removal = None;
+            }
         } else if self.about_open {
             self.about_open = false;
         } else if self.confirm_delete.is_some() {
@@ -4303,6 +4490,10 @@ fn runtime_events(event: Event, status: event::Status, id: window::Id) -> Option
 /// One pass of the first-run setup checks.
 fn setup_probe_task() -> Task<Message> {
     cosmic::task::future(async { Message::SetupProbed(setup::probe().await) })
+}
+
+fn removal_probe_task() -> Task<Message> {
+    cosmic::task::future(async { Message::RemovalProbed(removal::probe().await) })
 }
 
 /// Whether setup opens by itself at launch: only until the user has

@@ -36,8 +36,9 @@ use iced_test::selector::{Candidate, Target};
 
 use super::screenshots::Shots;
 use super::staging::{
-    MIN_WINDOW, WINDOW, app, app_on, app_on_step, facts, foreign, found, fresh_system,
-    listed_windows, log_window, ready, service_is, systems, window, window_list_window,
+    MIN_WINDOW, UNIT_PATH, WINDOW, app, app_on, app_on_step, app_removing, everything_installed,
+    facts, foreign, found, fresh_system, listed_windows, log_window, ready, service_is, systems,
+    window, window_list_window,
 };
 use super::*;
 use crate::config::DeckZoom;
@@ -1804,7 +1805,12 @@ fn the_menu_keeps_its_troubleshooting_tools_out_of_sight() {
     driver.expect_hidden("Reset all mappings");
 
     driver.click("Troubleshooting");
-    driver.expect_shown(&["Remapping log", "Window list", "Reset all mappings"]);
+    driver.expect_shown(&[
+        "Remapping log",
+        "Window list",
+        "Reset all mappings",
+        "Remove remapping setup",
+    ]);
     driver.click("Troubleshooting");
     driver.expect_hidden("Remapping log");
 
@@ -1813,6 +1819,204 @@ fn the_menu_keeps_its_troubleshooting_tools_out_of_sight() {
     driver.click("⋯");
     driver.click("⋯");
     driver.expect_hidden("Window list");
+}
+
+// ---- Undoing setup -------------------------------------------------------
+
+/// The open dialog for undoing setup.
+fn removal_of(driver: &Driver) -> &Removal {
+    driver.app.removal.as_ref().expect("the dialog is open")
+}
+
+#[test]
+fn undoing_setup_opens_from_the_troubleshooting_tools_and_looks_first() {
+    let mut driver = Driver::new(app()).named("R0-checking");
+    driver.click("⋯");
+    driver.click("Troubleshooting");
+    driver.click("Remove remapping setup");
+    assert!(driver.app.popover.is_none());
+    assert!(removal_of(&driver).plan.is_none());
+    driver.expect_shown(&[
+        "Remove remapping setup?",
+        "Checking what Keyloom installed…",
+        "Cancel",
+    ]);
+    assert_eq!(
+        driver.click("Remove setup"),
+        0,
+        "nothing can be removed before it is known what there is"
+    );
+
+    driver.deliver(Message::RemovalProbed(everything_installed()));
+    driver.expect_shown(&["Remapping service", "xremap", "Virtual keyboard"]);
+    driver.click("Cancel");
+    assert!(driver.app.removal.is_none());
+}
+
+#[test]
+fn undoing_setup_lists_what_keyloom_installed_and_removes_it_on_one_press() {
+    let mut driver =
+        Driver::new(app_removing(Some(everything_installed()), |_| {})).named("R1-everything");
+    driver.app.setup_state = SetupState::Complete;
+    driver.expect_shown(&[
+        "Remapping service",
+        "xremap",
+        "Virtual keyboard",
+        "Also leave the input group",
+        "You'll be asked for an administrator password.",
+    ]);
+    driver.expect_parts(&["Your profiles and mappings are kept."]);
+
+    // The same as commands, for doing it by hand, behind the toggle.
+    driver.expect_hidden("Copy");
+    driver.click("Show details");
+    driver.expect_parts(&[
+        "systemctl --user disable --now xremap.service",
+        "rm /home/blake/.config/systemd/user/xremap.service",
+        "rm /home/blake/.local/bin/xremap",
+        "sudo rm /etc/udev/rules.d/00-xremap-input.rules",
+        "sudo rm /etc/modules-load.d/uinput.conf",
+    ]);
+    assert!(
+        !driver.texts().iter().any(|text| text.contains("gpasswd")),
+        "the group is left alone until asked for"
+    );
+    driver.click("Copy");
+    driver.expect_shown(&["Copied"]);
+    let copy = removal_of(&driver).copies;
+    driver.deliver(Message::RemovalCopyShown(copy));
+    driver.expect_shown(&["Copy"]);
+    driver.click("Hide details");
+
+    assert_eq!(driver.click("Remove setup"), 1);
+    assert!(removal_of(&driver).busy);
+    driver.expect_shown(&["Waiting for approval…"]);
+    // It is seen through: neither Cancel nor a second press does
+    // anything while the prompt is up.
+    assert_eq!(driver.click("Cancel"), 0);
+    assert_eq!(driver.click("Waiting for approval…"), 0);
+    driver.deliver(Message::RemovalClose);
+    assert!(driver.app.removal.is_some());
+
+    driver.deliver(Message::RemovalDone(Ok(())));
+    assert!(driver.app.removal.is_none());
+    assert_eq!(
+        driver.app.setup_state,
+        SetupState::Deferred,
+        "setup waits in the menu instead of counting as done"
+    );
+    driver.expect_shown(&["Remapping setup removed"]);
+    driver.expect_parts(&["Your profiles are kept."]);
+}
+
+#[test]
+fn leaving_the_input_group_is_a_choice_of_its_own() {
+    let mut driver = Driver::new(app_removing(Some(everything_installed()), |r| {
+        r.details = true
+    }))
+    .named("R2-leave-group");
+    driver.click("Also leave the input group");
+    assert!(removal_of(&driver).leave_group);
+    driver.expect_parts(&["sudo gpasswd -d blake input"]);
+    driver.click("Remove setup");
+    driver.deliver(Message::RemovalDone(Ok(())));
+    driver.expect_parts(&["Restart your computer to finish leaving the input group."]);
+
+    // With nothing of Keyloom's left, the membership is all there is
+    // to decide, and nothing happens until it is chosen.
+    let member_only = removal::Plan {
+        group_member: Some("blake".to_owned()),
+        ..removal::Plan::default()
+    };
+    let mut driver = Driver::new(app_removing(Some(member_only), |_| {})).named("R3-group-only");
+    driver.expect_shown(&["Nothing to remove", "Also leave the input group"]);
+    driver.expect_hidden("Show details");
+    assert_eq!(driver.click("Leave the group"), 0);
+    driver.click("Also leave the input group");
+    driver.expect_shown(&["You'll be asked for an administrator password."]);
+    assert_eq!(driver.click("Leave the group"), 1);
+}
+
+#[test]
+fn undoing_setup_leaves_alone_what_keyloom_did_not_install() {
+    // The distribution's xremap and rules, and Keyloom's own unit.
+    let unit_only = removal::Plan {
+        unit: Some(PathBuf::from(UNIT_PATH)),
+        ..removal::Plan::default()
+    };
+    let mut driver = Driver::new(app_removing(Some(unit_only), |_| {})).named("R4-unit-only");
+    driver.expect_shown(&["Remapping service"]);
+    driver.expect_hidden("xremap");
+    driver.expect_hidden("Virtual keyboard");
+    driver.expect_hidden("Also leave the input group");
+    driver.expect_hidden("You'll be asked for an administrator password.");
+    driver.click("Remove setup");
+    driver.expect_shown(&["Removing…"]);
+
+    // Nothing of Keyloom's at all.
+    let driver =
+        Driver::new(app_removing(Some(removal::Plan::default()), |_| {})).named("R5-nothing");
+    driver.expect_shown(&["Nothing to remove", "Close"]);
+    driver.expect_hidden("Remove setup");
+    driver.expect_hidden("Cancel");
+    driver.expect_hidden("Show details");
+}
+
+#[test]
+fn a_removal_that_does_not_finish_says_why_and_shows_what_is_left() {
+    let mut driver =
+        Driver::new(app_removing(Some(everything_installed()), |_| {})).named("R6-cancelled");
+    driver.click("Remove setup");
+    driver.deliver(Message::RemovalDone(Err(ActionError::Cancelled)));
+    driver.expect_parts(&["authorization was cancelled, so nothing was changed"]);
+    assert!(!removal_of(&driver).busy);
+    assert!(
+        !removal_of(&driver).details,
+        "a dismissed prompt needs no commands"
+    );
+    driver.expect_shown(&["Remove setup"]);
+
+    // Without pkexec the user's own files still go; what needs the
+    // administrator is left, with the commands for it.
+    let mut driver =
+        Driver::new(app_removing(Some(everything_installed()), |_| {})).named("R7-no-polkit");
+    driver.click("Remove setup");
+    driver.deliver(Message::RemovalDone(Err(ActionError::NoPolkit)));
+    driver.deliver(Message::RemovalProbed(removal::Plan {
+        unit: None,
+        xremap: None,
+        ..everything_installed()
+    }));
+    driver.expect_parts(&[
+        "pkexec is not installed",
+        "sudo rm /etc/udev/rules.d/00-xremap-input.rules",
+    ]);
+    driver.expect_hidden("Remapping service");
+    driver.expect_shown(&["Virtual keyboard", "Hide details"]);
+    driver.expect_hidden("You'll be asked for an administrator password.");
+}
+
+#[test]
+fn the_removal_dialog_keeps_its_buttons_in_view_in_the_smallest_window() {
+    let driver = Driver::new(app_removing(Some(everything_installed()), |r| {
+        r.details = true;
+        r.leave_group = true;
+        r.error = Some(ActionError::NoPolkit);
+    }))
+    .named("R8-min-window")
+    .at_minimum_size();
+    let window = Rectangle::with_size(MIN_WINDOW);
+    for button in ["Hide details", "Copy", "Cancel", "Remove setup"] {
+        let bounds = driver.text_bounds(button);
+        assert!(
+            window.contains(bounds.position())
+                && window.contains(Point::new(
+                    bounds.x + bounds.width,
+                    bounds.y + bounds.height
+                )),
+            "{button} is in view"
+        );
+    }
 }
 
 #[test]

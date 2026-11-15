@@ -274,6 +274,33 @@ pub fn setup_of(app: &mut App) -> &mut Setup {
     app.setup.as_mut().expect("setup is open")
 }
 
+// ---- Undoing setup -----------------------------------------------------
+
+/// A system where setup installed everything itself, for a user it
+/// also added to the `input` group.
+pub fn everything_installed() -> removal::Plan {
+    removal::Plan {
+        unit: Some(PathBuf::from(UNIT_PATH)),
+        xremap: Some(PathBuf::from("/home/blake/.local/bin/xremap")),
+        rule: true,
+        module: true,
+        group_member: Some("blake".to_owned()),
+    }
+}
+
+/// The dialog for undoing setup open on what was found (or, without a
+/// plan, still looking), with its fields adjusted.
+pub fn app_removing(plan: Option<removal::Plan>, edit: impl FnOnce(&mut Removal)) -> App {
+    let mut app = app();
+    let mut removal = Removal {
+        plan,
+        ..Removal::new()
+    };
+    edit(&mut removal);
+    app.removal = Some(removal);
+    app
+}
+
 // ---- The remapping log -------------------------------------------------
 
 /// The log window open, having been told `events`.

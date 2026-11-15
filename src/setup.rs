@@ -502,7 +502,7 @@ pub async fn probe() -> Facts {
 
 /// A text file's contents, or nothing when it cannot be read: every
 /// check treats an unreadable file as nothing known.
-async fn read_or_empty(path: &str) -> String {
+pub(crate) async fn read_or_empty(path: &str) -> String {
     tokio::fs::read_to_string(path).await.unwrap_or_default()
 }
 
@@ -585,7 +585,7 @@ pub(crate) fn parse_desktops(stdout: &str) -> Option<Vec<Desktop>> {
 /// Whether a binary is Keyloom's own download: where Keyloom puts it,
 /// and byte for byte a release Keyloom ships. Hashing a few megabytes
 /// only happens for a binary at that one path.
-async fn is_managed(path: &Path) -> bool {
+pub(crate) async fn is_managed(path: &Path) -> bool {
     let Some(managed) = install::managed_path() else {
         return false;
     };
@@ -661,7 +661,7 @@ fn parse_version(output: &str) -> Option<String> {
 /// The login name of the real user this process runs as, from a
 /// `/proc/<pid>/status` document and a `passwd`-format database,
 /// falling back to `$USER`.
-fn current_user(status: &str, passwd: &str) -> Option<String> {
+pub(crate) fn current_user(status: &str, passwd: &str) -> Option<String> {
     real_uid(status)
         .and_then(|uid| user_name(passwd, uid))
         .or_else(|| std::env::var("USER").ok().filter(|user| !user.is_empty()))
@@ -689,7 +689,7 @@ fn user_name(passwd: &str, uid: u32) -> Option<String> {
 }
 
 /// One entry of a `group`-format database: its gid and member names.
-fn group_entry<'a>(database: &'a str, name: &str) -> Option<(u32, Vec<&'a str>)> {
+pub(crate) fn group_entry<'a>(database: &'a str, name: &str) -> Option<(u32, Vec<&'a str>)> {
     database.lines().find_map(|line| {
         let mut fields = line.split(':');
         if fields.next()? != name {
@@ -939,7 +939,7 @@ impl From<install::Error> for ActionError {
 
 /// Run a program as the administrator through the desktop's polkit
 /// prompt.
-async fn privileged(program: &Path, args: &[&str]) -> Result<(), ActionError> {
+pub(crate) async fn privileged(program: &Path, args: &[&str]) -> Result<(), ActionError> {
     let output = Command::new("pkexec")
         .arg(program)
         .args(args)

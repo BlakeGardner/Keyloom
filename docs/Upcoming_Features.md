@@ -83,18 +83,6 @@ without a user-facing feature of its own.
 
 ## Setup and the remapping service
 
-- **Undo first-run setup.** Offer an uninstall action that reverses the
-  system changes first-run setup made: stop and disable the remapping
-  service, remove the user unit Keyloom wrote, delete the xremap Keyloom
-  downloaded into `~/.local/bin`, and remove the udev rule and `uinput`
-  module configuration it installed with administrator rights. Keyloom should
-  undo only what it installed, leaving a distribution's xremap, a unit it did
-  not write, and an administrator's own udev rules alone; changes that need
-  administrator rights should be summarised before Keyloom asks for them, and
-  offered as commands to run by hand when the prompt is unavailable. Removing
-  the user's `input` group membership and deciding what happens to saved
-  profiles need their own confirmation, since both can affect more than
-  Keyloom.
 - **Verify a sample remap during setup.** Apply a throwaway remap while
   setting up and observe the remapper's output device to confirm remapping
   works, instead of trusting that the service started.

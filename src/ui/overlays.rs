@@ -8,10 +8,11 @@ use cosmic::iced::{Alignment, Border, Color, Font, Length, Padding};
 use cosmic::widget::{self, container, icon, mouse_area};
 use cosmic::{Element, theme as ctheme};
 
-use crate::app::{App, Message, Picker, PickerTarget, Setup, SetupPage, Toast, View};
+use crate::app::{App, Message, Picker, PickerTarget, Removal, Setup, SetupPage, Toast, View};
 use crate::apps;
 use crate::install;
 use crate::keyboard;
+use crate::removal::{self, Plan};
 use crate::service;
 use crate::session::Desktop;
 use crate::setup::{
@@ -290,7 +291,7 @@ pub fn menu_popup(app: &App) -> Element<'_, Message> {
 
 /// The menu's troubleshooting tools, behind a quiet disclosure row at
 /// its foot so everyday use never meets them: the remapping log, the
-/// window list, and resetting all mappings.
+/// window list, resetting all mappings, and undoing first-run setup.
 fn troubleshooting(app: &App) -> Element<'_, Message> {
     let open = app.menu_troubleshooting;
     let disclosure = widget::button::custom(
@@ -308,7 +309,7 @@ fn troubleshooting(app: &App) -> Element<'_, Message> {
         return disclosure.into();
     }
 
-    let mut tools: Vec<(&str, Message)> = Vec::with_capacity(3);
+    let mut tools: Vec<(&str, Message)> = Vec::with_capacity(4);
     // Without systemd there is no service, and no log of it to read.
     if app.service != Some(service::Status::Unavailable) {
         tools.push(("Remapping log", Message::OpenLog));
@@ -318,10 +319,11 @@ fn troubleshooting(app: &App) -> Element<'_, Message> {
     if app.view != View::Tester {
         tools.push(("Reset all mappings", Message::MenuReset));
     }
+    tools.push(("Remove remapping setup", Message::MenuRemoveSetup));
     tools
         .into_iter()
         .fold(
-            widget::column::with_capacity(4).spacing(2).push(disclosure),
+            widget::column::with_capacity(5).spacing(2).push(disclosure),
             |column, (name, message)| {
                 column.push(
                     container(popup_row(name.to_owned(), None, false, message))
@@ -2686,6 +2688,263 @@ fn details_panel(
         ));
     }
     panel.push(actions).into()
+}
+
+/// Room the removal dialog's buttons take beneath its content.
+const REMOVAL_FOOTER: f32 = 52.0;
+
+/// One thing the removal dialog will take out: what it is, in the
+/// words setup used for it, and what removing it means.
+fn removal_item(name: &str, about: &str) -> Element<'static, Message> {
+    widget::column::with_capacity(2)
+        .spacing(3)
+        .push(status_line(color_attention(), name.to_owned()))
+        .push(container(txt(about.to_owned(), 12.5, muted()).width(Length::Fill)).padding([0, 16]))
+        .into()
+}
+
+/// The choice about the `input` group: a check box with what it means
+/// beneath, since leaving the group can affect more than Keyloom.
+fn leave_group_row(removal: &Removal) -> Element<'static, Message> {
+    let on = removal.leave_group;
+    let check = container(txt(if on { "✓" } else { "" }, 11.0, accent()))
+        .center(Length::Fixed(18.0))
+        .class(ctheme::Container::custom(move |_| container::Style {
+            background: Some(white(if on { 0.08 } else { 0.03 }).into()),
+            border: Border {
+                color: if on { accent() } else { border() },
+                width: 1.0,
+                radius: 5.0.into(),
+            },
+            ..container::Style::default()
+        }));
+    let labels = widget::column::with_capacity(2)
+        .spacing(3)
+        .push(txt_semibold(
+            format!("Also leave the {INPUT_GROUP} group"),
+            12.5,
+            fg(),
+        ))
+        .push(
+            txt(
+                "Other programs that read keyboards may rely on it. Takes effect after a restart.",
+                12.0,
+                muted(),
+            )
+            .width(Length::Fill),
+        );
+    widget::button::custom(
+        widget::row::with_capacity(2)
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .push(check)
+            .push(labels),
+    )
+    .class(menu_row(on))
+    .padding([8, 10])
+    .width(Length::Fill)
+    .on_press_maybe((!removal.busy).then_some(Message::RemovalToggleGroup))
+    .into()
+}
+
+/// What the removal does, as commands to paste into a terminal: the
+/// way to do it by hand, and a plain account of what Keyloom runs.
+fn removal_commands(plan: &Plan, leave_group: bool) -> String {
+    let mut lines: Vec<String> = Vec::with_capacity(9);
+    if let Some(unit) = &plan.unit {
+        lines.push(format!("systemctl --user disable --now {}", service::UNIT));
+        lines.push(format!("rm {}", shell_word(&unit.to_string_lossy())));
+        lines.push("systemctl --user daemon-reload".to_owned());
+    }
+    if let Some(xremap) = &plan.xremap {
+        lines.push(format!("rm {}", shell_word(&xremap.to_string_lossy())));
+    }
+    if plan.rule {
+        lines.push(format!("sudo rm {RULES_PATH}"));
+    }
+    if plan.module {
+        lines.push(format!("sudo rm {}", removal::MODULES_PATH));
+    }
+    if plan.rule || plan.module {
+        lines.push("sudo udevadm control --reload-rules".to_owned());
+        lines.push("sudo udevadm trigger --subsystem-match=misc --sysname-match=uinput".to_owned());
+    }
+    if leave_group && let Some(user) = &plan.group_member {
+        lines.push(format!(
+            "sudo gpasswd -d {} {INPUT_GROUP}",
+            shell_word(user)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// The dialog's heading and opening words for what was found.
+fn removal_intro(removal: &Removal) -> (&'static str, &'static str) {
+    match &removal.plan {
+        None => (
+            "Remove remapping setup?",
+            "Checking what Keyloom installed…",
+        ),
+        Some(plan) if plan.has_installed() => (
+            "Remove remapping setup?",
+            "Keyloom removes what it installed to make remapping work, and remapping stops. \
+             Your profiles and mappings are kept.",
+        ),
+        Some(_) => (
+            "Nothing to remove",
+            "Keyloom found nothing of its own on this system. An xremap, a service, or a \
+             rule that came from somewhere else is left alone.",
+        ),
+    }
+}
+
+/// Undo first-run setup: what Keyloom installed and will take out, the
+/// choice about the `input` group, and, behind "Show details", the
+/// same as commands. Nothing changes until the accented button is
+/// pressed. Cancel, Escape, and a click outside close it, except while
+/// a removal is running.
+pub fn removal_dialog<'a>(removal: &'a Removal) -> Element<'a, Message> {
+    let page = widget::responsive(move |space| -> Element<'a, Message> {
+        let room = (space.height - 2.0 * CARD_PADDING - REMOVAL_FOOTER).max(120.0);
+        let card = dialog_card(
+            widget::column::with_capacity(2)
+                .spacing(16)
+                .push(
+                    container(widget::scrollable(removal_content(removal)).spacing(8))
+                        .max_height(room),
+                )
+                .push(removal_buttons(removal))
+                .into(),
+        );
+        container(card).center(Length::Fill).into()
+    });
+    modal(page.into(), Some(Message::RemovalClose))
+}
+
+fn removal_content(removal: &Removal) -> Element<'static, Message> {
+    let (title, intro) = removal_intro(removal);
+    let mut content = widget::column::with_capacity(10)
+        .spacing(16)
+        .push(eyebrow("Undo setup"))
+        .push(txt_semibold(title, 24.0, fg()))
+        .push(txt(intro, 14.0, muted()).width(Length::Fill));
+    let Some(plan) = &removal.plan else {
+        return content.into();
+    };
+
+    if plan.unit.is_some() {
+        content = content.push(removal_item(
+            "Remapping service",
+            "Stopped, no longer started when you log in, and its file deleted.",
+        ));
+    }
+    if plan.xremap.is_some() {
+        content = content.push(removal_item(
+            "xremap",
+            "The copy Keyloom downloaded is deleted.",
+        ));
+    }
+    if plan.rule || plan.module {
+        content = content.push(removal_item(
+            "Virtual keyboard",
+            "The access rule and the setting that loads it at startup are deleted.",
+        ));
+    }
+    if plan.group_member.is_some() {
+        content = content.push(leave_group_row(removal));
+    }
+    // Without pkexec nothing will ask; the failure below says so.
+    if plan.needs_admin(removal.leave_group) && removal.error != Some(ActionError::NoPolkit) {
+        content = content.push(
+            txt(
+                "You'll be asked for an administrator password.",
+                12.5,
+                muted(),
+            )
+            .width(Length::Fill),
+        );
+    }
+    // A failure stays above the details it opens, where it is seen.
+    if let Some(error) = &removal.error {
+        content = content.push(
+            txt(
+                format!("Couldn't finish removing: {error}"),
+                13.0,
+                color_blocked(),
+            )
+            .width(Length::Fill),
+        );
+    }
+    if removal.details && plan.has_work(removal.leave_group) {
+        let commands = removal_commands(plan, removal.leave_group);
+        content = content
+            .push(crate::ui::keyboard_view::rule(white(0.08)))
+            .push(
+                txt(
+                    "Keyloom deletes only files it recognises as its own, and checks each \
+                     again as it deletes it. These commands do the same by hand:",
+                    13.0,
+                    muted(),
+                )
+                .width(Length::Fill),
+            )
+            .push(detail_block(commands));
+    }
+    content.into()
+}
+
+fn removal_buttons(removal: &Removal) -> Element<'static, Message> {
+    let plan = removal.plan.as_ref();
+    let has_work = plan.is_some_and(|plan| plan.has_work(removal.leave_group));
+    let mut buttons = widget::row::with_capacity(5)
+        .spacing(10)
+        .align_y(Alignment::Center);
+    if has_work {
+        buttons = buttons.push(ghost(
+            if removal.details {
+                "Hide details"
+            } else {
+                "Show details"
+            },
+            Some(Message::RemovalToggleDetails),
+        ));
+    }
+    // Copying stays with the buttons, in view however far the commands
+    // have scrolled.
+    if let Some(plan) = plan.filter(|_| has_work && removal.details) {
+        buttons = buttons.push(ghost(
+            if removal.copied { "Copied" } else { "Copy" },
+            Some(Message::RemovalCopy(removal_commands(
+                plan,
+                removal.leave_group,
+            ))),
+        ));
+    }
+    buttons = buttons.push(crate::ui::hspace());
+    // With nothing of Keyloom's to remove and no choice to make, the
+    // only way on is out.
+    let offers = plan.is_none_or(|plan| plan.has_installed() || plan.group_member.is_some());
+    buttons = buttons.push(ghost(
+        if offers { "Cancel" } else { "Close" },
+        (!removal.busy).then_some(Message::RemovalClose),
+    ));
+    if !offers {
+        return buttons.into();
+    }
+    let label = match plan {
+        Some(plan) if removal.busy && plan.needs_admin(removal.leave_group) => APPROVAL,
+        _ if removal.busy => "Removing…",
+        Some(plan) if !plan.has_installed() => "Leave the group",
+        _ => "Remove setup",
+    };
+    buttons
+        .push(
+            widget::button::custom(txt_semibold(label, 12.5, oklch(0.85, 0.06, 16.0)))
+                .class(quiet(false))
+                .padding([9, 18])
+                .on_press_maybe(removal.can_remove().then_some(Message::RemovalConfirm)),
+        )
+        .into()
 }
 
 /// Where an unfinished setup picks up again: the first step the user

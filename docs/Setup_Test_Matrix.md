@@ -33,7 +33,8 @@ Three kinds of test use this list:
   default: `cargo test --locked screenshots -- --ignored`, or one
   section such as `screenshots::service`. Each section keeps one
   renderer for its captures, which take a few seconds each.
-- **Behavior** (`src/setup.rs`, `src/app.rs` tests): what a fix does to
+- **Behavior** (`src/setup.rs`, `src/removal.rs`, `src/app.rs` tests): what a
+  fix or a removal does to
   files and the service, against a temporary directory and a recorded
   stand-in for systemd, and what the wizard records when it closes.
 
@@ -146,6 +147,25 @@ in tests or storyboards of their own.
 | T7 | `details` opened by a failure (`details_for_failure`) | as T6; closes again once the step moves on (captured as T4) |
 | T8 | `copied: true` | the Copy button acknowledging |
 | T9 | `saving: true` (service step) | the save-file control working |
+
+## Undoing setup
+
+The dialog behind "Remove remapping setup" in the menu's troubleshooting
+tools, rendered from a `removal::Plan` and the fields of `app::Removal`.
+All are asserted on in the interface tests and captured under `removal/`.
+
+| ID | State | Shows |
+| --- | --- | --- |
+| R0 | Opened, still looking (`plan: None`) | *Checking what Keyloom installed…* · **Remove setup** disabled |
+| R1 | Everything is Keyloom's, user in the `input` group | service, xremap, and virtual keyboard listed; the group choice unticked; the password note · **Remove setup**. Busy (R1b): *Waiting for approval…*, controls held |
+| R2 | The group choice ticked, details open | the commands include `gpasswd -d`; Copy beside "Hide details" |
+| R3 | Only the group membership left | *Nothing to remove* with the group choice · **Leave the group**, disabled until ticked |
+| R4 | Only Keyloom's unit (the distribution's xremap and rules) | the service alone, no password note; busy shows *Removing…* |
+| R5 | Nothing of Keyloom's, not in the group | *Nothing to remove* · Close only |
+| R6 | `error: Cancelled` | "Couldn't finish removing: authorization was cancelled…", details stay closed, removal still offered |
+| R7 | `error: NoPolkit`, the user's own files already removed | only what needs the administrator is left; details open on their own with the commands, no password note |
+| R8 | Window at its minimum size, everything showing | the content scrolls; all four buttons stay in view |
+| R9 | Light theme | screenshot only |
 
 ## Cross-cutting
 
