@@ -404,9 +404,15 @@ commitment. What an approach would have to solve is noted in
 - Shortcut groups become `keymap` blocks after the layers', groups limited
   to an application first: each complete rule is a `Mods-KEY: Mods-KEY`
   entry, and "any modifier" adds an entry per other modifier held.
-- Files Keyloom generated carry a marker comment; a hand-written xremap
-  config found at that path is backed up to `keyloom.yml.bak` before the
-  first overwrite, and is never touched just for launching the app.
+- Files Keyloom generated carry a marker comment and a checksum of
+  themselves, so Keyloom can tell its own output from a file it did not
+  write or one edited by hand since. Such a file is never replaced
+  without asking: launching leaves it alone, and a change in Keyloom
+  that would rewrite it asks first, offering to keep a copy
+  (`keyloom.yml.bak`) or to cancel, which leaves the file as it is and
+  takes the change back. What the file held is not brought into the app.
+  A file written by a version before checksums carries none, so edits
+  made to it before upgrading are not noticed.
 
 ## First-run setup
 
